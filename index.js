@@ -10,7 +10,7 @@ import {
 import { cwbCompleteDefaultSettings } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent } from './core.js';
-import { convertLegacyEntries, listWorldbooks } from './lorebook.js';
+import { convertLegacyEntries, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state } from './state.js';
 import { notify } from './utils.js';
 import { openViewer, updateViewerButton } from './viewer.js';
@@ -25,6 +25,8 @@ const defaults = {
     responseLength: 0,
     worldbookTarget: 'primary',
     customWorldbook: '',
+    multiWorldbookRouting: true,
+    worldbookRoutes: {},
     breakPrompt: cwbCompleteDefaultSettings.cwb_break_armor_prompt,
     fullPrompt: cwbCompleteDefaultSettings.cwb_char_card_prompt,
     incrementalPrompt: cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt,
@@ -44,6 +46,7 @@ function saveFromUi() {
     value.autoUpdate = $('#cwb-auto-update').prop('checked');
     value.incremental = $('#cwb-incremental').prop('checked');
     value.viewerEnabled = $('#cwb-viewer-enabled').prop('checked');
+    value.multiWorldbookRouting = $('#cwb-multi-routing').prop('checked');
     value.threshold = Math.max(1, Number($('#cwb-threshold').val()) || 20);
     value.scanDepth = Math.max(1, Number($('#cwb-scan-depth').val()) || 6);
     value.responseLength = Math.max(0, Number($('#cwb-response-length').val()) || 0);
@@ -52,6 +55,9 @@ function saveFromUi() {
     value.breakPrompt = $('#cwb-break-prompt').val();
     value.fullPrompt = $('#cwb-full-prompt').val();
     value.incrementalPrompt = $('#cwb-incremental-prompt').val();
+    try { value.worldbookRoutes = JSON.parse($('#cwb-worldbook-routes').val() || '{}'); }
+    catch { value.worldbookRoutes = {}; }
+    state.routeCache = null;
     saveSettingsDebounced();
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
     updateViewerButton(value);
@@ -63,6 +69,7 @@ function loadUi() {
     $('#cwb-auto-update').prop('checked', value.autoUpdate);
     $('#cwb-incremental').prop('checked', value.incremental);
     $('#cwb-viewer-enabled').prop('checked', value.viewerEnabled);
+    $('#cwb-multi-routing').prop('checked', value.multiWorldbookRouting);
     $('#cwb-threshold').val(value.threshold);
     $('#cwb-scan-depth').val(value.scanDepth);
     $('#cwb-response-length').val(value.responseLength);
@@ -74,6 +81,7 @@ function loadUi() {
     $('#cwb-break-prompt').val(value.breakPrompt);
     $('#cwb-full-prompt').val(value.fullPrompt);
     $('#cwb-incremental-prompt').val(value.incrementalPrompt);
+    $('#cwb-worldbook-routes').val(JSON.stringify(value.worldbookRoutes || {}, null, 2));
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
     updateViewerButton(value);
 }
@@ -132,6 +140,13 @@ function bindUi() {
         saveSettingsDebounced();
         loadUi();
         notify('success', '已恢复默认提示词。');
+    });
+    $('#cwb-scan-routes').on('click', async function () {
+        try {
+            const summary = await routeSummary(settings());
+            $('#cwb-route-status').text(summary || '没有发现可识别的世界书。');
+            notify('success', '世界书角色归属扫描完成。');
+        } catch (error) { notify('error', `扫描失败：${error.message}`); }
     });
 }
 
