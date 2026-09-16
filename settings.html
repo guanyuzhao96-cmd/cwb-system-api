@@ -39,13 +39,14 @@
                 <button id="cwb-range-update" class="menu_button">指定楼层更新</button>
             </div>
             <button id="cwb-convert-format" class="menu_button"><i class="fa-solid fa-clock-rotate-left"></i> 转换旧版档案格式</button>
-            <details>
-                <summary>提示词设置</summary>
-                <label>前置系统提示词<textarea id="cwb-break-prompt" class="text_pole textarea_compact"></textarea></label>
-                <label>全量角色档案提示词<textarea id="cwb-full-prompt" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
-                <label>增量更新提示词<textarea id="cwb-incremental-prompt" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
+            <div class="cwb-prompts">
+                <h4>角色信息生成提示词</h4>
+                <div class="cwb-note">下面的内容会直接作为系统 API 的提示词使用。修改后自动保存，并在下一次更新角色档案时生效。字段定义、输出格式和角色筛选规则都可以自行改写。</div>
+                <label>前置系统提示词<textarea id="cwb-break-prompt" rows="3" class="text_pole textarea_compact"></textarea></label>
+                <label>全量生成提示词<textarea id="cwb-full-prompt" rows="14" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
+                <label>增量融合提示词<textarea id="cwb-incremental-prompt" rows="14" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
                 <button id="cwb-reset-prompts" class="menu_button">恢复默认提示词</button>
-            </details>
+            </div>
         </div>
     </div>
 </div>
