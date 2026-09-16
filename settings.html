@@ -1,0 +1,51 @@
+<div id="cwb-system-settings" class="cwb-panel">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b><i class="fa-solid fa-address-book"></i> 角色世界书（系统 API 版）</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <label class="cwb-row"><input id="cwb-enabled" type="checkbox"> 启用角色世界书</label>
+            <div class="cwb-note">直接调用酒馆当前连接、当前模型与当前预设，无需填写 URL、Key 或模型。</div>
+            <div class="cwb-grid">
+                <label>自动更新阈值（层）<input id="cwb-threshold" class="text_pole" type="number" min="1" value="20"></label>
+                <label>手动更新读取层数<input id="cwb-scan-depth" class="text_pole" type="number" min="1" value="6"></label>
+                <label>最大回复 Token<input id="cwb-response-length" class="text_pole" type="number" min="0" value="0"></label>
+            </div>
+            <label class="cwb-row"><input id="cwb-auto-update" type="checkbox"> 按阈值自动更新</label>
+            <label class="cwb-row"><input id="cwb-incremental" type="checkbox"> 增量融合旧档案</label>
+            <label class="cwb-row"><input id="cwb-viewer-enabled" type="checkbox"> 显示悬浮档案按钮</label>
+            <hr>
+            <div class="cwb-grid">
+                <label>写入目标
+                    <select id="cwb-worldbook-target" class="text_pole">
+                        <option value="primary">角色主世界书</option>
+                        <option value="custom">指定世界书</option>
+                    </select>
+                </label>
+                <label id="cwb-custom-worldbook-wrap">指定世界书<select id="cwb-custom-worldbook" class="text_pole"></select></label>
+            </div>
+            <div id="cwb-status" class="cwb-status">尚未初始化</div>
+            <div class="cwb-actions">
+                <button id="cwb-test-api" class="menu_button"><i class="fa-solid fa-plug"></i> 测试系统 API</button>
+                <button id="cwb-manual-update" class="menu_button"><i class="fa-solid fa-wand-magic-sparkles"></i> 更新最近内容</button>
+                <button id="cwb-batch-update" class="menu_button"><i class="fa-solid fa-layer-group"></i> 批量更新全聊天</button>
+                <button id="cwb-open-viewer" class="menu_button"><i class="fa-solid fa-address-card"></i> 查看角色档案</button>
+            </div>
+            <div class="cwb-floor-row">
+                <input id="cwb-start-floor" class="text_pole" type="number" min="1" placeholder="起始楼层">
+                <span>—</span>
+                <input id="cwb-end-floor" class="text_pole" type="number" min="1" placeholder="结束楼层">
+                <button id="cwb-range-update" class="menu_button">指定楼层更新</button>
+            </div>
+            <button id="cwb-convert-format" class="menu_button"><i class="fa-solid fa-clock-rotate-left"></i> 转换旧版档案格式</button>
+            <details>
+                <summary>提示词设置</summary>
+                <label>前置系统提示词<textarea id="cwb-break-prompt" class="text_pole textarea_compact"></textarea></label>
+                <label>全量角色档案提示词<textarea id="cwb-full-prompt" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
+                <label>增量更新提示词<textarea id="cwb-incremental-prompt" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
+                <button id="cwb-reset-prompts" class="menu_button">恢复默认提示词</button>
+            </details>
+        </div>
+    </div>
+</div>
