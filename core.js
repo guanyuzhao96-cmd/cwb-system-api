@@ -5,6 +5,7 @@ import {
     getLastUpdatedFloor,
     getTargetWorldbook,
     getTriggeredOldProfiles,
+    listWorldbooks,
     manageChatEntries,
     saveCharacterDescription,
     updateRoster,
@@ -50,7 +51,9 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
     const boundedStart = Math.max(0, Number(startIndex) || 0);
     const boundedEnd = Math.min(state.messages.length - 1, Number(endIndex));
     if (boundedEnd < boundedStart || !state.messages.length) throw new Error('指定范围内没有聊天内容。');
-    if (!getTargetWorldbook(settings)) throw new Error('当前角色未绑定主世界书，请先绑定或选择指定世界书。');
+    if (!getTargetWorldbook(settings) && !(settings.multiWorldbookRouting && listWorldbooks().length)) {
+        throw new Error('当前角色未绑定主世界书，请先绑定或选择指定世界书。');
+    }
 
     state.updating = true;
     setStatus(`正在读取第 ${boundedStart + 1}-${boundedEnd + 1} 层…`);
