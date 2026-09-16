@@ -177,6 +177,47 @@ export async function updateRoster(settings, processedNames, startFloor, endFloo
     }
     if (!grouped.size) throw new Error('无法确定写入世界书。');
     for (const [bookName, namesForBook] of grouped) await updateRosterForBook(bookName, namesForBook, startFloor, endFloor);
+    if (settings.multiWorldbookRouting) await updateMasterDirectory(settings);
+}
+
+/** Create one compact index in the current character's primary worldbook. */
+export async function updateMasterDirectory(settings) {
+    const masterBook = getPrimaryWorldbook();
+    if (!masterBook) return;
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const grouped = new Map();
+    for (const bookName of books.filter(Boolean)) {
+        const entries = await getEntries(bookName);
+        for (const entry of entries) {
+            const keys = getKeys(entry);
+            if (!keys.includes('CWB:自动档案') || !keys.includes(chatId)) continue;
+            const name = keys.find(key => key !== 'CWB:自动档案' && key !== chatId && !/^\d+-\d+$/.test(String(key)));
+            if (name) (grouped.get(bookName) || grouped.set(bookName, new Set()).get(bookName)).add(String(name));
+        }
+    }
+    const lines = [];
+    for (const [bookName, names] of grouped) {
+        lines.push(`【故事线世界书：${bookName}】`);
+        [...names].sort().forEach(name => lines.push(`[${name}] → 世界书《${bookName}》中的 CWB 自动档案`));
+    }
+    const comment = `CWB角色世界书档案目录-${chatId}`;
+    const entries = await getEntries(masterBook);
+    const existing = entries.find(entry => entry.comment === comment
+        || (getKeys(entry).includes('CWB:角色档案目录') && getKeys(entry).includes(chatId)));
+    const content = `【当前聊天角色世界书档案目录】\n\n${lines.join('\n') || '当前尚未生成角色档案。'}\n\n{{// 本条由角色世界书插件自动维护，请勿手动删除。}}`;
+    const data = {
+        comment,
+        content,
+        keys: ['CWB:角色档案目录', chatId, '角色档案目录'],
+        enabled: true,
+        type: 'constant',
+        position: 0,
+        order: 10000,
+        preventRecursion: true,
+    };
+    if (existing) await patchEntries(masterBook, [{ uid: existing.uid, ...data }]);
+    else await createEntries(masterBook, [data]);
 }
 
 async function updateRosterForBook(bookName, processedNames, startFloor, endFloor) {
