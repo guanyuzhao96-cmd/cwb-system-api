@@ -19,7 +19,7 @@
 .cwb-prompts h4 { margin: .8em 0 .35em; }
 .cwb-prompts label { display: block; margin: .65em 0; }
 .cwb-prompts textarea { width: 100%; box-sizing: border-box; resize: vertical; }
-#cwb-top-viewer-button { position: absolute; top: 4px; right: 8px; z-index: 3006; display: inline-flex; align-items: center; gap: 5px; min-height: 28px; white-space: nowrap; }
+#cwb-top-viewer-button { position: relative; z-index: 3006; display: inline-flex; align-items: center; align-self: center; width: auto; min-width: max-content; gap: 5px; min-height: 28px; margin-left: 5px; white-space: nowrap; }
 .cwb-modal { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 10px; background: rgba(0,0,0,.66); }
 .cwb-modal-box { width: min(920px, 100%); max-height: 90dvh; overflow: auto; padding: 14px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 12px; background: var(--SmartThemeBlurTintColor, #222); }
 .cwb-modal-head { display: flex; justify-content: space-between; align-items: center; position: sticky; top: -14px; padding: 10px 0; background: inherit; z-index: 2; }
@@ -35,7 +35,7 @@
     .cwb-floor-row button { grid-column: 1 / -1; width: 100%; min-height: 38px; }
     .cwb-prompts textarea { font-size: 13px; line-height: 1.4; }
     .cwb-prompt-large { min-height: 180px; }
-    #cwb-top-viewer-button { top: 3px; right: max(8px, env(safe-area-inset-right)); min-height: 30px; font-size: .9em; }
+    #cwb-top-viewer-button { min-height: 30px; margin-left: 3px; font-size: .9em; }
     #cwb-top-viewer-button span { display: none; }
     .cwb-modal { align-items: flex-start; padding: max(10px, env(safe-area-inset-top)) 8px max(10px, env(safe-area-inset-bottom)); }
     .cwb-modal-box { max-height: calc(100dvh - 20px); padding: 10px; border-radius: 10px; }
