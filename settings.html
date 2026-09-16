@@ -15,6 +15,7 @@
             <label class="cwb-row"><input id="cwb-auto-update" type="checkbox"> 按阈值自动更新</label>
             <label class="cwb-row"><input id="cwb-incremental" type="checkbox"> 增量融合旧档案</label>
             <label class="cwb-row"><input id="cwb-viewer-enabled" type="checkbox"> 显示悬浮档案按钮</label>
+            <label class="cwb-row"><input id="cwb-multi-routing" type="checkbox"> 自动分配到对应故事线世界书</label>
             <hr>
             <div class="cwb-grid">
                 <label>写入目标
@@ -39,6 +40,13 @@
                 <button id="cwb-range-update" class="menu_button">指定楼层更新</button>
             </div>
             <button id="cwb-convert-format" class="menu_button"><i class="fa-solid fa-clock-rotate-left"></i> 转换旧版档案格式</button>
+            <div class="cwb-routing">
+                <h4>故事线世界书路由</h4>
+                <div class="cwb-note">默认按世界书中的角色关键词和角色条目自动识别。遇到同名角色时，可用 JSON 手动指定，例如：{&quot;许亦宁&quot;:&quot;故事线01&quot;}。</div>
+                <label>手动角色绑定<textarea id="cwb-worldbook-routes" rows="4" class="text_pole textarea_compact" placeholder="{\n  &quot;许亦宁&quot;: &quot;故事线01&quot;\n}"></textarea></label>
+                <button id="cwb-scan-routes" class="menu_button">扫描世界书角色归属</button>
+                <pre id="cwb-route-status" class="cwb-route-status">尚未扫描</pre>
+            </div>
             <div class="cwb-prompts">
                 <h4>角色信息生成提示词</h4>
                 <div class="cwb-note">下面的内容会直接作为系统 API 的提示词使用。修改后自动保存，并在下一次更新角色档案时生效。字段定义、输出格式和角色筛选规则都可以自行改写。</div>
