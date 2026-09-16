@@ -139,7 +139,7 @@ function bindUi() {
         value.incrementalPrompt = defaults.incrementalPrompt;
         saveSettingsDebounced();
         loadUi();
-        notify('success', '已恢复默认提示词。');
+        notify('success', '已加载 v0.3 新版提示词，全量与增量规则均已更新。');
     });
     $('#cwb-scan-routes').on('click', async function () {
         try {
