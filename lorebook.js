@@ -169,6 +169,29 @@ export async function saveCharacterDescription(settings, characterName, content,
     return safeName;
 }
 
+export async function saveUserDescription(settings, userName, content, startFloor, endFloor) {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存主角档案。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const safeName = sanitizeName(userName || '主角');
+    const floorRange = `${startFloor + 1}-${endFloor + 1}`;
+    const entries = await getEntries(bookName);
+    const existing = entries.find(entry => getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
+    const entryData = {
+        comment: `CWB主角档案-${safeName}-${chatId}`,
+        content,
+        keys: ['CWB:主角档案', chatId, safeName, floorRange],
+        enabled: true,
+        type: 'constant',
+        position: 0,
+        order: 10001,
+        preventRecursion: true,
+    };
+    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
+    else await createEntries(bookName, [entryData]);
+    return safeName;
+}
+
 export async function updateRoster(settings, processedNames, startFloor, endFloor) {
     const grouped = new Map();
     for (const name of processedNames) {
@@ -197,6 +220,12 @@ export async function updateMasterDirectory(settings) {
         }
     }
     const lines = [];
+    const masterEntries = await getEntries(masterBook);
+    const userEntry = masterEntries.find(entry => getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
+    if (userEntry) {
+        const userName = getKeys(userEntry).find(key => !['CWB:主角档案', chatId].includes(key) && !/^\d+-\d+$/.test(String(key))) || '主角';
+        lines.push(`【主角档案】\n[${userName}] → 主世界书《${masterBook}》中的 CWB 主角档案\n`);
+    }
     for (const [bookName, names] of grouped) {
         lines.push(`【故事线世界书：${bookName}】`);
         [...names].sort().forEach(name => lines.push(`[${name}] → 世界书《${bookName}》中的 CWB 自动档案`));
@@ -267,11 +296,18 @@ export async function getTriggeredOldProfiles(settings, messages) {
     const haystack = messages.map(message => `${message.name ?? ''}\n${message.message ?? ''}`).join('\n').toLowerCase();
     const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
     const profiles = [];
+    const masterBook = getPrimaryWorldbook();
+    if (masterBook) {
+        const masterEntries = await getEntries(masterBook);
+        const userProfile = masterEntries.find(entry => entry.enabled && getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
+        if (userProfile) profiles.push(userProfile.content);
+    }
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
         profiles.push(...entries.filter(entry => entry.enabled
             && getKeys(entry).includes(chatId)
             && !getKeys(entry).includes('Amily2角色总集')
+            && !getKeys(entry).includes('CWB:主角档案')
             && getKeys(entry).filter(key => !['CWB:自动档案', chatId].includes(key)).some(key => haystack.includes(String(key).toLowerCase())))
             .map(entry => entry.content));
     }
