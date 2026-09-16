@@ -8,6 +8,7 @@ import {
     listWorldbooks,
     manageChatEntries,
     saveCharacterDescription,
+    saveUserDescription,
     updateMasterDirectory,
     updateRoster,
 } from './lorebook.js';
@@ -77,7 +78,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         }
         messages.push({
             role: 'user',
-            content: `${settings.incremental ? '【新对话】' : '最近的聊天记录摘要：'}\n${formatMessages(selected) || '(无有效对话内容)'}`,
+            content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n\n${settings.incremental ? '【新对话】' : '最近的聊天记录摘要：'}\n${formatMessages(selected) || '(无有效对话内容)'}`,
         });
 
         setStatus('正在调用酒馆系统 API…');
@@ -86,16 +87,25 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         if (!blocks.length) throw new Error('模型回复中没有合法的角色档案块。');
 
         const names = [];
+        let userUpdated = false;
+        const currentUserName = getContext()?.name1 || '用户';
         for (const block of blocks) {
+            const parsed = parseCustomFormat(block);
             const name = characterNameFromBlock(block);
             if (!name) continue;
+            if (String(parsed?.record_type || '').toUpperCase() === 'USER' || name === currentUserName) {
+                await saveUserDescription(settings, currentUserName, block, boundedStart, boundedEnd);
+                userUpdated = true;
+                continue;
+            }
             names.push(await saveCharacterDescription(settings, name, block, boundedStart, boundedEnd));
         }
         const uniqueNames = [...new Set(names)];
-        if (!uniqueNames.length) throw new Error('模型生成了内容，但没有识别出角色姓名。');
-        await updateRoster(settings, uniqueNames, boundedStart, boundedEnd);
-        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色。`);
-        if (!silent) notify('success', `已更新 ${uniqueNames.length} 个角色档案。`);
+        if (!uniqueNames.length && !userUpdated) throw new Error('模型生成了内容，但没有识别出角色或主角档案。');
+        if (uniqueNames.length) await updateRoster(settings, uniqueNames, boundedStart, boundedEnd);
+        else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
+        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}。`);
+        if (!silent) notify('success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}。`);
         return uniqueNames;
     } finally {
         state.updating = false;
