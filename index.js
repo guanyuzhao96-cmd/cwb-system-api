@@ -19,7 +19,6 @@ const defaults = {
     enabled: false,
     autoUpdate: false,
     incremental: true,
-    viewerEnabled: true,
     threshold: 20,
     scanDepth: 6,
     responseLength: 0,
@@ -45,7 +44,6 @@ function saveFromUi() {
     value.enabled = $('#cwb-enabled').prop('checked');
     value.autoUpdate = $('#cwb-auto-update').prop('checked');
     value.incremental = $('#cwb-incremental').prop('checked');
-    value.viewerEnabled = $('#cwb-viewer-enabled').prop('checked');
     value.multiWorldbookRouting = $('#cwb-multi-routing').prop('checked');
     value.threshold = Math.max(1, Number($('#cwb-threshold').val()) || 20);
     value.scanDepth = Math.max(1, Number($('#cwb-scan-depth').val()) || 6);
@@ -68,7 +66,6 @@ function loadUi() {
     $('#cwb-enabled').prop('checked', value.enabled);
     $('#cwb-auto-update').prop('checked', value.autoUpdate);
     $('#cwb-incremental').prop('checked', value.incremental);
-    $('#cwb-viewer-enabled').prop('checked', value.viewerEnabled);
     $('#cwb-multi-routing').prop('checked', value.multiWorldbookRouting);
     $('#cwb-threshold').val(value.threshold);
     $('#cwb-scan-depth').val(value.scanDepth);
