@@ -151,7 +151,7 @@ export async function saveCharacterDescription(settings, characterName, content,
         && getKeys(entry).includes(safeName)
         && !getKeys(entry).includes('Amily2角色总集'));
     const entryData = {
-        comment: `${safeName}-${chatId}`,
+        comment: `动态-${safeName}`,
         content,
         keys: ['CWB:自动档案', chatId, safeName, floorRange],
         enabled: true,
@@ -178,7 +178,7 @@ export async function saveUserDescription(settings, userName, content, startFloo
     const entries = await getEntries(bookName);
     const existing = entries.find(entry => getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
     const entryData = {
-        comment: `CWB主角档案-${safeName}-${chatId}`,
+        comment: `动态-${safeName}`,
         content,
         keys: ['CWB:主角档案', chatId, safeName, floorRange],
         enabled: true,
@@ -224,11 +224,11 @@ export async function updateMasterDirectory(settings) {
     const userEntry = masterEntries.find(entry => getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
     if (userEntry) {
         const userName = getKeys(userEntry).find(key => !['CWB:主角档案', chatId].includes(key) && !/^\d+-\d+$/.test(String(key))) || '主角';
-        lines.push(`【主角档案】\n[${userName}] → 主世界书《${masterBook}》中的 CWB 主角档案\n`);
+        lines.push(`【主角档案】\n[${userName}] → 主世界书《${masterBook}》中的「动态-${userName}」\n`);
     }
     for (const [bookName, names] of grouped) {
         lines.push(`【故事线世界书：${bookName}】`);
-        [...names].sort().forEach(name => lines.push(`[${name}] → 世界书《${bookName}》中的 CWB 自动档案`));
+        [...names].sort().forEach(name => lines.push(`[${name}] → 世界书《${bookName}》中的「动态-${name}」`));
     }
     const comment = `CWB角色世界书档案目录-${chatId}`;
     const entries = await getEntries(masterBook);
