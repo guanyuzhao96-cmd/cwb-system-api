@@ -139,7 +139,7 @@ function bindUi() {
         value.incrementalPrompt = defaults.incrementalPrompt;
         saveSettingsDebounced();
         loadUi();
-        notify('success', '已加载 v0.4 新版提示词，主角与角色更新规则均已启用。');
+        notify('success', '已加载 v0.5 精简提示词，只保留性经历、动态数值变化和剧情条目。');
     });
     $('#cwb-scan-routes').on('click', async function () {
         try {
