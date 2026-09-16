@@ -26,6 +26,60 @@ export function getTargetWorldbook(settings) {
     return getPrimaryWorldbook();
 }
 
+function namesFromContent(content) {
+    const text = String(content ?? '');
+    const found = [];
+    for (const match of text.matchAll(/(?:^|\n)\s*name\s*:\s*["']?([^"'\n]+?)["']?\s*(?:\n|$)/gi)) {
+        const name = match[1].trim();
+        if (name && !found.includes(name)) found.push(name);
+    }
+    return found;
+}
+
+function routeNames(entries) {
+    const names = new Set();
+    for (const entry of entries) {
+        for (const key of getKeys(entry)) {
+            const value = String(key).trim();
+            if (value && !/^\d+-\d+$/.test(value) && !value.startsWith('CWB:') && value !== 'Amily2角色总集') names.add(value);
+        }
+        namesFromContent(entry.content).forEach(name => names.add(name));
+    }
+    return [...names];
+}
+
+export async function discoverWorldbookRoutes(settings = {}) {
+    const manual = settings.worldbookRoutes && typeof settings.worldbookRoutes === 'object' ? settings.worldbookRoutes : {};
+    const primary = getPrimaryWorldbook();
+    const result = {};
+    for (const bookName of listWorldbooks()) {
+        const entries = await getEntries(bookName);
+        result[bookName] = { names: routeNames(entries), primary: bookName === primary };
+    }
+    for (const [name, book] of Object.entries(manual)) if (book) {
+        result[book] ??= { names: [], primary: book === primary };
+        if (!result[book].names.includes(name)) result[book].names.push(name);
+    }
+    state.routeCache = result;
+    return result;
+}
+
+async function routeWorldbook(settings, characterName) {
+    if (!settings.multiWorldbookRouting) return getTargetWorldbook(settings);
+    const manualBook = settings.worldbookRoutes?.[characterName];
+    if (manualBook) return manualBook;
+    const routes = state.routeCache || await discoverWorldbookRoutes(settings);
+    const candidates = Object.entries(routes).filter(([, route]) => route.names.some(name => name.toLowerCase() === characterName.toLowerCase()));
+    if (!candidates.length) return getTargetWorldbook(settings);
+    const primary = candidates.find(([, route]) => route.primary);
+    return (primary || candidates[0])[0];
+}
+
+export async function routeSummary(settings = {}) {
+    const routes = await discoverWorldbookRoutes(settings);
+    return Object.entries(routes).map(([book, route]) => `${book}: ${route.names.slice(0, 30).join('、') || '未识别角色'}`).join('\n');
+}
+
 export async function getEntries(bookName) {
     if (!bookName) return [];
     const data = await loadWorldInfo(bookName);
@@ -85,20 +139,21 @@ export async function deleteEntries(bookName, uids) {
 }
 
 export async function saveCharacterDescription(settings, characterName, content, startFloor, endFloor) {
-    const bookName = getTargetWorldbook(settings);
+    const bookName = await routeWorldbook(settings, characterName);
     if (!bookName) throw new Error('当前角色没有主世界书，且未选择指定世界书。');
     const chatId = state.chatId.replace(/ imported/g, '');
     const safeName = sanitizeName(characterName);
     const floorRange = `${startFloor + 1}-${endFloor + 1}`;
     const entries = await getEntries(bookName);
     const existing = entries.find(entry => isEnabled(entry)
+        && getKeys(entry).includes('CWB:自动档案')
         && getKeys(entry).includes(chatId)
         && getKeys(entry).includes(safeName)
         && !getKeys(entry).includes('Amily2角色总集'));
     const entryData = {
         comment: `${safeName}-${chatId}`,
         content,
-        keys: [chatId, safeName, floorRange],
+        keys: ['CWB:自动档案', chatId, safeName, floorRange],
         enabled: true,
         type: 'selective',
         scanDepth: Number(settings.scanDepth) || 6,
@@ -115,8 +170,16 @@ export async function saveCharacterDescription(settings, characterName, content,
 }
 
 export async function updateRoster(settings, processedNames, startFloor, endFloor) {
-    const bookName = getTargetWorldbook(settings);
-    if (!bookName) throw new Error('无法确定写入世界书。');
+    const grouped = new Map();
+    for (const name of processedNames) {
+        const book = await routeWorldbook(settings, name);
+        if (book) (grouped.get(book) || grouped.set(book, []).get(book)).push(name);
+    }
+    if (!grouped.size) throw new Error('无法确定写入世界书。');
+    for (const [bookName, namesForBook] of grouped) await updateRosterForBook(bookName, namesForBook, startFloor, endFloor);
+}
+
+async function updateRosterForBook(bookName, processedNames, startFloor, endFloor) {
     const context = getContext();
     const chatId = state.chatId.replace(/ imported/g, '');
     const comment = `Amily2角色总集-${chatId}-角色总览`;
@@ -159,44 +222,54 @@ export async function updateRoster(settings, processedNames, startFloor, endFloo
 
 export async function getTriggeredOldProfiles(settings, messages) {
     if (!settings.incremental) return [];
-    const bookName = getTargetWorldbook(settings);
-    if (!bookName) return [];
     const chatId = state.chatId.replace(/ imported/g, '');
     const haystack = messages.map(message => `${message.name ?? ''}\n${message.message ?? ''}`).join('\n').toLowerCase();
-    const entries = await getEntries(bookName);
-    return entries.filter(entry => entry.enabled
-        && getKeys(entry).includes(chatId)
-        && !getKeys(entry).includes('Amily2角色总集')
-        && getKeys(entry).filter(key => key !== chatId).some(key => haystack.includes(String(key).toLowerCase())))
-        .map(entry => entry.content);
+    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const profiles = [];
+    for (const bookName of books.filter(Boolean)) {
+        const entries = await getEntries(bookName);
+        profiles.push(...entries.filter(entry => entry.enabled
+            && getKeys(entry).includes(chatId)
+            && !getKeys(entry).includes('Amily2角色总集')
+            && getKeys(entry).filter(key => !['CWB:自动档案', chatId].includes(key)).some(key => haystack.includes(String(key).toLowerCase())))
+            .map(entry => entry.content));
+    }
+    return profiles;
 }
 
 export async function getLastUpdatedFloor(settings) {
-    const bookName = getTargetWorldbook(settings);
-    if (!bookName) return 0;
     const chatId = state.chatId.replace(/ imported/g, '');
-    const entries = await getEntries(bookName);
-    const roster = entries.find(entry => getKeys(entry).includes('Amily2角色总集') && getKeys(entry).includes(chatId));
-    const match = String(roster?.content ?? '').match(/【前(\d+)楼角色世界书已更新完成】/);
-    if (match) return Number(match[1]);
-    const range = getKeys(roster).find(key => /^\d+-\d+$/.test(key));
-    return range ? Number(range.split('-')[1]) : 0;
+    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    let latest = 0;
+    for (const bookName of books.filter(Boolean)) {
+        const entries = await getEntries(bookName);
+        const roster = entries.find(entry => getKeys(entry).includes('Amily2角色总集') && getKeys(entry).includes(chatId));
+        const match = String(roster?.content ?? '').match(/【前(\d+)楼角色世界书已更新完成】/);
+        if (match) latest = Math.max(latest, Number(match[1]));
+        else {
+            const range = getKeys(roster).find(key => /^\d+-\d+$/.test(key));
+            if (range) latest = Math.max(latest, Number(range.split('-')[1]));
+        }
+    }
+    return latest;
 }
 
 export async function manageChatEntries(settings) {
     if (settings.worldbookTarget === 'custom') return;
-    const bookName = getTargetWorldbook(settings);
-    if (!bookName || state.chatId.startsWith('unknown_chat')) return;
+    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    if (state.chatId.startsWith('unknown_chat')) return;
     const chatId = state.chatId.replace(/ imported/g, '');
-    const entries = await getEntries(bookName);
-    const patches = [];
-    for (const entry of entries) {
-        const keys = getKeys(entry);
-        if (!keys.includes('Amily2角色总集') && !keys.includes(chatId) && !keys.includes(state.chatId)) continue;
-        const shouldEnable = keys.includes(chatId) || keys.includes(state.chatId);
-        if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
+    for (const bookName of books.filter(Boolean)) {
+        const entries = await getEntries(bookName);
+        const patches = [];
+        for (const entry of entries) {
+            const keys = getKeys(entry);
+            if (!keys.includes('Amily2角色总集') && !keys.includes(chatId) && !keys.includes(state.chatId)) continue;
+            const shouldEnable = keys.includes(chatId) || keys.includes(state.chatId);
+            if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
+        }
+        if (patches.length) await patchEntries(bookName, patches);
     }
-    if (patches.length) await patchEntries(bookName, patches);
 }
 
 export async function convertLegacyEntries(settings) {
