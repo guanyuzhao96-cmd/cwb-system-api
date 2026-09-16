@@ -59,10 +59,10 @@ export async function openViewer(settings) {
 export function updateViewerButton(settings) {
     $('#cwb-viewer-button').remove();
     let button = $('#cwb-top-viewer-button');
-    const topBar = $('#top-bar');
+    const topBar = $('#top-settings-holder').length ? $('#top-settings-holder') : $('#top-bar');
     if (!topBar.length) return;
     if (!button.length) {
-        topBar.append('<button id="cwb-top-viewer-button" class="menu_button" title="角色档案"><i class="fa-solid fa-address-card"></i><span>角色档案</span></button>');
+        topBar.append('<button id="cwb-top-viewer-button" class="menu_button menu_button_icon" title="角色档案"><i class="fa-solid fa-address-card"></i><span>角色档案</span></button>');
         button = $('#cwb-top-viewer-button');
     } else if (!button.parent().is(topBar)) {
         topBar.append(button);
