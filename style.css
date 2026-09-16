@@ -11,6 +11,11 @@
 .cwb-floor-row input { min-width: 0; width: 100%; }
 .cwb-prompt-large { min-height: 220px; font-family: monospace; }
 .cwb-prompts { margin-top: 1em; }
+.cwb-routing { margin-top: 1em; }
+.cwb-routing h4 { margin: .8em 0 .35em; }
+.cwb-routing label { display: block; margin: .65em 0; }
+.cwb-routing textarea { width: 100%; box-sizing: border-box; resize: vertical; font-family: monospace; }
+.cwb-route-status { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; background: var(--black30a); border-radius: 8px; }
 .cwb-prompts h4 { margin: .8em 0 .35em; }
 .cwb-prompts label { display: block; margin: .65em 0; }
 .cwb-prompts textarea { width: 100%; box-sizing: border-box; resize: vertical; }
