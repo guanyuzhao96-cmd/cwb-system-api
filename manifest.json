@@ -7,7 +7,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "按聊天内容自动生成和维护角色世界书，调用 SillyTavern 当前系统 API。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/Wx-2025/ST-Amily2-Chat-Optimisation"
