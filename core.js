@@ -8,6 +8,7 @@ import {
     listWorldbooks,
     manageChatEntries,
     saveCharacterDescription,
+    updateMasterDirectory,
     updateRoster,
 } from './lorebook.js';
 import { extractCharacterBlocks, notify, parseCustomFormat } from './utils.js';
@@ -172,6 +173,7 @@ export async function onChatChanged(settings) {
     refreshChatState();
     if (!settings.enabled) return;
     await manageChatEntries(settings);
+    if (settings.multiWorldbookRouting) await updateMasterDirectory(settings);
     const floor = await getLastUpdatedFloor(settings);
     setStatus(`总层数 ${state.messages.length}；角色世界书已更新至第 ${floor} 层。`);
 }
