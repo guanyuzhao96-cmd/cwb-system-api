@@ -132,6 +132,10 @@ function bindUi() {
     $('#cwb-convert-format').on('click', function () {
         runButton($(this), '转换中…', () => convertLegacyEntries(settings()));
     });
+    $('#cwb-save-prompts').on('click', () => {
+        saveFromUi();
+        notify('success', '提示词已保存，下一次更新角色档案时生效。');
+    });
     $('#cwb-reset-prompts').on('click', () => {
         const value = settings();
         value.breakPrompt = defaults.breakPrompt;
