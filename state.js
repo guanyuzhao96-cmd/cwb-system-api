@@ -6,4 +6,5 @@ export const state = {
     updating: false,
     batchRunning: false,
     batchStopRequested: false,
+    routeCache: null,
 };
