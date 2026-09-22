@@ -16,8 +16,10 @@ export function escapeHtml(value) {
 export function parseCustomFormat(text) {
     const output = {};
     const lines = String(text ?? '')
-        .replace('[--Amily2::CHAR_START--]', '')
-        .replace('[--Amily2::CHAR_END--]', '')
+        .replaceAll('[--角色档案开始--]', '')
+        .replaceAll('[--角色档案结束--]', '')
+        .replaceAll('[--Amily2::CHAR_START--]', '')
+        .replaceAll('[--Amily2::CHAR_END--]', '')
         .split(/\r?\n/);
 
     for (const line of lines) {
@@ -60,11 +62,11 @@ function flatten(value, prefix, lines) {
 export function buildCustomFormat(data) {
     const lines = [];
     flatten(data, '', lines);
-    return `[--Amily2::CHAR_START--]\n${lines.join('\n')}\n[--Amily2::CHAR_END--]`;
+    return `[--角色档案开始--]\n${lines.join('\n')}\n[--角色档案结束--]`;
 }
 
 export function extractCharacterBlocks(text) {
-    return [...String(text ?? '').matchAll(/\[--Amily2::CHAR_START--][\s\S]*?\[--Amily2::CHAR_END--]/g)]
+    return [...String(text ?? '').matchAll(/(?:\[--角色档案开始--]|\[--Amily2::CHAR_START--])[\s\S]*?(?:\[--角色档案结束--]|\[--Amily2::CHAR_END--])/g)]
         .map(match => match[0].trim());
 }
 
