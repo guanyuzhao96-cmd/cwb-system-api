@@ -29,7 +29,7 @@ export function getTargetWorldbook(settings) {
 function namesFromContent(content) {
     const text = String(content ?? '');
     const found = [];
-    for (const match of text.matchAll(/(?:^|\n)\s*name\s*:\s*["']?([^"'\n]+?)["']?\s*(?:\n|$)/gi)) {
+    for (const match of text.matchAll(/(?:^|\n)\s*(?:name|姓名)\s*:\s*["']?([^"'\n]+?)["']?\s*(?:\n|$)/gi)) {
         const name = match[1].trim();
         if (name && !found.includes(name)) found.push(name);
     }
@@ -37,8 +37,10 @@ function namesFromContent(content) {
 }
 
 function routeNames(entries) {
+    const directories = entries.filter(entry => getKeys(entry).includes('CWB:世界书目录'));
+    const sourceEntries = directories.length ? directories : entries;
     const names = new Set();
-    for (const entry of entries) {
+    for (const entry of sourceEntries) {
         for (const key of getKeys(entry)) {
             const value = String(key).trim();
             if (value && !/^\d+-\d+$/.test(value) && !value.startsWith('CWB:') && value !== 'Amily2角色总集') names.add(value);
