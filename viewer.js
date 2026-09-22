@@ -16,7 +16,7 @@ export async function openViewer(settings) {
     $('#cwb-viewer-modal').remove();
     const cards = entries.length ? entries.map(entry => {
         const parsed = parseCustomFormat(entry.content);
-        const name = parsed?.name || entry.comment || `UID ${entry.uid}`;
+        const name = parsed?.姓名 || parsed?.name || entry.comment || `UID ${entry.uid}`;
         return `<details class="cwb-card" data-uid="${entry.uid}">
             <summary>${escapeHtml(name)} <small>UID ${entry.uid}</small></summary>
             <textarea class="text_pole textarea_compact cwb-profile-content">${escapeHtml(entry.content)}</textarea>
