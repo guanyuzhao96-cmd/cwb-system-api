@@ -37,7 +37,8 @@ function formatMessages(messages) {
 
 function characterNameFromBlock(block) {
     const parsed = parseCustomFormat(block);
-    return parsed?.name?.trim()
+    return parsed?.姓名?.trim()
+        || parsed?.name?.trim()
         || parsed?.CI?.name?.trim()
         || parsed?.core_identity?.name?.trim()
         || null;
@@ -93,7 +94,8 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             const parsed = parseCustomFormat(block);
             const name = characterNameFromBlock(block);
             if (!name) continue;
-            if (String(parsed?.record_type || '').toUpperCase() === 'USER' || name === currentUserName) {
+            const recordType = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
+            if (recordType === '主角' || recordType === 'USER' || name === currentUserName) {
                 await saveUserDescription(settings, currentUserName, block, boundedStart, boundedEnd);
                 userUpdated = true;
                 continue;
