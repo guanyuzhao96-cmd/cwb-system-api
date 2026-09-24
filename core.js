@@ -8,6 +8,7 @@ import {
     listWorldbooks,
     manageChatEntries,
     saveCharacterDescription,
+    saveTimeline,
     saveUserDescription,
     updateMasterDirectory,
     updateRoster,
@@ -90,12 +91,18 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         const names = [];
         const skippedNames = [];
         let userUpdated = false;
+        let timelineUpdated = false;
         const currentUserName = getContext()?.name1 || '用户';
         for (const block of blocks) {
             const parsed = parseCustomFormat(block);
+            const recordType = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
+            if (recordType === '时间线' || recordType === 'TIMELINE') {
+                await saveTimeline(settings, block, boundedStart, boundedEnd);
+                timelineUpdated = true;
+                continue;
+            }
             const name = characterNameFromBlock(block);
             if (!name) continue;
-            const recordType = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
             if (recordType === '主角' || recordType === 'USER' || name === currentUserName) {
                 await saveUserDescription(settings, currentUserName, block, boundedStart, boundedEnd);
                 userUpdated = true;
@@ -106,7 +113,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             else skippedNames.push(name);
         }
         const uniqueNames = [...new Set(names)];
-        if (!uniqueNames.length && !userUpdated) {
+        if (!uniqueNames.length && !userUpdated && !timelineUpdated) {
             const skipped = [...new Set(skippedNames)];
             const message = skipped.length
                 ? `未更新：${skipped.join('、')} 未列入任何世界书目录。`
@@ -119,8 +126,9 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
         const skipped = [...new Set(skippedNames)];
         const skippedSuffix = skipped.length ? `；跳过未列目录角色：${skipped.join('、')}` : '';
-        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}。`);
-        if (!silent) notify('success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}。`);
+        const timelineSuffix = timelineUpdated ? '及故事时间线' : '';
+        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${timelineSuffix}${skippedSuffix}。`);
+        if (!silent) notify('success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${timelineSuffix}${skippedSuffix}。`);
         return uniqueNames;
     } finally {
         state.updating = false;
