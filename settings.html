@@ -1,66 +1,84 @@
 <div id="cwb-system-settings" class="cwb-panel">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b><i class="fa-solid fa-address-book"></i> 角色世界书（系统 API 版）</b>
+            <b><i class="fa-solid fa-address-book"></i> 角色世界书</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-            <label class="cwb-row"><input id="cwb-enabled" type="checkbox"> 启用角色世界书</label>
-            <div class="cwb-note">直接调用酒馆当前连接、当前模型与当前预设，无需填写 URL、Key 或模型。</div>
-            <div class="cwb-grid">
-                <label>自动更新阈值（层）<input id="cwb-threshold" class="text_pole" type="number" min="1" value="20"></label>
-                <label>手动更新读取层数<input id="cwb-scan-depth" class="text_pole" type="number" min="1" value="6"></label>
-                <label>最大回复 Token<input id="cwb-response-length" class="text_pole" type="number" min="0" value="0"></label>
+            <div class="cwb-overview">
+                <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"> 启用插件</label>
+                <div id="cwb-status" class="cwb-status" role="status">尚未初始化</div>
             </div>
-            <label class="cwb-row"><input id="cwb-auto-update" type="checkbox"> 按阈值自动更新</label>
-            <label class="cwb-row"><input id="cwb-incremental" type="checkbox"> 增量融合旧档案</label>
-            <div class="cwb-note">角色档案按钮会固定显示在酒馆顶部栏；启用插件后即可点击查看。</div>
-            <label class="cwb-row"><input id="cwb-multi-routing" type="checkbox"> 自动分配到对应故事线世界书</label>
-            <hr>
-            <div class="cwb-grid">
-                <label>写入目标
-                    <select id="cwb-worldbook-target" class="text_pole">
-                        <option value="primary">角色主世界书</option>
-                        <option value="custom">指定世界书</option>
-                    </select>
-                </label>
-                <label id="cwb-custom-worldbook-wrap">指定世界书<select id="cwb-custom-worldbook" class="text_pole"></select></label>
-            </div>
-            <div id="cwb-status" class="cwb-status">尚未初始化</div>
-            <div class="cwb-actions">
-                <button id="cwb-test-api" class="menu_button"><i class="fa-solid fa-plug"></i> 测试系统 API</button>
-                <button id="cwb-manual-update" class="menu_button"><i class="fa-solid fa-wand-magic-sparkles"></i> 更新最近内容</button>
-                <button id="cwb-batch-update" class="menu_button"><i class="fa-solid fa-layer-group"></i> 批量更新全聊天</button>
+
+            <div class="cwb-primary-actions">
+                <button id="cwb-manual-update" class="menu_button cwb-primary"><i class="fa-solid fa-wand-magic-sparkles"></i> 更新最近内容</button>
                 <button id="cwb-open-viewer" class="menu_button"><i class="fa-solid fa-address-card"></i> 查看角色档案</button>
+                <button id="cwb-batch-update" class="menu_button"><i class="fa-solid fa-layer-group"></i> 批量更新全聊天</button>
             </div>
-            <div class="cwb-floor-row">
-                <input id="cwb-start-floor" class="text_pole" type="number" min="1" placeholder="起始楼层">
-                <span>—</span>
-                <input id="cwb-end-floor" class="text_pole" type="number" min="1" placeholder="结束楼层">
-                <button id="cwb-range-update" class="menu_button">指定楼层更新</button>
-            </div>
-            <button id="cwb-convert-format" class="menu_button"><i class="fa-solid fa-clock-rotate-left"></i> 转换旧版档案格式</button>
-            <div class="cwb-routing">
-                <h4>故事线世界书路由</h4>
-                <div class="cwb-note">扫描当前已激活的全局、角色、聊天和 Persona 世界书，只读取角色条目的标题与触发关键词（不读取正文）；仅保留符合人名格式的词条，规则、提示词、模板、属性等非人名内容会排除。目录写入各自世界书，重复角色会提示并从目录中排除。时间线仍随角色世界书更新同步刷新并按楼层范围去重。查看目录只显示已经生成目录的世界书。</div>
-                <div class="cwb-actions">
-                    <button id="cwb-generate-directories" class="menu_button">扫描激活世界书并生成目录</button>
-                    <button id="cwb-scan-routes" class="menu_button">查看已生成目录</button>
-                </div>
-                <pre id="cwb-route-status" class="cwb-route-status">尚未扫描</pre>
-            </div>
-            <div class="cwb-prompts">
-                <h4>角色信息生成提示词</h4>
-                <div class="cwb-note">下面的内容会直接作为系统 API 的提示词使用。修改后自动保存，并在下一次更新角色档案时生效。字段定义、输出格式和角色筛选规则都可以自行改写。</div>
-                <label>前置系统提示词<textarea id="cwb-break-prompt" rows="3" class="text_pole textarea_compact"></textarea></label>
-                <label>全量生成提示词<textarea id="cwb-full-prompt" rows="14" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
-                <label>增量融合提示词<textarea id="cwb-incremental-prompt" rows="14" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
-                <div class="cwb-note">当前内置提示词版本：v0.6（动态状态＋信息边界＋关系＋目标＋时间线剧情）</div>
-                <div class="cwb-actions">
-                    <button id="cwb-save-prompts" class="menu_button"><i class="fa-solid fa-floppy-disk"></i> 保存提示词</button>
-                    <button id="cwb-reset-prompts" class="menu_button">加载 v0.6 动态档案提示词</button>
+
+            <div class="cwb-range">
+                <span class="cwb-section-label">指定楼层</span>
+                <div class="cwb-floor-row">
+                    <input id="cwb-start-floor" class="text_pole" type="number" min="1" inputmode="numeric" placeholder="起始">
+                    <span aria-hidden="true">—</span>
+                    <input id="cwb-end-floor" class="text_pole" type="number" min="1" inputmode="numeric" placeholder="结束">
+                    <button id="cwb-range-update" class="menu_button">更新</button>
                 </div>
             </div>
+
+            <details class="cwb-section">
+                <summary>更新设置</summary>
+                <div class="cwb-section-body">
+                    <div class="cwb-grid">
+                        <label>自动更新阈值<input id="cwb-threshold" class="text_pole" type="number" min="1" value="20"></label>
+                        <label>最近更新层数<input id="cwb-scan-depth" class="text_pole" type="number" min="1" value="6"></label>
+                        <label>最大回复 Token<input id="cwb-response-length" class="text_pole" type="number" min="0" value="0"></label>
+                    </div>
+                    <label class="cwb-option"><input id="cwb-auto-update" type="checkbox"> 达到阈值时自动更新</label>
+                    <label class="cwb-option"><input id="cwb-incremental" type="checkbox"> 增量融合旧档案</label>
+                    <label class="cwb-option"><input id="cwb-multi-routing" type="checkbox"> 按目录分配到故事线世界书</label>
+                    <div class="cwb-grid cwb-target-grid">
+                        <label>写入目标
+                            <select id="cwb-worldbook-target" class="text_pole">
+                                <option value="primary">角色主世界书</option>
+                                <option value="custom">指定世界书</option>
+                            </select>
+                        </label>
+                        <label id="cwb-custom-worldbook-wrap">指定世界书<select id="cwb-custom-worldbook" class="text_pole"></select></label>
+                    </div>
+                    <div class="cwb-secondary-actions">
+                        <button id="cwb-test-api" class="menu_button"><i class="fa-solid fa-plug"></i> 测试系统 API</button>
+                        <button id="cwb-convert-format" class="menu_button"><i class="fa-solid fa-clock-rotate-left"></i> 转换旧版档案</button>
+                    </div>
+                </div>
+            </details>
+
+            <details class="cwb-section">
+                <summary>目录管理</summary>
+                <div class="cwb-section-body">
+                    <p class="cwb-help">扫描已激活世界书的角色标题和关键词，生成目录；重复角色会列出并跳过。</p>
+                    <div class="cwb-secondary-actions">
+                        <button id="cwb-generate-directories" class="menu_button">扫描并生成目录</button>
+                        <button id="cwb-scan-routes" class="menu_button">查看已有目录</button>
+                    </div>
+                    <pre id="cwb-route-status" class="cwb-route-status" aria-live="polite">尚未扫描</pre>
+                </div>
+            </details>
+
+            <details class="cwb-section">
+                <summary>提示词编辑</summary>
+                <div class="cwb-section-body">
+                    <p class="cwb-help">修改后自动保存，下次更新档案时生效。</p>
+                    <label>前置提示词<textarea id="cwb-break-prompt" rows="3" class="text_pole textarea_compact"></textarea></label>
+                    <label>全量生成<textarea id="cwb-full-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
+                    <label>增量融合<textarea id="cwb-incremental-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
+                    <div class="cwb-prompt-actions">
+                        <span class="cwb-help">内置提示词 v0.6</span>
+                        <button id="cwb-save-prompts" class="menu_button"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
+                        <button id="cwb-reset-prompts" class="menu_button">恢复默认</button>
+                    </div>
+                </div>
+            </details>
         </div>
     </div>
 </div>
