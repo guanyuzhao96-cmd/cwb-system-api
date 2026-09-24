@@ -3,6 +3,7 @@ import { callSystemApi } from './api.js';
 import { state } from './state.js';
 import {
     getLastUpdatedFloor,
+    getTimelineEntries,
     getTargetWorldbook,
     getTriggeredOldProfiles,
     listWorldbooks,
@@ -72,6 +73,10 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             role: 'system',
             content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt,
         });
+        messages.push({
+            role: 'system',
+            content: '本次任务仅更新角色/主角动态档案，不要生成、修改或输出故事时间线；故事时间线只由“生成目录并刷新时间线”按钮单独维护。',
+        });
         if (settings.incremental) {
             messages.push({
                 role: 'user',
@@ -91,14 +96,11 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         const names = [];
         const skippedNames = [];
         let userUpdated = false;
-        let timelineUpdated = false;
         const currentUserName = getContext()?.name1 || '用户';
         for (const block of blocks) {
             const parsed = parseCustomFormat(block);
             const recordType = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
             if (recordType === '时间线' || recordType === 'TIMELINE') {
-                await saveTimeline(settings, block, boundedStart, boundedEnd);
-                timelineUpdated = true;
                 continue;
             }
             const name = characterNameFromBlock(block);
@@ -113,7 +115,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             else skippedNames.push(name);
         }
         const uniqueNames = [...new Set(names)];
-        if (!uniqueNames.length && !userUpdated && !timelineUpdated) {
+        if (!uniqueNames.length && !userUpdated) {
             const skipped = [...new Set(skippedNames)];
             const message = skipped.length
                 ? `未更新：${skipped.join('、')} 未列入任何世界书目录。`
@@ -126,9 +128,8 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
         const skipped = [...new Set(skippedNames)];
         const skippedSuffix = skipped.length ? `；跳过未列目录角色：${skipped.join('、')}` : '';
-        const timelineSuffix = timelineUpdated ? '及故事时间线' : '';
-        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${timelineSuffix}${skippedSuffix}。`);
-        if (!silent) notify('success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${timelineSuffix}${skippedSuffix}。`);
+        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}。`);
+        if (!silent) notify('success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}。`);
         return uniqueNames;
     } finally {
         state.updating = false;
@@ -139,6 +140,103 @@ export async function updateRecent(settings) {
     refreshChatState();
     const depth = Math.max(1, Number(settings.scanDepth) || 6);
     return updateRange(settings, Math.max(0, state.messages.length - depth), state.messages.length - 1);
+}
+
+function timelineRange(entry) {
+    for (const key of entry.keys ?? []) {
+        const match = String(key).match(/^CWB:时间线楼层:(\d+)-(\d+)$/) || String(key).match(/^(\d+)-(\d+)$/);
+        if (match) return [Number(match[1]), Number(match[2])];
+    }
+    return null;
+}
+
+function parseTimelineResponse(response) {
+    const cleaned = String(response).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    let parsed;
+    try { parsed = JSON.parse(cleaned); }
+    catch {
+        const match = cleaned.match(/\{[\s\S]*\}/);
+        if (match) {
+            try { parsed = JSON.parse(match[0]); } catch { /* use line fallback below */ }
+        }
+    }
+    const items = Array.isArray(parsed) ? parsed : parsed?.时间线 ?? parsed?.events;
+    if (Array.isArray(items)) return items.map(item => {
+        if (typeof item === 'string') return item.trim();
+        const date = String(item?.日期 ?? item?.date ?? '日期未知').trim();
+        const people = String(item?.人物 ?? item?.people ?? '人物未明').trim();
+        const event = String(item?.事件 ?? item?.event ?? '').trim();
+        return event ? `${date}｜${people}｜${event}` : '';
+    }).filter(Boolean);
+    const lines = cleaned.split(/\r?\n/).map(line => line.replace(/^\s*(?:[-*•]\s*)?\[?时间线(?:\.\d+)?\]?\s*[:：]\s*/, '').trim()).filter(Boolean);
+    const events = lines.filter(line => line.includes('｜') || line.includes('|'));
+    if (events.length) return events.map(line => line.replace(/\s*[|｜]\s*/g, '｜'));
+    throw new Error(`时间线 API 返回格式无法解析：${cleaned.slice(0, 240)}`);
+}
+
+function timelineTag(entry) {
+    const range = timelineRange(entry);
+    return range ? `楼层${range[0]}-${range[1]}` : '楼层范围未知';
+}
+
+export async function refreshTimeline(settings, onProgress = () => {}) {
+    if (state.timelineUpdating) throw new Error('时间线刷新任务正在运行。');
+    refreshChatState();
+    if (!state.messages.length) throw new Error('当前聊天为空，无法刷新时间线。');
+    state.timelineUpdating = true;
+    try {
+        const existing = await getTimelineEntries();
+        const total = state.messages.length;
+        const covered = new Array(total + 1).fill(false);
+        for (const entry of existing) {
+            const range = timelineRange(entry);
+            if (!range) continue;
+            const start = Math.max(1, range[0]);
+            const end = Math.min(total, range[1]);
+            for (let floor = start; floor <= end; floor++) covered[floor] = true;
+        }
+        let previous = existing
+            .slice()
+            .sort((a, b) => (timelineRange(a)?.[0] ?? 0) - (timelineRange(b)?.[0] ?? 0))
+            .map(entry => `【${timelineTag(entry)}】\n${entry.content}`)
+            .join('\n\n');
+        const chunkSize = Math.max(1, Number(settings.threshold) || 20);
+        const addedRanges = [];
+        let floor = 1;
+        while (floor <= total) {
+            if (covered[floor]) { floor++; continue; }
+            const start = floor;
+            while (floor <= total && !covered[floor]) floor++;
+            const gapEnd = floor - 1;
+            for (let startFloor = start; startFloor <= gapEnd; startFloor += chunkSize) {
+                const endFloor = Math.min(gapEnd, startFloor + chunkSize - 1);
+                const selected = state.messages.slice(startFloor - 1, endFloor);
+                const range = `${startFloor}-${endFloor}`;
+                onProgress(`正在刷新故事时间线：第 ${range} 楼…`);
+                setStatus(`正在调用系统 API 更新故事时间线（第 ${range} 楼）…`);
+                const response = await callSystemApi([
+                    { role: 'system', content: '你是聊天故事时间线整理器。只记录聊天中已经发生且对剧情重要的事件，绝不续写或补事实。输出合法 JSON：{"时间线":[{"日期":"YYYY-MM-DD或日期未知","人物":"人物姓名","事件":"精简事件及结果"}]}。覆盖输入的全部聊天楼层，不遗漏关键事件；同一事件只记一次，按真实日期先后排序。时间线只能包含当前输入楼层中发生的事件；如果没有重要事件，输出空数组。' },
+                    { role: 'user', content: `整理第 ${range} 楼的故事时间线。旧时间线仅供去重，不要重复输出其中已有事件；不同楼层范围的标签表示已处理范围。\n【已处理时间线】\n${previous || '无'}\n\n【本次聊天内容】\n${formatMessages(selected)}` },
+                ], settings.responseLength);
+                const events = parseTimelineResponse(response);
+                const known = new Set(previous.split(/\r?\n/).map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim()).filter(Boolean));
+                const unique = [...new Set(events)].filter(event => !known.has(event));
+                const content = `【时间线楼层：${range}】\n${unique.length ? unique.map((event, index) => `[时间线.${index}]: ${event}`).join('\n') : '（本范围已检查，无新增重要事件）'}`;
+                await saveTimeline(settings, content, startFloor - 1, endFloor - 1);
+                previous = `${previous}${previous ? '\n\n' : ''}【楼层${range}】\n${content}`;
+                addedRanges.push(range);
+                for (let current = startFloor; current <= endFloor; current++) covered[current] = true;
+            }
+        }
+        const coveredCount = covered.slice(1).filter(Boolean).length;
+        const result = { addedRanges, coveredCount, totalFloors: total };
+        setStatus(addedRanges.length
+            ? `时间线已补齐：${addedRanges.map(range => `第 ${range} 楼`).join('、')}；已覆盖 ${coveredCount}/${total} 楼。`
+            : `时间线无需重复更新：已覆盖当前聊天全部 ${total} 楼。`);
+        return result;
+    } finally {
+        state.timelineUpdating = false;
+    }
 }
 
 export async function maybeAutoUpdate(settings) {
