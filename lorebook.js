@@ -27,10 +27,19 @@ export function getTargetWorldbook(settings) {
 }
 
 function namesFromContent(content) {
-    const text = String(content ?? '');
+    const text = String(content ?? '')
+        .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+        .replace(/<\s*\/\s*(?:div|p|li|tr|section|article|h[1-6])\s*>/gi, '\n')
+        .replace(/<\s*(?:div|p|li|tr|section|article|h[1-6])\b[^>]*>/gi, '\n')
+        .replace(/<[^>]*>/g, '')
+        .replace(/&nbsp;|&#160;/gi, ' ')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;|&apos;/gi, "'")
+        .replace(/&amp;/gi, '&')
+        .replace(/\r/g, '');
     const found = [];
-    for (const match of text.matchAll(/(?:^|\n)\s*(?:name|姓名)\s*:\s*["']?([^"'\n]+?)["']?\s*(?:\n|$)/gi)) {
-        const name = match[1].trim();
+    for (const match of text.matchAll(/(?:^|\n)\s*(?:[•·▪●◦◆◇\-–—]\s*)*(?:\[\s*)?(?:name|姓名)(?:\s*\])?\s*[:：]\s*["'“‘]?\s*([^"'“”‘’\n]+?)\s*["'“”‘’]?\s*(?:\n|$)/gim)) {
+        const name = match[1].trim().replace(/^[•·▪●◦◆◇\-–—\s]+|[\s。；;，,]+$/g, '');
         if (name && !found.includes(name)) found.push(name);
     }
     return found;
@@ -43,18 +52,25 @@ function routeNames(entries) {
     return [...names];
 }
 
-function isAutoEntry(entry) {
-    return getKeys(entry).some(key => String(key).startsWith('CWB:') || String(key) === 'Amily2角色总集');
+function isNonCharacterPluginEntry(entry) {
+    const keys = getKeys(entry).map(String);
+    return keys.some(key => [
+        'CWB:世界书目录',
+        'CWB:主角档案',
+        'CWB:故事时间线',
+        'CWB:角色档案目录',
+        'Amily2角色总集',
+    ].includes(key));
 }
 
 function scannedNames(entries) {
     const names = new Set();
     for (const entry of entries) {
-        if (isAutoEntry(entry)) continue;
+        if (isNonCharacterPluginEntry(entry)) continue;
         namesFromContent(entry.content).forEach(name => names.add(name));
         for (const key of getKeys(entry)) {
             const value = String(key).trim();
-            if (/^[\u3400-\u9fff·]{2,12}$/.test(value)) names.add(value);
+            if (!value.startsWith('CWB:') && value !== 'Amily2角色总集' && /^[\u3400-\u9fff·]{2,12}$/.test(value)) names.add(value);
         }
     }
     return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'));
