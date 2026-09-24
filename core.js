@@ -3,18 +3,21 @@ import { callSystemApi } from './api.js';
 import { state } from './state.js';
 import {
     getLastUpdatedFloor,
+    getChatUpdateTracking,
     getTimelineEntries,
     getTargetWorldbook,
     getTriggeredOldProfiles,
     listWorldbooks,
     manageChatEntries,
     saveCharacterDescription,
+    recordChatUpdateRange,
     saveTimeline,
     saveUserDescription,
     updateMasterDirectory,
     updateRoster,
 } from './lorebook.js';
 import { extractCharacterBlocks, notify, parseCustomFormat } from './utils.js';
+import { formatRanges, overlappingRanges } from './update-tracker.mjs';
 
 let autoTimer = null;
 
@@ -60,8 +63,20 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         throw new Error('当前角色未绑定主世界书，请先绑定或选择指定世界书。');
     }
 
+    let updateTracking = null;
+    try {
+        updateTracking = await getChatUpdateTracking(state.messages.length);
+        const overlaps = overlappingRanges(boundedStart, boundedEnd, updateTracking?.completedRanges);
+        if (overlaps.length) {
+            const message = `本次总结楼层 ${boundedStart}-${boundedEnd} 与已总结范围 ${formatRanges(overlaps)} 重叠；仍继续更新并记录重复范围。`;
+            setStatus(message);
+        }
+    } catch (error) {
+        console.warn('[CWB] 读取全聊天更新记录失败', error);
+    }
+
     state.updating = true;
-    setStatus(`正在读取第 ${boundedStart + 1}-${boundedEnd + 1} 层…`);
+    setStatus(`正在读取总结索引楼层 ${boundedStart}-${boundedEnd}…`);
     try {
         const selected = state.messages.slice(boundedStart, boundedEnd + 1);
         const oldProfiles = await getTriggeredOldProfiles(settings, selected);
@@ -123,28 +138,46 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             console.error('[CWB] 时间线同步刷新失败', error);
         }
         const uniqueNames = [...new Set(names)];
+        const skipped = [...new Set(skippedNames)];
+        const trackerDetail = [
+            uniqueNames.length ? `角色档案写入${uniqueNames.length}名` : (userUpdated ? '主角档案已写入' : '未写入角色档案'),
+            skipped.length ? `未路由${skipped.length}名角色` : '',
+            timelineError ? `时间线失败：${timelineError.message}` : `时间线：已覆盖${timelineResult?.coveredCount ?? 0}/${timelineResult?.totalFloors ?? 0}楼`,
+        ].filter(Boolean).join('；');
+        let updateLogError = null;
+        try {
+            await recordChatUpdateRange(boundedStart, boundedEnd, state.messages.length, trackerDetail, updateTracking?.trackingStartIndex ?? state.messages.length);
+        } catch (error) {
+            updateLogError = error;
+            console.error('[CWB] 写入全聊天更新记录失败', error);
+        }
         if (!uniqueNames.length && !userUpdated) {
-            const skipped = [...new Set(skippedNames)];
             const roleMessage = skipped.length
                 ? `未更新：${skipped.join('、')} 未列入任何世界书目录。`
                 : '模型生成了内容，但没有识别出角色或主角档案。';
             const timelineMessage = timelineError ? `时间线同步失败：${timelineError.message}` : timelineResult?.addedRanges.length ? `时间线已补齐第 ${timelineResult.addedRanges.join('、')} 楼。` : '时间线楼层已覆盖，无需重复更新。';
-            const message = `${roleMessage} ${timelineMessage}`;
+            const overlapMessage = updateTracking && overlappingRanges(boundedStart, boundedEnd, updateTracking.completedRanges).length
+                ? `；本次与已总结楼层 ${formatRanges(overlappingRanges(boundedStart, boundedEnd, updateTracking.completedRanges))} 重叠`
+                : '';
+            const logMessage = updateLogError ? `；更新记录写入失败：${updateLogError.message}` : '';
+            const message = `${roleMessage} ${timelineMessage}${overlapMessage}${logMessage}`;
             setStatus(message);
             if (!silent) notify('warning', message);
             return [];
         }
         if (uniqueNames.length) await updateRoster(settings, uniqueNames, boundedStart, boundedEnd);
         else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
-        const skipped = [...new Set(skippedNames)];
         const skippedSuffix = skipped.length ? `；跳过未列目录角色：${skipped.join('、')}` : '';
+        const overlapRanges = updateTracking ? overlappingRanges(boundedStart, boundedEnd, updateTracking.completedRanges) : [];
+        const overlapSuffix = overlapRanges.length ? `；重复总结楼层：${formatRanges(overlapRanges)}` : '';
+        const updateLogSuffix = updateLogError ? `；更新记录写入失败：${updateLogError.message}` : '；已更新主世界书的全聊天总结记录';
         const timelineSuffix = timelineError
             ? `；时间线同步失败：${timelineError.message}`
             : timelineResult?.addedRanges.length
                 ? `；时间线已补齐第 ${timelineResult.addedRanges.join('、')} 楼`
                 : '；时间线楼层已覆盖，无需重复更新';
-        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}${timelineSuffix}。`);
-        if (!silent) notify(timelineError ? 'warning' : 'success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}${timelineSuffix}。`);
+        setStatus(`完成：总结索引楼层 ${boundedStart}-${boundedEnd}，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
+        if (!silent) notify(timelineError || updateLogError || overlapRanges.length ? 'warning' : 'success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
         return uniqueNames;
     } finally {
         state.updating = false;
