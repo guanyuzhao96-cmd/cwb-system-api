@@ -233,8 +233,8 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
                 onProgress(`正在刷新故事时间线：第 ${range} 楼…`);
                 setStatus(`正在调用系统 API 更新故事时间线（第 ${range} 楼）…`);
                 const response = await callSystemApi([
-                    { role: 'system', content: '你是聊天故事时间线整理器。只记录聊天中已经发生且对剧情重要的事件，绝不续写或补事实。输出合法 JSON：{"时间线":[{"日期":"YYYY-MM-DD或日期未知","人物":"人物姓名","事件":"精简事件及结果"}]}。覆盖输入的全部聊天楼层，不遗漏关键事件；同一事件只记一次，按真实日期先后排序。时间线只能包含当前输入楼层中发生的事件；如果没有重要事件，输出空数组。' },
-                    { role: 'user', content: `整理第 ${range} 楼的故事时间线。旧时间线仅供去重，不要重复输出其中已有事件；不同楼层范围的标签表示已处理范围。\n【已处理时间线】\n${previous || '无'}\n\n【本次聊天内容】\n${formatMessages(selected)}` },
+                    { role: 'system', content: '你是小说的全局大事件记录器，不是逐楼复述器。只记录当前聊天楼层中已经发生、会持续影响主线走向的重大事件：关键转折、重大冲突及结果、重要秘密揭露、不可逆决定。日常互动、重复对话、行动细节、个人数值或普通情绪变化都留给角色档案，不写入时间线。人物细节可从角色档案查看。绝不续写或补事实。只输出合法 JSON：{"时间线":[{"日期":"YYYY-MM-DD或日期未知","人物":"关键人物","事件":"一句话概括大事件与结果，事件部分不超过30个汉字"}]}。每件大事最多一条，按真实日期排序；没有大事件就输出空数组。' },
+                    { role: 'user', content: `只从第 ${range} 楼提取全局大事件；普通剧情细节不要记录。旧时间线仅供去重，不要重复输出其中已有事件；不同楼层范围的标签表示已处理范围。\n【已处理大事件】\n${previous || '无'}\n\n【本次聊天内容】\n${formatMessages(selected)}` },
                 ], settings.responseLength);
                 const events = parseTimelineResponse(response);
                 const known = new Set(previous.split(/\r?\n/).map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim()).filter(Boolean));
