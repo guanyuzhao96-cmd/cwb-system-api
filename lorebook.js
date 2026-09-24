@@ -86,16 +86,23 @@ function parseNamesFromApi(result) {
     return [...new Set(list.map(item => String(typeof item === 'string' ? item : item?.姓名 ?? item?.name ?? '').trim()).filter(name => /^[\u3400-\u9fff·A-Za-z0-9_-]{2,24}$/.test(name)))];
 }
 
-async function generateDirectoryNames(bookName, entries) {
+async function generateDirectoryNames(bookName, entries, onProgress = () => {}) {
     const source = apiSource(entries);
-    if (!source.trim()) return [];
+    if (!source.trim()) throw new Error(`《${bookName}》没有可送入 API 的世界书条目，未生成目录。`);
     const chunks = source.match(/[\s\S]{1,12000}/g) || [];
     const names = new Set();
     for (let index = 0; index < chunks.length; index++) {
-        const response = await callSystemApi([
-            { role: 'system', content: '你是世界书目录生成器。根据输入的多个世界书条目，识别正文、HTML状态栏、条目标题和触发关键词中明确指向的角色姓名。优先从“姓名/名字/Name”字段识别；状态栏可能包含HTML标签、br、项目符号、全角标点。不要把普通名词、地点、作者、主角档案中的主角姓名、时间线参与者的偶然提及误当成这个故事线的角色。保留条目中真实出现的完整姓名，去重。只输出合法JSON：{"角色名单":["姓名"]}；没有可确认角色时输出空数组。' },
-            { role: 'user', content: `请为世界书“${bookName}”提取应进入目录的角色姓名（内容分段 ${index + 1}/${chunks.length}）。只依据以下内容，不要补造姓名。\n\n${chunks[index]}` },
-        ], 2048);
+        onProgress(`正在调用酒馆系统 API：${bookName}（第 ${index + 1}/${chunks.length} 段）`);
+        console.info(`[CWB] 正在调用系统 API 生成目录：${bookName}（${index + 1}/${chunks.length}）`);
+        let response;
+        try {
+            response = await callSystemApi([
+                { role: 'system', content: '你是世界书目录生成器。根据输入的多个世界书条目，识别正文、HTML状态栏、条目标题和触发关键词中明确指向的角色姓名。优先从“姓名/名字/Name”字段识别；状态栏可能包含HTML标签、br、项目符号、全角标点。不要把普通名词、地点、作者、主角档案中的主角姓名、时间线参与者的偶然提及误当成这个故事线的角色。保留条目中真实出现的完整姓名，去重。只输出合法JSON：{"角色名单":["姓名"]}；没有可确认角色时输出空数组。' },
+                { role: 'user', content: `请为世界书“${bookName}”提取应进入目录的角色姓名（内容分段 ${index + 1}/${chunks.length}）。只依据以下内容，不要补造姓名。\n\n${chunks[index]}` },
+            ], 2048);
+        } catch (error) {
+            throw new Error(`《${bookName}》调用酒馆系统 API 失败：${error.message}`);
+        }
         parseNamesFromApi(response).forEach(name => names.add(name));
     }
     return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'));
@@ -111,7 +118,7 @@ function duplicateLines(duplicates) {
         .map(([name, books]) => `${name}：${[...books].sort((a, b) => a.localeCompare(b, 'zh-CN')).join('、')}`);
 }
 
-export async function generateWorldbookDirectories(keyword) {
+export async function generateWorldbookDirectories(keyword, onProgress = () => {}) {
     const normalizedKeyword = String(keyword ?? '').trim();
     if (!normalizedKeyword) throw new Error('请输入用于筛选小故事线世界书的关键词。');
     const targetBooks = listWorldbooks().filter(name => String(name).includes(normalizedKeyword));
@@ -120,8 +127,9 @@ export async function generateWorldbookDirectories(keyword) {
     const plans = [];
     const owners = new Map();
     for (const bookName of targetBooks) {
+        onProgress(`正在读取世界书：${bookName}`);
         const entries = await getEntries(bookName);
-        const names = await generateDirectoryNames(bookName, entries);
+        const names = await generateDirectoryNames(bookName, entries, onProgress);
         plans.push({ bookName, entries, names });
         names.forEach(name => (owners.get(name) ?? owners.set(name, new Set()).get(name)).add(bookName));
     }
