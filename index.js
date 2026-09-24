@@ -145,8 +145,8 @@ function bindUi() {
     $('#cwb-scan-routes').on('click', async function () {
         try {
             const summary = await routeSummary(settings());
-            $('#cwb-route-status').text(summary || '没有发现可识别的世界书。');
-            notify('success', '世界书角色归属扫描完成。');
+            $('#cwb-route-status').text(summary);
+            notify('success', '已生成目录查看完成。');
         } catch (error) { notify('error', `扫描失败：${error.message}`); }
     });
     $('#cwb-generate-directories').on('click', function () {
