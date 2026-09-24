@@ -7,8 +7,8 @@
   "js": "index.js",
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
-  "version": "0.7.3",
-  "description": "按聊天内容维护角色世界书、主角档案与故事时间线；调用系统 API 综合正文和状态栏生成小故事线目录，并显示调用进度。",
+  "version": "0.7.4",
+  "description": "按聊天内容维护角色世界书、主角档案与故事时间线；读取当前聊天并调用系统 API 生成小故事线目录。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/Wx-2025/ST-Amily2-Chat-Optimisation"
 }
