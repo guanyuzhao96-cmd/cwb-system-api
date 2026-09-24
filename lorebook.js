@@ -53,22 +53,14 @@ function routeNames(entries) {
     return [...names];
 }
 
-function isNonCharacterPluginEntry(entry) {
-    const keys = getKeys(entry).map(String);
-    return keys.some(key => [
-        'CWB:世界书目录',
-        'CWB:主角档案',
-        'CWB:故事时间线',
-        'CWB:角色档案目录',
-        'Amily2角色总集',
-    ].includes(key));
-}
-
-function apiSource(entries) {
-    return entries.filter(entry => !isNonCharacterPluginEntry(entry)).map((entry, index) => {
-        const keys = getKeys(entry).map(String).filter(key => !key.startsWith('CWB:')).join('、');
-        return `【条目${index + 1}】标题：${entry.comment || '无'}\n触发关键词：${keys || '无'}\n正文：${String(entry.content || '')}`;
-    }).join('\n\n');
+function currentChatText() {
+    const context = getContext();
+    const messages = Array.isArray(context?.chat) ? context.chat : [];
+    return messages.map(message => {
+        const speaker = message.is_user ? (context?.name1 || '用户') : (message.name || context?.name2 || '角色');
+        const content = String(message.mes ?? message.message ?? '').trim();
+        return content ? `【${speaker}】\n${content}` : '';
+    }).filter(Boolean).join('\n\n');
 }
 
 function parseNamesFromApi(result) {
@@ -86,10 +78,9 @@ function parseNamesFromApi(result) {
     return [...new Set(list.map(item => String(typeof item === 'string' ? item : item?.姓名 ?? item?.name ?? '').trim()).filter(name => /^[\u3400-\u9fff·A-Za-z0-9_-]{2,24}$/.test(name)))];
 }
 
-async function generateDirectoryNames(bookName, entries, onProgress = () => {}) {
-    const source = apiSource(entries);
-    if (!source.trim()) throw new Error(`《${bookName}》没有可送入 API 的世界书条目，未生成目录。`);
-    const chunks = source.match(/[\s\S]{1,12000}/g) || [];
+async function generateDirectoryNames(bookName, chatText, onProgress = () => {}) {
+    if (!chatText.trim()) throw new Error('当前聊天没有可读取的消息内容，未生成目录。');
+    const chunks = chatText.match(/[\s\S]{1,12000}/g) || [];
     const names = new Set();
     for (let index = 0; index < chunks.length; index++) {
         onProgress(`正在调用酒馆系统 API：${bookName}（第 ${index + 1}/${chunks.length} 段）`);
@@ -97,15 +88,17 @@ async function generateDirectoryNames(bookName, entries, onProgress = () => {}) 
         let response;
         try {
             response = await callSystemApi([
-                { role: 'system', content: '你是世界书目录生成器。根据输入的多个世界书条目，识别正文、HTML状态栏、条目标题和触发关键词中明确指向的角色姓名。优先从“姓名/名字/Name”字段识别；状态栏可能包含HTML标签、br、项目符号、全角标点。不要把普通名词、地点、作者、主角档案中的主角姓名、时间线参与者的偶然提及误当成这个故事线的角色。保留条目中真实出现的完整姓名，去重。只输出合法JSON：{"角色名单":["姓名"]}；没有可确认角色时输出空数组。' },
-                { role: 'user', content: `请为世界书“${bookName}”提取应进入目录的角色姓名（内容分段 ${index + 1}/${chunks.length}）。只依据以下内容，不要补造姓名。\n\n${chunks[index]}` },
+                { role: 'system', content: '你是聊天角色目录生成器。根据当前聊天记录识别实际参与剧情、具有独立身份的角色。优先读取状态栏中“姓名/名字/Name”等字段，也要从正文和对话中识别明确的角色姓名；状态栏可能含HTML、br、项目符号、全角标点。不要把用户、AI助手、旁白、地点、组织、物品或偶然提及的人名当成角色，不要补造姓名。保留完整姓名并去重。只输出合法JSON：{"角色名单":["姓名"]}；没有可确认角色时输出空数组。' },
+                { role: 'user', content: `以下是当前聊天记录（分段 ${index + 1}/${chunks.length}），用于生成世界书“${bookName}”的角色目录。请只提取本段中明确出现且属于剧情角色的姓名。\n\n${chunks[index]}` },
             ], 2048);
         } catch (error) {
             throw new Error(`《${bookName}》调用酒馆系统 API 失败：${error.message}`);
         }
         parseNamesFromApi(response).forEach(name => names.add(name));
     }
-    return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    const result = [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    if (!result.length) throw new Error(`API 未能从当前聊天识别出《${bookName}》目录角色；没有写入空目录。`);
+    return result;
 }
 
 function directoryContent(names) {
@@ -124,12 +117,14 @@ export async function generateWorldbookDirectories(keyword, onProgress = () => {
     const targetBooks = listWorldbooks().filter(name => String(name).includes(normalizedKeyword));
     if (!targetBooks.length) throw new Error(`没有找到名称包含“${normalizedKeyword}”的世界书。`);
 
+    const chatText = currentChatText();
+    if (!chatText.trim()) throw new Error('当前聊天没有可读取的消息内容，请先打开有聊天记录的对话。');
     const plans = [];
     const owners = new Map();
     for (const bookName of targetBooks) {
-        onProgress(`正在读取世界书：${bookName}`);
+        onProgress(`正在读取当前聊天，并为《${bookName}》生成角色目录…`);
         const entries = await getEntries(bookName);
-        const names = await generateDirectoryNames(bookName, entries, onProgress);
+        const names = await generateDirectoryNames(bookName, chatText, onProgress);
         plans.push({ bookName, entries, names });
         names.forEach(name => (owners.get(name) ?? owners.set(name, new Set()).get(name)).add(bookName));
     }
