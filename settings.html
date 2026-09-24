@@ -42,7 +42,7 @@
             <button id="cwb-convert-format" class="menu_button"><i class="fa-solid fa-clock-rotate-left"></i> 转换旧版档案格式</button>
             <div class="cwb-routing">
                 <h4>故事线世界书路由</h4>
-                <div class="cwb-note">角色生成时仅读取带有关键词“CWB:世界书目录”的目录条目中的“姓名:”列表。角色未列入任何目录时不会生成世界书档案。</div>
+                <div class="cwb-note">扫描会综合读取正文中的姓名字段、HTML 状态栏（含“姓名:”“• 姓名:”和“[姓名]:”格式）及角色触发关键词。角色生成时仅读取“CWB:世界书目录”中的姓名；未列入目录时不会生成档案。</div>
                 <label>扫描世界书关键词<input id="cwb-directory-scan-keyword" class="text_pole" type="text" placeholder="例如：小故事线"></label>
                 <div class="cwb-actions">
                     <button id="cwb-generate-directories" class="menu_button">扫描并生成目录</button>
