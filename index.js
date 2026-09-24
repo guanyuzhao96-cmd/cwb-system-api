@@ -9,7 +9,7 @@ import {
 } from '/scripts/extensions.js';
 import { cwbCompleteDefaultSettings } from './defaults.js';
 import { testSystemApi } from './api.js';
-import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent } from './core.js';
+import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, refreshTimeline, updateRange, updateRecent } from './core.js';
 import { convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state } from './state.js';
 import { notify } from './utils.js';
@@ -157,16 +157,32 @@ function bindUi() {
     $('#cwb-generate-directories').on('click', function () {
         runButton($(this), '生成中…', async () => {
             saveFromUi();
-            $('#cwb-route-status').text('正在准备扫描世界书…');
-            const result = await generateWorldbookDirectories(settings().directoryScanKeyword, message => $('#cwb-route-status').text(message));
-            const lines = [
-                `已生成目录：${result.generated.map(item => `${item.bookName}（${item.count}名）`).join('；')}`,
-            ];
-            if (result.duplicates.length) {
-                lines.push('重复角色（未写入目录，请手动处理）：', ...result.duplicates);
-                notify('warning', `发现 ${result.duplicates.length} 个重复角色，已跳过写入目录。`);
-            } else notify('success', '小故事线目录已生成。');
+            $('#cwb-route-status').text('正在读取当前聊天；准备生成目录并刷新时间线…');
+            const value = settings();
+            let directoryResult;
+            let timelineResult;
+            try {
+                directoryResult = { status: 'fulfilled', value: await generateWorldbookDirectories(value.directoryScanKeyword, message => $('#cwb-route-status').text(`目录：${message}`)) };
+            } catch (reason) { directoryResult = { status: 'rejected', reason }; }
+            try {
+                timelineResult = { status: 'fulfilled', value: await refreshTimeline(value, message => $('#cwb-route-status').text(`时间线：${message}`)) };
+            } catch (reason) { timelineResult = { status: 'rejected', reason }; }
+            const lines = [];
+            if (directoryResult.status === 'fulfilled') {
+                const result = directoryResult.value;
+                lines.push(`目录已生成：${result.generated.map(item => `${item.bookName}（${item.count}名）`).join('；')}`);
+                if (result.duplicates.length) lines.push('重复角色（未写入目录，请手动处理）：', ...result.duplicates);
+            } else lines.push(`目录生成失败：${directoryResult.reason?.message || directoryResult.reason}`);
+            if (timelineResult.status === 'fulfilled') {
+                const result = timelineResult.value;
+                lines.push(result.addedRanges.length
+                    ? `时间线已补齐楼层：${result.addedRanges.join('、')}（覆盖 ${result.coveredCount}/${result.totalFloors} 楼）`
+                    : `时间线无需重复更新（已覆盖 ${result.coveredCount}/${result.totalFloors} 楼）`);
+            } else lines.push(`时间线刷新失败：${timelineResult.reason?.message || timelineResult.reason}`);
             $('#cwb-route-status').text(lines.join('\n'));
+            if (directoryResult.status === 'rejected' || timelineResult.status === 'rejected') notify('warning', '目录或时间线有一项未完成，请查看详情。');
+            else if (directoryResult.value.duplicates.length) notify('warning', '目录和时间线已处理，但发现重复角色，请查看详情。');
+            else notify('success', '目录已生成，时间线已检查并补齐未处理楼层。');
         });
     });
 }
