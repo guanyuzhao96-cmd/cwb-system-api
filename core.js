@@ -75,7 +75,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         });
         messages.push({
             role: 'system',
-            content: '本次任务仅更新角色/主角动态档案，不要生成、修改或输出故事时间线；故事时间线只由“生成目录并刷新时间线”按钮单独维护。',
+            content: '本次任务只输出角色/主角档案，不要输出故事时间线。插件会在角色档案保存后，使用独立请求补齐至本次更新结束楼层为止的所有未处理时间线楼层。',
         });
         if (settings.incremental) {
             messages.push({
@@ -114,12 +114,22 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             if (savedName) names.push(savedName);
             else skippedNames.push(name);
         }
+        let timelineResult = null;
+        let timelineError = null;
+        try {
+            timelineResult = await refreshTimeline(settings, text => setStatus(text), boundedEnd);
+        } catch (error) {
+            timelineError = error;
+            console.error('[CWB] 时间线同步刷新失败', error);
+        }
         const uniqueNames = [...new Set(names)];
         if (!uniqueNames.length && !userUpdated) {
             const skipped = [...new Set(skippedNames)];
-            const message = skipped.length
+            const roleMessage = skipped.length
                 ? `未更新：${skipped.join('、')} 未列入任何世界书目录。`
                 : '模型生成了内容，但没有识别出角色或主角档案。';
+            const timelineMessage = timelineError ? `时间线同步失败：${timelineError.message}` : timelineResult?.addedRanges.length ? `时间线已补齐第 ${timelineResult.addedRanges.join('、')} 楼。` : '时间线楼层已覆盖，无需重复更新。';
+            const message = `${roleMessage} ${timelineMessage}`;
             setStatus(message);
             if (!silent) notify('warning', message);
             return [];
@@ -128,8 +138,13 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
         const skipped = [...new Set(skippedNames)];
         const skippedSuffix = skipped.length ? `；跳过未列目录角色：${skipped.join('、')}` : '';
-        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}。`);
-        if (!silent) notify('success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}。`);
+        const timelineSuffix = timelineError
+            ? `；时间线同步失败：${timelineError.message}`
+            : timelineResult?.addedRanges.length
+                ? `；时间线已补齐第 ${timelineResult.addedRanges.join('、')} 楼`
+                : '；时间线楼层已覆盖，无需重复更新';
+        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}${timelineSuffix}。`);
+        if (!silent) notify(timelineError ? 'warning' : 'success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}${timelineSuffix}。`);
         return uniqueNames;
     } finally {
         state.updating = false;
@@ -179,10 +194,13 @@ function timelineTag(entry) {
     return range ? `楼层${range[0]}-${range[1]}` : '楼层范围未知';
 }
 
-export async function refreshTimeline(settings, onProgress = () => {}) {
+export async function refreshTimeline(settings, onProgress = () => {}, endIndex = Number.MAX_SAFE_INTEGER) {
     if (state.timelineUpdating) throw new Error('时间线刷新任务正在运行。');
     refreshChatState();
     if (!state.messages.length) throw new Error('当前聊天为空，无法刷新时间线。');
+    const scanStartFloor = 1;
+    const scanEndFloor = Math.min(state.messages.length, Number.isFinite(Number(endIndex)) ? Number(endIndex) + 1 : state.messages.length);
+    if (scanEndFloor < scanStartFloor) throw new Error('时间线更新范围无效。');
     state.timelineUpdating = true;
     try {
         const existing = await getTimelineEntries();
@@ -202,11 +220,11 @@ export async function refreshTimeline(settings, onProgress = () => {}) {
             .join('\n\n');
         const chunkSize = Math.max(1, Number(settings.threshold) || 20);
         const addedRanges = [];
-        let floor = 1;
-        while (floor <= total) {
+        let floor = scanStartFloor;
+        while (floor <= scanEndFloor) {
             if (covered[floor]) { floor++; continue; }
             const start = floor;
-            while (floor <= total && !covered[floor]) floor++;
+            while (floor <= scanEndFloor && !covered[floor]) floor++;
             const gapEnd = floor - 1;
             for (let startFloor = start; startFloor <= gapEnd; startFloor += chunkSize) {
                 const endFloor = Math.min(gapEnd, startFloor + chunkSize - 1);
@@ -228,8 +246,8 @@ export async function refreshTimeline(settings, onProgress = () => {}) {
                 for (let current = startFloor; current <= endFloor; current++) covered[current] = true;
             }
         }
-        const coveredCount = covered.slice(1).filter(Boolean).length;
-        const result = { addedRanges, coveredCount, totalFloors: total };
+        const coveredCount = covered.slice(scanStartFloor, scanEndFloor + 1).filter(Boolean).length;
+        const result = { addedRanges, coveredCount, totalFloors: scanEndFloor - scanStartFloor + 1 };
         setStatus(addedRanges.length
             ? `时间线已补齐：${addedRanges.map(range => `第 ${range} 楼`).join('、')}；已覆盖 ${coveredCount}/${total} 楼。`
             : `时间线无需重复更新：已覆盖当前聊天全部 ${total} 楼。`);
