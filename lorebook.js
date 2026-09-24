@@ -7,6 +7,7 @@ import {
 } from '/scripts/world-info.js';
 import { state } from './state.js';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
+import { callSystemApi } from './api.js';
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
 const isEnabled = entry => entry?.enabled !== false && entry?.disable !== true;
@@ -63,15 +64,39 @@ function isNonCharacterPluginEntry(entry) {
     ].includes(key));
 }
 
-function scannedNames(entries) {
+function apiSource(entries) {
+    return entries.filter(entry => !isNonCharacterPluginEntry(entry)).map((entry, index) => {
+        const keys = getKeys(entry).map(String).filter(key => !key.startsWith('CWB:')).join('、');
+        return `【条目${index + 1}】标题：${entry.comment || '无'}\n触发关键词：${keys || '无'}\n正文：${String(entry.content || '')}`;
+    }).join('\n\n');
+}
+
+function parseNamesFromApi(result) {
+    const cleaned = String(result).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    let parsed;
+    try { parsed = JSON.parse(cleaned); }
+    catch {
+        const match = cleaned.match(/\{[\s\S]*\}/);
+        if (!match) throw new Error(`目录 API 返回格式无法解析：${cleaned.slice(0, 300)}`);
+        try { parsed = JSON.parse(match[0]); }
+        catch { throw new Error(`目录 API 返回的 JSON 无效：${cleaned.slice(0, 300)}`); }
+    }
+    const list = Array.isArray(parsed) ? parsed : parsed?.角色名单 ?? parsed?.names;
+    if (!Array.isArray(list)) throw new Error('目录 API 结果缺少“角色名单”数组。');
+    return [...new Set(list.map(item => String(typeof item === 'string' ? item : item?.姓名 ?? item?.name ?? '').trim()).filter(name => /^[\u3400-\u9fff·A-Za-z0-9_-]{2,24}$/.test(name)))];
+}
+
+async function generateDirectoryNames(bookName, entries) {
+    const source = apiSource(entries);
+    if (!source.trim()) return [];
+    const chunks = source.match(/[\s\S]{1,12000}/g) || [];
     const names = new Set();
-    for (const entry of entries) {
-        if (isNonCharacterPluginEntry(entry)) continue;
-        namesFromContent(entry.content).forEach(name => names.add(name));
-        for (const key of getKeys(entry)) {
-            const value = String(key).trim();
-            if (!value.startsWith('CWB:') && value !== 'Amily2角色总集' && /^[\u3400-\u9fff·]{2,12}$/.test(value)) names.add(value);
-        }
+    for (let index = 0; index < chunks.length; index++) {
+        const response = await callSystemApi([
+            { role: 'system', content: '你是世界书目录生成器。根据输入的多个世界书条目，识别正文、HTML状态栏、条目标题和触发关键词中明确指向的角色姓名。优先从“姓名/名字/Name”字段识别；状态栏可能包含HTML标签、br、项目符号、全角标点。不要把普通名词、地点、作者、主角档案中的主角姓名、时间线参与者的偶然提及误当成这个故事线的角色。保留条目中真实出现的完整姓名，去重。只输出合法JSON：{"角色名单":["姓名"]}；没有可确认角色时输出空数组。' },
+            { role: 'user', content: `请为世界书“${bookName}”提取应进入目录的角色姓名（内容分段 ${index + 1}/${chunks.length}）。只依据以下内容，不要补造姓名。\n\n${chunks[index]}` },
+        ], 2048);
+        parseNamesFromApi(response).forEach(name => names.add(name));
     }
     return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
@@ -96,7 +121,7 @@ export async function generateWorldbookDirectories(keyword) {
     const owners = new Map();
     for (const bookName of targetBooks) {
         const entries = await getEntries(bookName);
-        const names = scannedNames(entries);
+        const names = await generateDirectoryNames(bookName, entries);
         plans.push({ bookName, entries, names });
         names.forEach(name => (owners.get(name) ?? owners.set(name, new Set()).get(name)).add(bookName));
     }
@@ -135,6 +160,7 @@ export async function discoverWorldbookRoutes(settings = {}) {
     const result = {};
     for (const bookName of listWorldbooks()) {
         const entries = await getEntries(bookName);
+        if (!entries.some(entry => getKeys(entry).includes('CWB:世界书目录'))) continue;
         result[bookName] = { names: routeNames(entries), primary: bookName === primary };
     }
     state.routeCache = result;
@@ -152,7 +178,7 @@ async function routeWorldbook(settings, characterName) {
 
 export async function routeSummary(settings = {}) {
     const routes = await discoverWorldbookRoutes(settings);
-    return Object.entries(routes).map(([book, route]) => `${book}: ${route.names.slice(0, 30).join('、') || '未识别角色'}`).join('\n');
+    return Object.entries(routes).map(([book, route]) => `${book}: ${route.names.slice(0, 30).join('、') || '目录已生成，暂无角色'}`).join('\n') || '当前没有已生成的目录。';
 }
 
 export async function getEntries(bookName) {
