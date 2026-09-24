@@ -38,29 +38,17 @@ function namesFromContent(content) {
 
 function routeNames(entries) {
     const directories = entries.filter(entry => getKeys(entry).includes('CWB:世界书目录'));
-    const sourceEntries = directories.length ? directories : entries;
     const names = new Set();
-    for (const entry of sourceEntries) {
-        for (const key of getKeys(entry)) {
-            const value = String(key).trim();
-            if (value && !/^\d+-\d+$/.test(value) && !value.startsWith('CWB:') && value !== 'Amily2角色总集') names.add(value);
-        }
-        namesFromContent(entry.content).forEach(name => names.add(name));
-    }
+    for (const entry of directories) namesFromContent(entry.content).forEach(name => names.add(name));
     return [...names];
 }
 
 export async function discoverWorldbookRoutes(settings = {}) {
-    const manual = settings.worldbookRoutes && typeof settings.worldbookRoutes === 'object' ? settings.worldbookRoutes : {};
     const primary = getPrimaryWorldbook();
     const result = {};
     for (const bookName of listWorldbooks()) {
         const entries = await getEntries(bookName);
         result[bookName] = { names: routeNames(entries), primary: bookName === primary };
-    }
-    for (const [name, book] of Object.entries(manual)) if (book) {
-        result[book] ??= { names: [], primary: book === primary };
-        if (!result[book].names.includes(name)) result[book].names.push(name);
     }
     state.routeCache = result;
     return result;
@@ -68,11 +56,9 @@ export async function discoverWorldbookRoutes(settings = {}) {
 
 async function routeWorldbook(settings, characterName) {
     if (!settings.multiWorldbookRouting) return getTargetWorldbook(settings);
-    const manualBook = settings.worldbookRoutes?.[characterName];
-    if (manualBook) return manualBook;
     const routes = state.routeCache || await discoverWorldbookRoutes(settings);
     const candidates = Object.entries(routes).filter(([, route]) => route.names.some(name => name.toLowerCase() === characterName.toLowerCase()));
-    if (!candidates.length) return getTargetWorldbook(settings);
+    if (!candidates.length) return null;
     const primary = candidates.find(([, route]) => route.primary);
     return (primary || candidates[0])[0];
 }
@@ -142,7 +128,7 @@ export async function deleteEntries(bookName, uids) {
 
 export async function saveCharacterDescription(settings, characterName, content, startFloor, endFloor) {
     const bookName = await routeWorldbook(settings, characterName);
-    if (!bookName) throw new Error('当前角色没有主世界书，且未选择指定世界书。');
+    if (!bookName) return null;
     const chatId = state.chatId.replace(/ imported/g, '');
     const safeName = sanitizeName(characterName);
     const floorRange = `${startFloor + 1}-${endFloor + 1}`;
