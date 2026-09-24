@@ -7,8 +7,8 @@
   "js": "index.js",
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
-  "version": "0.8.8",
-  "description": "按目录精确路由角色世界书；独立记录全聊天总结楼层并提醒重复区间。",
+  "version": "0.8.9",
+  "description": "简化移动端设置界面；记录全聊天总结楼层并提醒重复区间。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/Wx-2025/ST-Amily2-Chat-Optimisation"
 }
