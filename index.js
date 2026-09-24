@@ -13,7 +13,7 @@ import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRa
 import { convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state } from './state.js';
 import { notify } from './utils.js';
-import { openViewer, updateViewerButton } from './viewer.js';
+import { openViewer, updatePluginButton } from './viewer.js';
 
 const defaults = {
     enabled: false,
@@ -56,7 +56,7 @@ function saveFromUi() {
     state.routeCache = null;
     saveSettingsDebounced();
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
-    updateViewerButton(value);
+    updatePluginButton();
 }
 
 function loadUi() {
@@ -77,7 +77,7 @@ function loadUi() {
     $('#cwb-full-prompt').val(value.fullPrompt);
     $('#cwb-incremental-prompt').val(value.incrementalPrompt);
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
-    updateViewerButton(value);
+    updatePluginButton();
 }
 
 async function runButton(button, label, action) {
@@ -126,10 +126,6 @@ function bindUi() {
     $('#cwb-open-viewer').on('click', () => openViewer(settings()));
     $('#cwb-convert-format').on('click', function () {
         runButton($(this), '转换中…', () => convertLegacyEntries(settings()));
-    });
-    $('#cwb-save-prompts').on('click', () => {
-        saveFromUi();
-        notify('success', '提示词已保存，下一次更新角色档案时生效。');
     });
     $('#cwb-reset-prompts').on('click', () => {
         const value = settings();
