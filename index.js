@@ -91,6 +91,7 @@ async function runButton(button, label, action) {
         console.error('[CWB]', error);
         notify('error', error.message);
         $('#cwb-status').text(`错误：${error.message}`);
+        if (button.attr('id') === 'cwb-generate-directories') $('#cwb-route-status').text(`目录生成失败：${error.message}`);
     } finally { button.prop('disabled', false).html(original); }
 }
 
@@ -144,15 +145,20 @@ function bindUi() {
     });
     $('#cwb-scan-routes').on('click', async function () {
         try {
+            $('#cwb-route-status').text('正在读取已生成目录…');
             const summary = await routeSummary(settings());
             $('#cwb-route-status').text(summary);
             notify('success', '已生成目录查看完成。');
-        } catch (error) { notify('error', `扫描失败：${error.message}`); }
+        } catch (error) {
+            $('#cwb-route-status').text(`读取目录失败：${error.message}`);
+            notify('error', `扫描失败：${error.message}`);
+        }
     });
     $('#cwb-generate-directories').on('click', function () {
         runButton($(this), '生成中…', async () => {
             saveFromUi();
-            const result = await generateWorldbookDirectories(settings().directoryScanKeyword);
+            $('#cwb-route-status').text('正在准备扫描世界书…');
+            const result = await generateWorldbookDirectories(settings().directoryScanKeyword, message => $('#cwb-route-status').text(message));
             const lines = [
                 `已生成目录：${result.generated.map(item => `${item.bookName}（${item.count}名）`).join('；')}`,
             ];
