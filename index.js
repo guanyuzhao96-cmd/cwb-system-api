@@ -9,7 +9,7 @@ import {
 } from '/scripts/extensions.js';
 import { cwbCompleteDefaultSettings } from './defaults.js';
 import { testSystemApi } from './api.js';
-import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, refreshTimeline, updateRange, updateRecent } from './core.js';
+import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent } from './core.js';
 import { convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state } from './state.js';
 import { notify } from './utils.js';
@@ -26,7 +26,6 @@ const defaults = {
     customWorldbook: '',
     multiWorldbookRouting: true,
     worldbookRoutes: {},
-    directoryScanKeyword: '小故事线',
     breakPrompt: cwbCompleteDefaultSettings.cwb_break_armor_prompt,
     fullPrompt: cwbCompleteDefaultSettings.cwb_char_card_prompt,
     incrementalPrompt: cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt,
@@ -54,7 +53,6 @@ function saveFromUi() {
     value.breakPrompt = $('#cwb-break-prompt').val();
     value.fullPrompt = $('#cwb-full-prompt').val();
     value.incrementalPrompt = $('#cwb-incremental-prompt').val();
-    value.directoryScanKeyword = String($('#cwb-directory-scan-keyword').val() || '').trim();
     state.routeCache = null;
     saveSettingsDebounced();
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
@@ -78,7 +76,6 @@ function loadUi() {
     $('#cwb-break-prompt').val(value.breakPrompt);
     $('#cwb-full-prompt').val(value.fullPrompt);
     $('#cwb-incremental-prompt').val(value.incrementalPrompt);
-    $('#cwb-directory-scan-keyword').val(value.directoryScanKeyword);
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
     updateViewerButton(value);
 }
@@ -157,13 +154,16 @@ function bindUi() {
     $('#cwb-generate-directories').on('click', function () {
         runButton($(this), '生成中…', async () => {
             saveFromUi();
-            $('#cwb-route-status').text('正在读取当前聊天并生成目录…');
-            const result = await generateWorldbookDirectories(settings().directoryScanKeyword, message => $('#cwb-route-status').text(message));
-            const lines = [`目录已生成：${result.generated.map(item => `${item.bookName}（${item.count}名）`).join('；')}`];
+            $('#cwb-route-status').text('正在读取当前激活的世界书…');
+            const result = await generateWorldbookDirectories(message => $('#cwb-route-status').text(message));
+            const lines = [`已扫描激活世界书：${result.activeBooks.join('、')}`];
+            if (result.generated.length) lines.push(`已生成目录：${result.generated.map(item => `${item.bookName}（${item.count}名）`).join('；')}`);
+            if (result.skippedBooks.length) lines.push(`没有识别到角色条目，未生成目录：${result.skippedBooks.join('、')}`);
             if (result.duplicates.length) lines.push('重复角色（未写入目录，请手动处理）：', ...result.duplicates);
             $('#cwb-route-status').text(lines.join('\n'));
-            if (result.duplicates.length) notify('warning', `目录已生成，发现 ${result.duplicates.length} 个重复角色，请查看详情。`);
-            else notify('success', '小故事线目录已生成。');
+            if (result.duplicates.length) notify('warning', `目录已扫描，发现 ${result.duplicates.length} 个重复角色，请查看详情。`);
+            else if (!result.generated.length) notify('warning', '激活的世界书中没有识别到角色条目。');
+            else notify('success', `已在 ${result.generated.length} 本激活世界书中生成目录。`);
         });
     });
 }
