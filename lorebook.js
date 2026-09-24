@@ -180,6 +180,27 @@ export async function saveUserDescription(settings, userName, content, startFloo
     return safeName;
 }
 
+export async function saveTimeline(settings, content, startFloor, endFloor) {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存故事时间线。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const floorRange = `${startFloor + 1}-${endFloor + 1}`;
+    const entries = await getEntries(bookName);
+    const existing = entries.find(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
+    const entryData = {
+        comment: `CWB故事时间线-${chatId}`,
+        content,
+        keys: ['CWB:故事时间线', chatId, '故事时间线', floorRange],
+        enabled: true,
+        type: 'constant',
+        position: 0,
+        order: 10000,
+        preventRecursion: true,
+    };
+    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
+    else await createEntries(bookName, [entryData]);
+}
+
 export async function updateRoster(settings, processedNames, startFloor, endFloor) {
     const grouped = new Map();
     for (const name of processedNames) {
@@ -289,6 +310,8 @@ export async function getTriggeredOldProfiles(settings, messages) {
         const masterEntries = await getEntries(masterBook);
         const userProfile = masterEntries.find(entry => entry.enabled && getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
         if (userProfile) profiles.push(userProfile.content);
+        const timeline = masterEntries.find(entry => entry.enabled && getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
+        if (timeline) profiles.push(timeline.content);
     }
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
