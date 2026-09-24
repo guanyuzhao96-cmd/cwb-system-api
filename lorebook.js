@@ -302,11 +302,14 @@ export async function saveTimeline(settings, content, startFloor, endFloor) {
     const chatId = state.chatId.replace(/ imported/g, '');
     const floorRange = `${startFloor + 1}-${endFloor + 1}`;
     const entries = await getEntries(bookName);
-    const existing = entries.find(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
+    const floorTag = `CWB:时间线楼层:${floorRange}`;
+    const existing = entries.find(entry => getKeys(entry).includes('CWB:故事时间线')
+        && getKeys(entry).includes(chatId)
+        && (getKeys(entry).includes(floorTag) || getKeys(entry).includes(floorRange)));
     const entryData = {
-        comment: `CWB故事时间线-${chatId}`,
+        comment: `CWB故事时间线-${chatId}-楼层${floorRange}`,
         content,
-        keys: ['CWB:故事时间线', chatId, '故事时间线', floorRange],
+        keys: ['CWB:故事时间线', chatId, '故事时间线', floorTag],
         enabled: true,
         type: 'constant',
         position: 0,
@@ -315,6 +318,14 @@ export async function saveTimeline(settings, content, startFloor, endFloor) {
     };
     if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
     else await createEntries(bookName, [entryData]);
+}
+
+export async function getTimelineEntries() {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法读取故事时间线。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const entries = await getEntries(bookName);
+    return entries.filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
 }
 
 export async function updateRoster(settings, processedNames, startFloor, endFloor) {
@@ -426,14 +437,13 @@ export async function getTriggeredOldProfiles(settings, messages) {
         const masterEntries = await getEntries(masterBook);
         const userProfile = masterEntries.find(entry => entry.enabled && getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
         if (userProfile) profiles.push(userProfile.content);
-        const timeline = masterEntries.find(entry => entry.enabled && getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
-        if (timeline) profiles.push(timeline.content);
     }
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
         profiles.push(...entries.filter(entry => entry.enabled
             && getKeys(entry).includes(chatId)
             && !getKeys(entry).includes('Amily2角色总集')
+            && !getKeys(entry).includes('CWB:故事时间线')
             && !getKeys(entry).includes('CWB:主角档案')
             && getKeys(entry).filter(key => !['CWB:自动档案', chatId].includes(key)).some(key => haystack.includes(String(key).toLowerCase())))
             .map(entry => entry.content));
