@@ -76,13 +76,27 @@ function likelyPersonName(value) {
         .replace(/^["'“‘【\[]+|["'”’】\]]+$/g, '')
         .replace(/^(?:动态|角色档案|人物档案|角色)[-—_｜:： ]+/u, '')
         .trim();
+    const lower = name.toLocaleLowerCase();
     const ignored = new Set([
         '姓名', '名字', '角色名', '人物姓名', '角色', '人物', '角色档案', '人物档案', '好感度', '好感', '性经历人数',
         '角色关系', '人物关系', '关系', '剧情', '时间线', '故事时间线', '世界书目录', '主角档案', '主角关系',
         '目标', '长期目标', '短期目标', '动态', '档案', '设定', '简介', '背景', '状态', '信息', '关键词', '目录',
+        'name', 'names', 'character', 'characters', 'role', 'roles', 'rule', 'rules', 'prompt', 'template', 'format',
+        'instruction', 'instructions', 'system', 'worldbook', 'timeline', 'profile', 'setting', 'lore', 'story',
+        'plot', 'chapter', 'index', 'summary', 'guide', 'guideline', 'output', 'relation', 'relationship',
+        'goal', 'status', 'age', 'gender', 'profession', 'date', 'event', 'item', 'ability', 'skill', 'keyword',
+        'directory', 'entry', 'main', 'side', 'background', 'setting', 'attribute', 'value',
     ]);
-    if (!name || name.length > 24 || ignored.has(name) || /^CWB:/i.test(name) || /^\d+-\d+$/.test(name)) return null;
-    if (!/^[\p{Script=Han}·A-Za-z][\p{Script=Han}·A-Za-z0-9 _-]{1,23}$/u.test(name)) return null;
+    const ruleTerms = /规则|条例|说明|指令|提示词?|模板|格式|协议|世界书|检索|索引|档案|剧情|时间线|前情|主线|支线|设定|背景|人物|角色|职业|性格|关系|目标|能力|技能|属性|数值|好感|状态|更新|生成|总结|章节|楼层|关键词|触发|禁止|必须|不要|应该|规范|要求|输出|系统|用户|助手|旁白|场景|地点|组织|势力|事件|目录|清单|列表|机制|功能|模块|说明书|校园|学校|学院|大学|专业|班级|年级|学生会|社团|寝室|教室|家族|公司|部门|城市|地区|地图|任务|奖励|物品|道具|装备|分类|类型|模式|流程|步骤|要点|原则|须知|条款/iu;
+    const genericLatinWord = lower.split(/[ '-]/).some(word => ignored.has(word));
+    if (!name || name.length > 24 || ignored.has(name) || ignored.has(lower) || ruleTerms.test(name)
+        || genericLatinWord || /^CWB:/i.test(name) || /^\d+-\d+$/.test(name)) return null;
+
+    // Without reading entry bodies, accept only name-shaped labels: short Chinese names,
+    // or properly capitalized English/pinyin names. Reject descriptive trigger phrases.
+    const chineseName = /^[\p{Script=Han}·]{2,5}$/u.test(name);
+    const latinName = /^[A-Z][a-z]{1,19}(?:[ '-][A-Z][a-z]{1,19}){0,2}$/.test(name);
+    if (!chineseName && !latinName) return null;
     return name;
 }
 
