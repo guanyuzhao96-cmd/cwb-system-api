@@ -42,10 +42,10 @@
             <button id="cwb-convert-format" class="menu_button"><i class="fa-solid fa-clock-rotate-left"></i> 转换旧版档案格式</button>
             <div class="cwb-routing">
                 <h4>故事线世界书路由</h4>
-                <div class="cwb-note">点击生成时会读取当前聊天记录，调用酒馆当前系统 API，从正文和 HTML 状态栏中识别角色姓名，并将目录写入名称包含下方关键词的世界书（空模板也可作为写入目标）。查看目录只显示已经生成目录的世界书。</div>
+                <div class="cwb-note">点击“生成目录并刷新时间线”时会读取当前聊天，调用酒馆当前系统 API 识别角色并写入匹配关键词的世界书，同时只补齐尚未处理的时间线楼层。每段时间线带楼层范围标签，重复点击不会重复追加。查看目录只显示已经生成目录的世界书。</div>
                 <label>扫描世界书关键词<input id="cwb-directory-scan-keyword" class="text_pole" type="text" placeholder="例如：小故事线"></label>
                 <div class="cwb-actions">
-                    <button id="cwb-generate-directories" class="menu_button">扫描并生成目录</button>
+                    <button id="cwb-generate-directories" class="menu_button">生成目录并刷新时间线</button>
                     <button id="cwb-scan-routes" class="menu_button">查看已生成目录</button>
                 </div>
                 <pre id="cwb-route-status" class="cwb-route-status">尚未扫描</pre>
