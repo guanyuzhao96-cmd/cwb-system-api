@@ -88,6 +88,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         if (!blocks.length) throw new Error('模型回复中没有合法的角色档案块。');
 
         const names = [];
+        const skippedNames = [];
         let userUpdated = false;
         const currentUserName = getContext()?.name1 || '用户';
         for (const block of blocks) {
@@ -100,14 +101,26 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
                 userUpdated = true;
                 continue;
             }
-            names.push(await saveCharacterDescription(settings, name, block, boundedStart, boundedEnd));
+            const savedName = await saveCharacterDescription(settings, name, block, boundedStart, boundedEnd);
+            if (savedName) names.push(savedName);
+            else skippedNames.push(name);
         }
         const uniqueNames = [...new Set(names)];
-        if (!uniqueNames.length && !userUpdated) throw new Error('模型生成了内容，但没有识别出角色或主角档案。');
+        if (!uniqueNames.length && !userUpdated) {
+            const skipped = [...new Set(skippedNames)];
+            const message = skipped.length
+                ? `未更新：${skipped.join('、')} 未列入任何世界书目录。`
+                : '模型生成了内容，但没有识别出角色或主角档案。';
+            setStatus(message);
+            if (!silent) notify('warning', message);
+            return [];
+        }
         if (uniqueNames.length) await updateRoster(settings, uniqueNames, boundedStart, boundedEnd);
         else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
-        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}。`);
-        if (!silent) notify('success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}。`);
+        const skipped = [...new Set(skippedNames)];
+        const skippedSuffix = skipped.length ? `；跳过未列目录角色：${skipped.join('、')}` : '';
+        setStatus(`完成：第 ${boundedStart + 1}-${boundedEnd + 1} 层，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}。`);
+        if (!silent) notify('success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}。`);
         return uniqueNames;
     } finally {
         state.updating = false;
