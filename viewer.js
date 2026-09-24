@@ -56,17 +56,53 @@ export async function openViewer(settings) {
     });
 }
 
-export function updateViewerButton(settings) {
-    $('#cwb-viewer-button').remove();
-    let button = $('#cwb-top-viewer-button');
+let pluginPanelOrigin = null;
+
+function closePluginPanel() {
+    const root = document.getElementById('cwb-system-settings');
+    const modal = document.getElementById('cwb-plugin-modal');
+    if (root && pluginPanelOrigin?.parent) {
+        const { parent, nextSibling } = pluginPanelOrigin;
+        if (nextSibling?.parentNode === parent) parent.insertBefore(root, nextSibling);
+        else parent.appendChild(root);
+    }
+    modal?.remove();
+    pluginPanelOrigin = null;
+    $(document).off('keydown.cwbPluginPanel');
+}
+
+export function openPluginPanel() {
+    if (document.getElementById('cwb-plugin-modal')) return;
+    const root = document.getElementById('cwb-system-settings');
+    if (!root?.parentNode) return notify('warning', '找不到角色世界书插件设置面板。');
+
+    pluginPanelOrigin = { parent: root.parentNode, nextSibling: root.nextSibling };
+    const modal = $(`<div id="cwb-plugin-modal" class="cwb-modal" role="dialog" aria-modal="true" aria-label="角色世界书插件">
+        <div class="cwb-modal-box">
+            <div class="cwb-plugin-modal-head"><b>角色世界书插件</b><button type="button" class="menu_button cwb-close-plugin-panel">关闭</button></div>
+            <div class="cwb-plugin-panel-slot"></div>
+        </div>
+    </div>`);
+    $('body').append(modal);
+    modal.find('.cwb-plugin-panel-slot').append(root);
+    modal.on('click', event => {
+        if (event.target === modal[0] || $(event.target).closest('.cwb-close-plugin-panel').length) closePluginPanel();
+    });
+    $(document).off('keydown.cwbPluginPanel').on('keydown.cwbPluginPanel', event => {
+        if (event.key === 'Escape') closePluginPanel();
+    });
+}
+
+export function updatePluginButton() {
+    $('#cwb-viewer-button, #cwb-top-viewer-button').remove();
+    let button = $('#cwb-top-plugin-button');
     const topBar = $('#top-settings-holder').length ? $('#top-settings-holder') : $('#top-bar');
     if (!topBar.length) return;
     if (!button.length) {
-        topBar.append('<button id="cwb-top-viewer-button" class="menu_button menu_button_icon" title="角色档案"><i class="fa-solid fa-address-card"></i><span>角色档案</span></button>');
-        button = $('#cwb-top-viewer-button');
+        topBar.append('<button id="cwb-top-plugin-button" class="menu_button menu_button_icon" title="打开角色世界书插件"><i class="fa-solid fa-book-open"></i><span>角色世界书</span></button>');
+        button = $('#cwb-top-plugin-button');
     } else if (!button.parent().is(topBar)) {
         topBar.append(button);
     }
-    button.toggle(Boolean(settings.enabled));
-    button.off('click.cwb').on('click.cwb', () => openViewer(settings));
+    button.show().off('click.cwb').on('click.cwb', openPluginPanel);
 }
