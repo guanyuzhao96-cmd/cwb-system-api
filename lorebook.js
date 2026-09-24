@@ -43,6 +43,77 @@ function routeNames(entries) {
     return [...names];
 }
 
+function isAutoEntry(entry) {
+    return getKeys(entry).some(key => String(key).startsWith('CWB:') || String(key) === 'Amily2角色总集');
+}
+
+function scannedNames(entries) {
+    const names = new Set();
+    for (const entry of entries) {
+        if (isAutoEntry(entry)) continue;
+        namesFromContent(entry.content).forEach(name => names.add(name));
+        for (const key of getKeys(entry)) {
+            const value = String(key).trim();
+            if (/^[\u3400-\u9fff·]{2,12}$/.test(value)) names.add(value);
+        }
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+}
+
+function directoryContent(names) {
+    return `【小故事线目录】\n${names.length ? names.map(name => `姓名: "${name}"`).join('\n') : '（暂无可自动识别的角色）'}`;
+}
+
+function duplicateLines(duplicates) {
+    return [...duplicates.entries()]
+        .sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
+        .map(([name, books]) => `${name}：${[...books].sort((a, b) => a.localeCompare(b, 'zh-CN')).join('、')}`);
+}
+
+export async function generateWorldbookDirectories(keyword) {
+    const normalizedKeyword = String(keyword ?? '').trim();
+    if (!normalizedKeyword) throw new Error('请输入用于筛选小故事线世界书的关键词。');
+    const targetBooks = listWorldbooks().filter(name => String(name).includes(normalizedKeyword));
+    if (!targetBooks.length) throw new Error(`没有找到名称包含“${normalizedKeyword}”的世界书。`);
+
+    const plans = [];
+    const owners = new Map();
+    for (const bookName of targetBooks) {
+        const entries = await getEntries(bookName);
+        const names = scannedNames(entries);
+        plans.push({ bookName, entries, names });
+        names.forEach(name => (owners.get(name) ?? owners.set(name, new Set()).get(name)).add(bookName));
+    }
+
+    for (const bookName of listWorldbooks()) {
+        const entries = await getEntries(bookName);
+        routeNames(entries).forEach(name => (owners.get(name) ?? owners.set(name, new Set()).get(name)).add(bookName));
+    }
+    const duplicates = new Map([...owners].filter(([, books]) => books.size > 1));
+    const generated = [];
+    for (const plan of plans) {
+        const names = plan.names.filter(name => !duplicates.has(name));
+        const data = {
+            comment: `CWB目录｜${plan.bookName}`,
+            content: directoryContent(names),
+            keys: ['CWB:世界书目录'],
+            enabled: false,
+            type: 'selective',
+            preventRecursion: true,
+        };
+        const directories = plan.entries.filter(entry => getKeys(entry).includes('CWB:世界书目录'));
+        if (directories.length) await patchEntries(plan.bookName, directories.map(entry => ({ uid: entry.uid, ...data })));
+        else await createEntries(plan.bookName, [data]);
+        generated.push({ bookName: plan.bookName, count: names.length });
+    }
+    state.routeCache = null;
+    return {
+        keyword: normalizedKeyword,
+        generated,
+        duplicates: duplicateLines(duplicates),
+    };
+}
+
 export async function discoverWorldbookRoutes(settings = {}) {
     const primary = getPrimaryWorldbook();
     const result = {};
