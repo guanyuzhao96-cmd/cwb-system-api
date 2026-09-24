@@ -99,10 +99,18 @@ export function updatePluginButton() {
     const topBar = $('#top-settings-holder').length ? $('#top-settings-holder') : $('#top-bar');
     if (!topBar.length) return;
     if (!button.length) {
-        topBar.append('<button id="cwb-top-plugin-button" class="menu_button menu_button_icon" title="打开角色世界书插件"><i class="fa-solid fa-book-open"></i><span>角色世界书</span></button>');
+        topBar.append('<button id="cwb-top-plugin-button" class="menu_button menu_button_icon" title="打开角色世界书插件" aria-label="打开角色世界书插件"><i class="fa-solid fa-book-open" aria-hidden="true"></i></button>');
         button = $('#cwb-top-plugin-button');
     } else if (!button.parent().is(topBar)) {
         topBar.append(button);
     }
     button.show().off('click.cwb').on('click.cwb', openPluginPanel);
+    const syncIconSize = () => {
+        const reference = topBar.find('.menu_button_icon:visible').not(button).first()[0];
+        if (!reference) return;
+        const { width, height } = reference.getBoundingClientRect();
+        if (width > 0 && height > 0) button.css({ width: `${width}px`, height: `${height}px`, minWidth: `${width}px`, minHeight: `${height}px`, padding: 0 });
+    };
+    syncIconSize();
+    $(window).off('resize.cwbPluginButton').on('resize.cwbPluginButton', syncIconSize);
 }
