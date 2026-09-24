@@ -30,7 +30,8 @@
 .cwb-prompt-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 8px; }
 .cwb-prompt-actions .cwb-help { flex: 1 1 100%; margin-bottom: 0; }
 .cwb-prompt-actions .menu_button { flex: 1; min-width: 90px; margin: 0; }
-#cwb-top-plugin-button { position: relative; z-index: 3006; display: inline-flex; align-items: center; align-self: center; width: auto; min-width: max-content; gap: 5px; min-height: 28px; margin-left: 5px; white-space: nowrap; }
+#cwb-top-plugin-button { position: relative; z-index: 3006; flex: 0 0 auto; margin-left: 5px; line-height: 1; }
+#cwb-top-plugin-button i { font-size: 1em; }
 .cwb-plugin-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 0 0 8px; }
 .cwb-plugin-modal-head b { font-size: 1.05em; }
 #cwb-plugin-modal .inline-drawer-toggle { display: none; }
@@ -44,10 +45,9 @@
 .cwb-card pre { white-space: pre-wrap; word-break: break-word; }
 @media (max-width: 700px) {
     .cwb-panel .inline-drawer-content { padding: 7px 8px 10px; }
-    #cwb-top-plugin-button span { display: none; }
     .cwb-overview { grid-template-columns: 1fr; gap: 6px; }
     .cwb-primary-actions { gap: 6px; }
-    .cwb-primary-actions .menu_button, .cwb-secondary-actions .menu_button { min-height: 40px; padding: 7px 6px; font-size: .94em; }
+    .cwb-primary-actions .menu_button, .cwb-secondary-actions .menu_button { min-height: 40px; padding: 7px 6px; font-size: .94em; word-break: keep-all; overflow-wrap: normal; }
     .cwb-floor-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 68px; gap: 5px; }
     .cwb-floor-row button { min-width: 68px; padding: 6px 4px; }
     .cwb-grid { grid-template-columns: 1fr; gap: 5px; }
