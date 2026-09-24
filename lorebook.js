@@ -3,11 +3,12 @@ import {
     createWorldInfoEntry,
     loadWorldInfo,
     saveWorldInfo,
+    selected_world_info,
+    world_info,
     world_names,
 } from '/scripts/world-info.js';
 import { state } from './state.js';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
-import { callSystemApi } from './api.js';
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
 const isEnabled = entry => entry?.enabled !== false && entry?.disable !== true;
@@ -39,7 +40,7 @@ function namesFromContent(content) {
         .replace(/&amp;/gi, '&')
         .replace(/\r/g, '');
     const found = [];
-    for (const match of text.matchAll(/(?:^|\n)\s*(?:[•·▪●◦◆◇\-–—]\s*)*(?:\[\s*)?(?:name|姓名)(?:\s*\])?\s*[:：]\s*["'“‘]?\s*([^"'“”‘’\n]+?)\s*["'“”‘’]?\s*(?:\n|$)/gim)) {
+    for (const match of text.matchAll(/(?:^|\n)\s*(?:[•·▪●◦◆◇\-–—]\s*)*(?:\[\s*)?(?:name|姓名|名字|角色名|人物姓名)(?:\s*\])?\s*[:：]\s*["'“‘]?\s*([^"'“”‘’\n]+?)\s*["'“”‘’]?\s*(?:\n|$)/gim)) {
         const name = match[1].trim().replace(/^[•·▪●◦◆◇\-–—\s]+|[\s。；;，,]+$/g, '');
         if (name && !found.includes(name)) found.push(name);
     }
@@ -53,52 +54,66 @@ function routeNames(entries) {
     return [...names];
 }
 
-function currentChatText() {
+function getActiveWorldbookNames() {
     const context = getContext();
-    const messages = Array.isArray(context?.chat) ? context.chat : [];
-    return messages.map(message => {
-        const speaker = message.is_user ? (context?.name1 || '用户') : (message.name || context?.name2 || '角色');
-        const content = String(message.mes ?? message.message ?? '').trim();
-        return content ? `【${speaker}】\n${content}` : '';
-    }).filter(Boolean).join('\n\n');
+    const active = new Set();
+    const add = value => {
+        const name = String(value ?? '').trim();
+        if (name && world_names.includes(name)) active.add(name);
+    };
+    (Array.isArray(selected_world_info) ? selected_world_info : []).forEach(add);
+    add(context?.chatMetadata?.world_info);
+
+    const character = context?.characters?.[context.characterId];
+    add(character?.data?.extensions?.world || character?.extensions?.world);
+    const avatarKey = String(character?.avatar ?? '').replace(/\.[^/.]+$/, '');
+    const extraBooks = world_info?.charLore?.find(item => item.name === avatarKey)?.extraBooks;
+    if (Array.isArray(extraBooks)) extraBooks.forEach(add);
+
+    add(context?.powerUserSettings?.persona_description_lorebook);
+    return [...active].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
-function parseNamesFromApi(result) {
-    const cleaned = String(result).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    let parsed;
-    try { parsed = JSON.parse(cleaned); }
-    catch {
-        const match = cleaned.match(/\{[\s\S]*\}/);
-        if (!match) throw new Error(`目录 API 返回格式无法解析：${cleaned.slice(0, 300)}`);
-        try { parsed = JSON.parse(match[0]); }
-        catch { throw new Error(`目录 API 返回的 JSON 无效：${cleaned.slice(0, 300)}`); }
-    }
-    const list = Array.isArray(parsed) ? parsed : parsed?.角色名单 ?? parsed?.names;
-    if (!Array.isArray(list)) throw new Error('目录 API 结果缺少“角色名单”数组。');
-    return [...new Set(list.map(item => String(typeof item === 'string' ? item : item?.姓名 ?? item?.name ?? '').trim()).filter(name => /^[\u3400-\u9fff·A-Za-z0-9_-]{2,24}$/.test(name)))];
+function likelyPersonName(value) {
+    const name = String(value ?? '').trim().replace(/^["'“‘【\[]+|["'”’】\]]+$/g, '');
+    if (!name || name.length > 24 || /^CWB:/i.test(name) || /^\d+-\d+$/.test(name)) return null;
+    if (!/^[\p{Script=Han}·A-Za-z][\p{Script=Han}·A-Za-z0-9 _-]{1,23}$/u.test(name)) return null;
+    return name;
 }
 
-async function generateDirectoryNames(bookName, chatText, onProgress = () => {}) {
-    if (!chatText.trim()) throw new Error('当前聊天没有可读取的消息内容，未生成目录。');
-    const chunks = chatText.match(/[\s\S]{1,12000}/g) || [];
+function isDirectorySupportEntry(entry) {
+    return getKeys(entry).some(key => [
+        'CWB:世界书目录', 'CWB:主角档案', 'CWB:故事时间线', 'CWB:角色档案目录', 'CWB:主角关系', 'Amily2角色总集',
+    ].includes(String(key)));
+}
+
+function namesFromRoleEntries(entries) {
     const names = new Set();
-    for (let index = 0; index < chunks.length; index++) {
-        onProgress(`正在调用酒馆系统 API：${bookName}（第 ${index + 1}/${chunks.length} 段）`);
-        console.info(`[CWB] 正在调用系统 API 生成目录：${bookName}（${index + 1}/${chunks.length}）`);
-        let response;
-        try {
-            response = await callSystemApi([
-                { role: 'system', content: '你是聊天角色目录生成器。根据当前聊天记录识别实际参与剧情、具有独立身份的角色。优先读取状态栏中“姓名/名字/Name”等字段，也要从正文和对话中识别明确的角色姓名；状态栏可能含HTML、br、项目符号、全角标点。不要把用户、AI助手、旁白、地点、组织、物品或偶然提及的人名当成角色，不要补造姓名。保留完整姓名并去重。只输出合法JSON：{"角色名单":["姓名"]}；没有可确认角色时输出空数组。' },
-                { role: 'user', content: `以下是当前聊天记录（分段 ${index + 1}/${chunks.length}），用于生成世界书“${bookName}”的角色目录。请只提取本段中明确出现且属于剧情角色的姓名。\n\n${chunks[index]}` },
-            ], 2048);
-        } catch (error) {
-            throw new Error(`《${bookName}》调用酒馆系统 API 失败：${error.message}`);
+    for (const entry of entries) {
+        if (!isEnabled(entry) || isDirectorySupportEntry(entry)) continue;
+        const explicitNames = namesFromContent(entry.content);
+        explicitNames.forEach(name => names.add(name));
+
+        const keys = getKeys(entry).map(String);
+        if (keys.includes('CWB:自动档案')) {
+            const commentName = String(entry.comment ?? '').match(/^动态[-—_｜:： ]+(.+)$/)?.[1];
+            const candidates = keys.filter(key => !key.startsWith('CWB:') && !/^\d+-\d+$/.test(key));
+            const name = likelyPersonName(commentName || candidates.at(-1));
+            if (name) names.add(name);
         }
-        parseNamesFromApi(response).forEach(name => names.add(name));
+
+        const commentName = String(entry.comment ?? '').match(/^(?:动态|角色档案|人物档案|角色)[-—_｜:： ]+(.+)$/)?.[1];
+        const name = likelyPersonName(commentName);
+        if (name) names.add(name);
+
+        const looksLikeStatusProfile = /(?:姓名|年龄|性别|职业|好感度|好感|性经历人数|角色关系|心里所想)\s*[:：]/i.test(String(entry.content ?? ''));
+        if (looksLikeStatusProfile && !explicitNames.length) {
+            const titleName = likelyPersonName(entry.comment);
+            if (titleName) names.add(titleName);
+            keys.map(likelyPersonName).filter(Boolean).forEach(keyName => names.add(keyName));
+        }
     }
-    const result = [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'));
-    if (!result.length) throw new Error(`API 未能从当前聊天识别出《${bookName}》目录角色；没有写入空目录。`);
-    return result;
+    return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
 function directoryContent(names) {
@@ -111,27 +126,20 @@ function duplicateLines(duplicates) {
         .map(([name, books]) => `${name}：${[...books].sort((a, b) => a.localeCompare(b, 'zh-CN')).join('、')}`);
 }
 
-export async function generateWorldbookDirectories(keyword, onProgress = () => {}) {
-    const normalizedKeyword = String(keyword ?? '').trim();
-    if (!normalizedKeyword) throw new Error('请输入用于筛选小故事线世界书的关键词。');
-    const targetBooks = listWorldbooks().filter(name => String(name).includes(normalizedKeyword));
-    if (!targetBooks.length) throw new Error(`没有找到名称包含“${normalizedKeyword}”的世界书。`);
-
-    const chatText = currentChatText();
-    if (!chatText.trim()) throw new Error('当前聊天没有可读取的消息内容，请先打开有聊天记录的对话。');
+export async function generateWorldbookDirectories(onProgress = () => {}) {
+    const targetBooks = getActiveWorldbookNames();
+    if (!targetBooks.length) throw new Error('当前没有已激活的世界书。请检查全局选择、当前角色、当前聊天或当前 Persona 的世界书绑定。');
     const plans = [];
     const owners = new Map();
     for (const bookName of targetBooks) {
-        onProgress(`正在读取当前聊天，并为《${bookName}》生成角色目录…`);
+        onProgress(`正在读取已激活世界书《${bookName}》中的角色条目…`);
         const entries = await getEntries(bookName);
-        const names = await generateDirectoryNames(bookName, chatText, onProgress);
+        const names = namesFromRoleEntries(entries);
+        const existingNames = routeNames(entries);
+        existingNames.forEach(name => (owners.get(name) ?? owners.set(name, new Set()).get(name)).add(bookName));
+        if (!names.length) continue;
         plans.push({ bookName, entries, names });
         names.forEach(name => (owners.get(name) ?? owners.set(name, new Set()).get(name)).add(bookName));
-    }
-
-    for (const bookName of listWorldbooks()) {
-        const entries = await getEntries(bookName);
-        routeNames(entries).forEach(name => (owners.get(name) ?? owners.set(name, new Set()).get(name)).add(bookName));
     }
     const duplicates = new Map([...owners].filter(([, books]) => books.size > 1));
     const generated = [];
@@ -152,8 +160,9 @@ export async function generateWorldbookDirectories(keyword, onProgress = () => {
     }
     state.routeCache = null;
     return {
-        keyword: normalizedKeyword,
+        activeBooks: targetBooks,
         generated,
+        skippedBooks: targetBooks.filter(bookName => !generated.some(item => item.bookName === bookName)),
         duplicates: duplicateLines(duplicates),
     };
 }
