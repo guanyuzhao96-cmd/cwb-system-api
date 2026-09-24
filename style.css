@@ -9,9 +9,9 @@
 .cwb-primary-actions .cwb-primary { grid-column: 1 / -1; }
 .cwb-range { padding: 9px 10px; border-radius: 8px; background: var(--black30a); }
 .cwb-section-label { display: block; margin-bottom: 6px; font-size: .9em; opacity: .8; }
-.cwb-floor-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(72px, auto); align-items: center; gap: 6px; }
+.cwb-floor-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(116px, auto); align-items: center; gap: 6px; }
 .cwb-floor-row input { width: 100%; min-width: 0; margin: 0; }
-.cwb-floor-row button { min-width: 72px; min-height: 36px; margin: 0; white-space: nowrap; }
+.cwb-floor-row button { min-width: 116px; min-height: 36px; margin: 0; white-space: nowrap; }
 .cwb-section { margin-top: 8px; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.12)); border-radius: 9px; background: var(--black20a); overflow: hidden; }
 .cwb-section > summary { padding: 10px 12px; cursor: pointer; font-weight: 600; list-style-position: inside; }
 .cwb-section[open] > summary { border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.12)); }
@@ -48,8 +48,8 @@
     .cwb-overview { grid-template-columns: 1fr; gap: 6px; }
     .cwb-primary-actions { gap: 6px; }
     .cwb-primary-actions .menu_button, .cwb-secondary-actions .menu_button { min-height: 40px; padding: 7px 6px; font-size: .94em; word-break: keep-all; overflow-wrap: normal; }
-    .cwb-floor-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 68px; gap: 5px; }
-    .cwb-floor-row button { min-width: 68px; padding: 6px 4px; }
+    .cwb-floor-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 116px; gap: 5px; }
+    .cwb-floor-row button { min-width: 116px; padding: 6px 4px; }
     .cwb-grid { grid-template-columns: 1fr; gap: 5px; }
     .cwb-target-grid { grid-template-columns: 1fr; }
     .cwb-option { margin-right: 0; }
