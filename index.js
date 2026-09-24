@@ -10,7 +10,7 @@ import {
 import { cwbCompleteDefaultSettings } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent } from './core.js';
-import { convertLegacyEntries, listWorldbooks, routeSummary } from './lorebook.js';
+import { convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state } from './state.js';
 import { notify } from './utils.js';
 import { openViewer, updateViewerButton } from './viewer.js';
@@ -26,6 +26,7 @@ const defaults = {
     customWorldbook: '',
     multiWorldbookRouting: true,
     worldbookRoutes: {},
+    directoryScanKeyword: '小故事线',
     breakPrompt: cwbCompleteDefaultSettings.cwb_break_armor_prompt,
     fullPrompt: cwbCompleteDefaultSettings.cwb_char_card_prompt,
     incrementalPrompt: cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt,
@@ -53,8 +54,7 @@ function saveFromUi() {
     value.breakPrompt = $('#cwb-break-prompt').val();
     value.fullPrompt = $('#cwb-full-prompt').val();
     value.incrementalPrompt = $('#cwb-incremental-prompt').val();
-    try { value.worldbookRoutes = JSON.parse($('#cwb-worldbook-routes').val() || '{}'); }
-    catch { value.worldbookRoutes = {}; }
+    value.directoryScanKeyword = String($('#cwb-directory-scan-keyword').val() || '').trim();
     state.routeCache = null;
     saveSettingsDebounced();
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
@@ -78,7 +78,7 @@ function loadUi() {
     $('#cwb-break-prompt').val(value.breakPrompt);
     $('#cwb-full-prompt').val(value.fullPrompt);
     $('#cwb-incremental-prompt').val(value.incrementalPrompt);
-    $('#cwb-worldbook-routes').val(JSON.stringify(value.worldbookRoutes || {}, null, 2));
+    $('#cwb-directory-scan-keyword').val(value.directoryScanKeyword);
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
     updateViewerButton(value);
 }
@@ -148,6 +148,20 @@ function bindUi() {
             $('#cwb-route-status').text(summary || '没有发现可识别的世界书。');
             notify('success', '世界书角色归属扫描完成。');
         } catch (error) { notify('error', `扫描失败：${error.message}`); }
+    });
+    $('#cwb-generate-directories').on('click', function () {
+        runButton($(this), '生成中…', async () => {
+            saveFromUi();
+            const result = await generateWorldbookDirectories(settings().directoryScanKeyword);
+            const lines = [
+                `已生成目录：${result.generated.map(item => `${item.bookName}（${item.count}名）`).join('；')}`,
+            ];
+            if (result.duplicates.length) {
+                lines.push('重复角色（未写入目录，请手动处理）：', ...result.duplicates);
+                notify('warning', `发现 ${result.duplicates.length} 个重复角色，已跳过写入目录。`);
+            } else notify('success', '小故事线目录已生成。');
+            $('#cwb-route-status').text(lines.join('\n'));
+        });
     });
 }
 
