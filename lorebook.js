@@ -10,6 +10,7 @@ import {
 import { state } from './state.js';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
 import { directoryContent, duplicateLines, findRoutedBook, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
+import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges, updateTrackerContent } from './update-tracker.mjs';
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
 const isEnabled = entry => entry?.enabled !== false && entry?.disable !== true;
@@ -265,6 +266,67 @@ export async function getTimelineEntries() {
     return entries.filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
 }
 
+export async function getChatUpdateTracking(totalMessages = 0) {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) return null;
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const entries = await getEntries(bookName);
+    const entry = entries.find(item => getKeys(item).includes('CWB:更新记录') && getKeys(item).includes(chatId));
+    const keys = entry ? getKeys(entry) : [];
+    const completedRanges = mergeRanges(parseTaggedRanges(keys, 'CWB:总结楼层:'));
+    const duplicateRanges = mergeRanges(parseTaggedRanges(keys, 'CWB:重复总结楼层:'));
+    const trackingStartTag = keys.map(key => String(key).match(/^CWB:追踪起点:(\d+)$/)).find(Boolean);
+    const trackingStartIndex = trackingStartTag ? Number(trackingStartTag[1]) : Math.max(0, Number(totalMessages) || 0);
+    return {
+        bookName,
+        entry,
+        completedRanges,
+        duplicateRanges,
+        trackingStartIndex,
+        missingRanges: missingRanges(totalMessages, [...completedRanges, ...(trackingStartIndex > 0 ? [[0, trackingStartIndex - 1]] : [])], trackingStartIndex),
+    };
+}
+
+export async function recordChatUpdateRange(startIndex, endIndex, totalMessages, latest, initialTrackingStart = totalMessages) {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存全聊天更新记录。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const entries = await getEntries(bookName);
+    const existing = entries.find(item => getKeys(item).includes('CWB:更新记录') && getKeys(item).includes(chatId));
+    const oldKeys = existing ? getKeys(existing) : [];
+    const oldCompleted = parseTaggedRanges(oldKeys, 'CWB:总结楼层:');
+    const oldDuplicates = parseTaggedRanges(oldKeys, 'CWB:重复总结楼层:');
+    const oldStart = oldKeys.map(key => String(key).match(/^CWB:追踪起点:(\d+)$/)).find(Boolean);
+    const trackingStartIndex = oldStart ? Number(oldStart[1]) : Math.max(0, Number(initialTrackingStart) || 0);
+    const overlaps = overlappingRanges(startIndex, endIndex, oldCompleted);
+    const completedRanges = mergeRanges([...oldCompleted, [startIndex, endIndex]]);
+    const duplicateRanges = mergeRanges([...oldDuplicates, ...overlaps]);
+    const keys = [
+        'CWB:更新记录', chatId, '全聊天总结记录',
+        `CWB:追踪起点:${trackingStartIndex}`,
+        ...completedRanges.map(([start, end]) => `CWB:总结楼层:${start}-${end}`),
+        ...duplicateRanges.map(([start, end]) => `CWB:重复总结楼层:${start}-${end}`),
+    ];
+    const content = updateTrackerContent({
+        completedRanges,
+        duplicateRanges,
+        totalMessages,
+        trackingStartIndex,
+        latest: `${new Date().toLocaleString()}｜${startIndex}-${endIndex}楼｜${latest}`,
+    });
+    const data = {
+        comment: `CWB全聊天更新记录-${chatId}`,
+        content,
+        keys,
+        enabled: false,
+        type: 'selective',
+        preventRecursion: true,
+    };
+    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...data }]);
+    else await createEntries(bookName, [data]);
+    return { overlaps, completedRanges, duplicateRanges, trackingStartIndex };
+}
+
 export async function updateRoster(settings, processedNames, startFloor, endFloor) {
     const grouped = new Map();
     for (const name of processedNames) {
@@ -415,6 +477,10 @@ export async function manageChatEntries(settings) {
         const patches = [];
         for (const entry of entries) {
             const keys = getKeys(entry);
+            if (keys.includes('CWB:更新记录')) {
+                if (entry.enabled) patches.push({ uid: entry.uid, enabled: false });
+                continue;
+            }
             if (!keys.includes('Amily2角色总集') && !keys.includes(chatId) && !keys.includes(state.chatId)) continue;
             const shouldEnable = keys.includes(chatId) || keys.includes(state.chatId);
             if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
