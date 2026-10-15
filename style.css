@@ -85,6 +85,7 @@
     .cwb-modal-box { padding-left:12px; padding-right:12px; }
     .cwb-plugin-modal-head, .cwb-modal-head { margin-left:-12px; margin-right:-12px; padding-left:12px; padding-right:12px; }
     .cwb-progress-overview { gap:6px; }
+    .cwb-progress-tile > strong { font-size:24px; }
     .cwb-panel .cwb-progress-tile { padding:10px 8px; }
     .cwb-section > summary > span { flex-basis:100%; }
     .cwb-secondary-actions, .cwb-grid { grid-template-columns:minmax(0,1fr); }

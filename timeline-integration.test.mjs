@@ -27,7 +27,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         });
         return nodes.get(key);
     }
-    const context = vm.createContext({ console, structuredClone, setTimeout, clearTimeout, $, window: { jQuery: f => initialized = f },
+    const documentNodes = new Map();
+    const document = { getElementById: id => { if (!documentNodes.has(id)) documentNodes.set(id, { open: false, scrollIntoView() { this.scrolled = true; } }); return documentNodes.get(id); } };
+    const context = vm.createContext({ document, console, structuredClone, setTimeout, clearTimeout, $, window: { jQuery: f => initialized = f },
         fetch: async () => ({ ok: true, json: async () => structuredClone(disk) }),
     });
     const script = {
@@ -74,6 +76,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         return mod;
     }
     const index = await load(resolve(root, 'index.js')); await index.link((specifier, parent) => load(specifier.startsWith('/') ? specifier : resolve(dirname(parent.identifier), specifier))); await index.evaluate(); await initialized();
+    $('#cwb-system-settings').handlers.click.call({ attr: () => 'timeline' });
+    assert.equal(document.getElementById('cwb-progress-details').open, true);
+    assert.equal(document.getElementById('cwb-detail-timeline').scrolled, true);
     const button = $('#cwb-refresh-timeline');
     assert.equal(typeof button.handlers.click, 'function');
     assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('增量整理器'));
