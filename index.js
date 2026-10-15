@@ -97,6 +97,12 @@ async function runButton(button, label, action) {
 
 function bindUi() {
     $('#cwb-system-settings').on('input change', 'input, textarea, select', saveFromUi);
+    $('#cwb-system-settings').on('click', '[data-cwb-progress]', function () {
+        const module = $(this).attr('data-cwb-progress');
+        const details = document.getElementById('cwb-progress-details');
+        if (details) details.open = true;
+        document.getElementById(`cwb-detail-${module}`)?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    });
     $('#cwb-update-relationships').on('click', function () {
         runButton($(this), '关系更新中…', () => updateRelationships(settings()));
     });

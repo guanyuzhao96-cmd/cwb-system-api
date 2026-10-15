@@ -68,6 +68,10 @@ export async function refreshModuleProgress() {
     const progress = await getModuleProgress();
     for (const module of Object.keys(MODULE_LABELS)) {
         const status = moduleStatus(progress, module, state.messages.length);
+        const missingCount = status.missing.reduce((count, [start, end]) => count + end - start + 1, 0);
+        $(`#cwb-through-${module}`).text(`${status.through} 楼`);
+        $(`#cwb-gap-${module}`).text(missingCount ? `${missingCount} 楼待补` : '已全部完成');
+        $(`[data-cwb-progress="${module}"]`).attr('data-pending', String(missingCount > 0));
         $(`#cwb-progress-${module}`).text(`${MODULE_LABELS[module]}：连续成功至第 ${status.through} 楼\n已成功：${displayRanges(status.completed)}\n未确认/待补：${displayRanges(status.missing)}\n已知失败：${displayRanges(status.failed)}${status.latest?.error ? `\n最近错误：${status.latest.error}` : ''}`);
     }
     return progress;
