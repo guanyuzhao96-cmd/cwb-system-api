@@ -7,9 +7,9 @@ import {
     extension_settings,
     renderExtensionTemplateAsync,
 } from '/scripts/extensions.js';
-import { cwbCompleteDefaultSettings } from './defaults.js';
+import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
 import { testSystemApi } from './api.js';
-import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent } from './core.js';
+import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline } from './core.js';
 import { convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state } from './state.js';
 import { notify } from './utils.js';
@@ -29,6 +29,7 @@ const defaults = {
     breakPrompt: cwbCompleteDefaultSettings.cwb_break_armor_prompt,
     fullPrompt: cwbCompleteDefaultSettings.cwb_char_card_prompt,
     incrementalPrompt: cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt,
+    timelineIncrementalPrompt: DEFAULT_TIMELINE_INCREMENTAL_PROMPT,
 };
 
 function settings() {
@@ -53,6 +54,7 @@ function saveFromUi() {
     value.breakPrompt = $('#cwb-break-prompt').val();
     value.fullPrompt = $('#cwb-full-prompt').val();
     value.incrementalPrompt = $('#cwb-incremental-prompt').val();
+    value.timelineIncrementalPrompt = $('#cwb-timeline-incremental-prompt').val();
     state.routeCache = null;
     saveSettingsDebounced();
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
@@ -76,6 +78,7 @@ function loadUi() {
     $('#cwb-break-prompt').val(value.breakPrompt);
     $('#cwb-full-prompt').val(value.fullPrompt);
     $('#cwb-incremental-prompt').val(value.incrementalPrompt);
+    $('#cwb-timeline-incremental-prompt').val(value.timelineIncrementalPrompt);
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
     updatePluginButton();
 }
@@ -94,6 +97,12 @@ async function runButton(button, label, action) {
 
 function bindUi() {
     $('#cwb-system-settings').on('input change', 'input, textarea, select', saveFromUi);
+    $('#cwb-refresh-timeline').on('click', function () {
+        runButton($(this), '时间线更新中…', async () => {
+            saveFromUi();
+            await refreshTimeline(settings());
+        });
+    });
     $('#cwb-test-api').on('click', function () {
         runButton($(this), '测试中…', async () => notify('success', await testSystemApi()));
     });
@@ -132,9 +141,10 @@ function bindUi() {
         value.breakPrompt = defaults.breakPrompt;
         value.fullPrompt = defaults.fullPrompt;
         value.incrementalPrompt = defaults.incrementalPrompt;
+        value.timelineIncrementalPrompt = defaults.timelineIncrementalPrompt;
         saveSettingsDebounced();
         loadUi();
-        notify('success', '已加载 v0.6 动态档案提示词。');
+        notify('success', '已恢复角色与时间线默认提示词。');
     });
     $('#cwb-scan-routes').on('click', async function () {
         try {

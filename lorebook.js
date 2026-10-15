@@ -1,3 +1,4 @@
+import { getRequestHeaders } from '/script.js';
 import { getContext } from '/scripts/extensions.js';
 import {
     createWorldInfoEntry,
@@ -259,10 +260,11 @@ async function writeTimeline(content, startFloor, endFloor) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存故事时间线。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await loadWorldInfo(bookName);
+    const data = structuredClone(await loadWorldInfo(bookName));
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
     if (!existing.length && content === undefined) return [];
+    if (existing.length === 1 && content === undefined) return existing.map(entry => ({ ...entry, keys: getKeys(entry), enabled: isEnabled(entry) }));
     const ranges = existing.flatMap(timelineKeys).map(range => range.split('-').map(Number));
     if (content !== undefined) ranges.push([startFloor + 1, endFloor + 1]);
     const target = existing[0] || createWorldInfoEntry(bookName, data);
@@ -276,6 +278,14 @@ async function writeTimeline(content, startFloor, endFloor) {
     const removed = new Set(existing.slice(1));
     for (const key of Object.keys(data.entries)) if (removed.has(data.entries[key])) delete data.entries[key];
     await saveWorldInfo(bookName, data, true);
+    // loadWorldInfo reads a client cache. Verify the actual server copy instead.
+    const response = await fetch('/api/worldinfo/get', {
+        method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache',
+    });
+    if (!response.ok) throw new Error(`时间线保存后回读失败（HTTP ${response.status}），请重试。`);
+    const persisted = await response.json();
+    const stored = Object.values(persisted?.entries ?? {}).find(entry => Number(entry.uid) === Number(target.uid));
+    if (!stored || stored.content !== target.content) throw new Error('时间线服务端回读与本次写入不一致，不能确认已保存，请重试。');
     return [{ ...target, keys: getKeys(target), enabled: isEnabled(target) }];
 }
 

@@ -7,7 +7,7 @@
         <div class="inline-drawer-content">
             <div class="cwb-overview">
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"> 启用插件</label>
-                <div id="cwb-status" class="cwb-status" role="status">尚未初始化</div>
+                <div id="cwb-status" class="cwb-status" role="status">v0.9.5 · 尚未初始化</div>
             </div>
 
             <div class="cwb-primary-actions">
@@ -15,6 +15,9 @@
                 <button id="cwb-open-viewer" class="menu_button"><i class="fa-solid fa-address-card"></i> 查看角色档案</button>
                 <button id="cwb-batch-update" class="menu_button"><i class="fa-solid fa-layer-group"></i> 批量更新全聊天</button>
             </div>
+
+            <button id="cwb-refresh-timeline" class="menu_button">单独增量更新时间线</button>
+            <details class="cwb-section"><summary>时间线本次更新详情</summary><pre id="cwb-timeline-debug" class="cwb-route-status">尚未调用时间线 API</pre></details>
 
             <div class="cwb-range">
                 <span class="cwb-section-label">指定楼层</span>
@@ -72,8 +75,9 @@
                     <label>前置提示词<textarea id="cwb-break-prompt" rows="3" class="text_pole textarea_compact"></textarea></label>
                     <label>全量生成<textarea id="cwb-full-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
                     <label>增量融合<textarea id="cwb-incremental-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
+                    <label>时间线增量提示词（独立请求）<textarea id="cwb-timeline-incremental-prompt" rows="10" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
                     <div class="cwb-prompt-actions">
-                        <span class="cwb-help">内置提示词 v0.6</span>
+                        <span class="cwb-help">内置提示词 v0.9.5</span>
                         <button id="cwb-reset-prompts" class="menu_button">恢复默认</button>
                     </div>
                 </div>

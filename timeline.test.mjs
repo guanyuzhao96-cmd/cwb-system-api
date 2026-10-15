@@ -2,11 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
 import { mergeRanges } from './update-tracker.mjs';
 
 function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     const context = vm.createContext({
+        DEFAULT_TIMELINE_INCREMENTAL_PROMPT, structuredClone, getRequestHeaders: () => ({}),
+        fetch: async () => ({ ok: true, json: async () => structuredClone(data) }),
         mergeRanges, state: { chatId: 'chat' },
         getContext: () => ({ characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] }),
         loadWorldInfo: async () => structuredClone(data),

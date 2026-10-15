@@ -1,3 +1,4 @@
+import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
 import { callSystemApi } from './api.js';
 import { state } from './state.js';
@@ -251,6 +252,10 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
         let previous = existing.map(entry => entry.content).join('\n\n');
         const chunkSize = Math.max(1, Number(settings.threshold) || 20);
         const addedRanges = [];
+        const diagnostics = [];
+        const showDiagnostics = () => $('#cwb-timeline-debug').text(diagnostics.join('\n\n'));
+        diagnostics.push(`时间线增量 v0.9.5｜聊天：${state.chatId}｜目标楼层：1-${scanEndFloor}`);
+        showDiagnostics();
         let addedEvents = 0;
         let floor = scanStartFloor;
         while (floor <= scanEndFloor) {
@@ -264,15 +269,21 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
                 const range = `${startFloor}-${endFloor}`;
                 onProgress(`正在刷新故事时间线：第 ${range} 楼…`);
                 setStatus(`正在调用系统 API 更新故事时间线（第 ${range} 楼）…`);
+                diagnostics.push(`请求第 ${range} 楼，${selected.length} 条聊天；提示词：${settings.timelineIncrementalPrompt?.trim() ? '自定义' : '内置'}`);
+                showDiagnostics();
                 const response = await callSystemApi([
-                    { role: 'system', content: '你是小说的全局大事件记录器，不是逐楼复述器。只记录当前聊天楼层中已经发生、会持续影响主线走向的重大事件：关键转折、重大冲突及结果、重要秘密揭露、不可逆决定。日常互动、重复对话、行动细节、个人数值或普通情绪变化都留给角色档案，不写入时间线。人物细节可从角色档案查看。绝不续写或补事实。只输出合法 JSON：{"时间线":[{"日期":"YYYY-MM-DD或日期未知","人物":"关键人物","事件":"一句话概括大事件与结果，事件部分不超过30个汉字"}]}。每件大事最多一条，按真实日期排序；没有大事件就输出空数组。' },
-                    { role: 'user', content: `只从第 ${range} 楼提取全局大事件；普通剧情细节不要记录。旧时间线仅供去重，不要重复输出其中已有事件；不同楼层范围的标签表示已处理范围。\n【已处理大事件】\n${previous || '无'}\n\n【本次聊天内容】\n${formatMessages(selected)}` },
+                    { role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT },
+                    { role: 'user', content: `【已有时间线】\n${previous || '无'}\n\n【本次新增聊天：第 ${range} 楼】\n${formatMessages(selected)}\n\n请提取本次新增聊天中的新事件；不要将已有记录当成本次输出。` },
                 ], settings.responseLength);
+                diagnostics.push(`API 原始返回（第 ${range} 楼）：\n${response}`);
+                showDiagnostics();
                 const events = parseTimelineResponse(response);
                 const known = new Set(previous.split(/\r?\n/).map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim()).filter(Boolean));
                 const unique = [...new Set(events)].filter(event => !known.has(event));
                 const content = `【时间线楼层：${range}】\n${unique.length ? unique.map((event, index) => `[时间线.${index}]: ${event}`).join('\n') : '（本范围已检查，无新增重要事件）'}`;
-                await saveTimeline(settings, content, startFloor - 1, endFloor - 1);
+                const savedEntries = await saveTimeline(settings, content, startFloor - 1, endFloor - 1);
+                diagnostics.push(`保存成功：解析 ${events.length} 条，去重后新增 ${unique.length} 条；UID ${savedEntries?.[0]?.uid ?? '未知'}。`);
+                showDiagnostics();
                 addedEvents += unique.length;
                 previous = `${previous}${previous ? '\n\n' : ''}【楼层${range}】\n${content}`;
                 addedRanges.push(range);
