@@ -1,3 +1,5 @@
+import { COMBINED_OUTPUT_PROTOCOL, parseCombinedResponse } from './combined-response.mjs';
+import { mergeRelationships } from './relationship-utils.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -93,21 +95,22 @@ test('consecutive new rounds append to one entry; covered empty results can reco
     assert.equal(calls, 5);
 });
 
-test('no character blocks still triggers independent timeline with selected bounds', async () => {
+test('unified no-profile update still saves timeline and relationships with exactly one AI call', async () => {
     const h = harness();
     h.context.getContext = () => ({ chatId: 'chat', name1: '用户', chat: [{ mes: '新事件' }] });
+    let calls = 0, timelineWrites = 0, relationshipWrites = 0;
     Object.assign(h.context, {
         $: () => ({ text() {} }), getTargetWorldbook: () => 'main',
         getChatUpdateTracking: async () => null, overlappingRanges: () => [],
-        getTriggeredOldProfiles: async () => [], callSystemApi: async () => '无角色变化',
-        extractCharacterBlocks: () => [], recordChatUpdateRange: async () => {}, notify() {},
+        getTriggeredOldProfiles: async () => [], getTimelineEntries: async () => [],
+        getRelationshipSummary: async () => '',
+        callSystemApi: async () => { calls++; return '[--档案无变化--]\n[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--关系增量开始--]\n{"关系更新":[],"删除关系":[]}\n[--关系增量结束--]'; },
+        recordChatUpdateRange: async () => {}, notify() {},
+        COMBINED_OUTPUT_PROTOCOL, parseCombinedResponse, RELATIONSHIP_PROMPT: '', mergeRelationships,
     });
     vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
-    let called = false;
-    h.context.refreshTimeline = async (_, progress, end, start) => {
-        called = true; assert.equal(start, 0); assert.equal(end, 0);
-        return { addedRanges: ['1-1'], coveredCount: 1, totalFloors: 1 };
-    };
+    h.context.saveTimeline = async () => timelineWrites++;
+    h.context.saveRelationshipSummary = async () => relationshipWrites++;
     await h.context.updateRange({}, 0, 0, { silent: true });
-    assert.equal(called, true);
+    assert.equal(calls, 1); assert.equal(timelineWrites, 1); assert.equal(relationshipWrites, 1);
 });

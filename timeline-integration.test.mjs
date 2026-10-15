@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 test('settings button -> real API wrapper -> incremental prompt -> server readback, three rounds', { skip: !vm.SourceTextModule && 'Requires --experimental-vm-modules' }, async () => {
     const nodes = new Map(), requests = [], modules = new Map();
+    let invalidCombined = false;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
     const contextData = { chatId: 'integration-chat', characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
@@ -33,6 +34,16 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         eventSource: { on() {} }, event_types: {}, saveSettingsDebounced() {}, getRequestHeaders: () => ({}),
         generateRaw: async options => {
             requests.push(options);
+            if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
+                if (invalidCombined) return '[--档案无变化--]';
+                relationRound++;
+                const input = options.prompt.map(x => x.content).join('\n');
+                const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
+                return '[--角色档案开始--]\n[档案类型]:主角\n[姓名]:主角\n[当前状态]:参与本轮事件\n[--角色档案结束--]\n'
+                    + '[--时间线增量开始--]\n' + JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] }) + '\n[--时间线增量结束--]\n'
+                    + '[--关系增量开始--]\n' + JSON.stringify({ 关系更新: [{ 人物A: 'B', 方向: '↔', 人物B: 'C', 关系: '互相讨厌' }], 删除关系: [] }) + '\n[--关系增量结束--]';
+            }
+
             if (options.systemPrompt.includes('角色关系增量整理器')) {
                 relationRound++;
                 return JSON.stringify({ 关系更新: relationRound === 2
@@ -92,7 +103,10 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     for (let i = 0; i < 100 && relationButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
     assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).content.includes('情侣'));
     // Exercise actual role update -> timeline -> relationship update, not just the standalone helper.
+    const callsBeforeCombined = requests.length;
     await modules.get(resolve(root, 'core.js')).namespace.updateRange(extension_settings.cwb_system_api, 0, 2, { silent: true });
+    assert.equal(requests.length - callsBeforeCombined, 1);
+    assert.equal(Object.values(disk.entries).filter(e => e.key.includes('CWB:主角档案')).length, 1);
     assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).content.includes('B ↔ C：互相讨厌'));
     // Third round: newly appended message must trigger another request and update A/B.
     contextData.chat.push({ mes: 'A和B分手，仍为同班同学' });
@@ -111,6 +125,17 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.equal(relationRound - relationCallsBefore, 4);
     assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).key.includes('CWB:关系楼层:0-11'));
     assert.equal(Object.values(disk.entries).filter(e => e.key.includes('CWB:故事时间线')).length, 1);
+    const beforeBatch = requests.length;
+    const batchSettings = { ...extension_settings.cwb_system_api, threshold: 4 };
+    await modules.get(resolve(root, 'core.js')).namespace.batchUpdate(batchSettings);
+    assert.equal(requests.length - beforeBatch, 3, '12 messages / 4 = 3 batches, exactly 3 AI requests');
+    invalidCombined = true;
+    const beforeInvalid = requests.length;
+    const savedBeforeInvalid = JSON.stringify(disk);
+    await assert.rejects(modules.get(resolve(root, 'core.js')).namespace.batchUpdate(batchSettings), /关系|时间线/);
+    assert.equal(requests.length - beforeInvalid, 1, 'invalid reply does not trigger hidden retries');
+    assert.equal(JSON.stringify(disk), savedBeforeInvalid, 'missing section must not partially update entries');
+    invalidCombined = false;
     failWrite = true;
     contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
     // Force a visibly different response, so readback must detect failed persistence.

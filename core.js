@@ -1,3 +1,4 @@
+import { COMBINED_OUTPUT_PROTOCOL, parseCombinedResponse } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
@@ -85,35 +86,23 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
     try {
         const selected = state.messages.slice(boundedStart, boundedEnd + 1);
         const oldProfiles = await getTriggeredOldProfiles(settings, selected);
-        const messages = [
-            { role: 'system', content: `CWB request seed: ${globalThis.crypto?.randomUUID?.() ?? Math.random()}` },
-        ];
+        const oldTimeline = (await getTimelineEntries()).map(entry => entry.content).join('\n');
+        const oldRelationships = await getRelationshipSummary();
+        const messages = [];
         if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
-        messages.push({
-            role: 'system',
-            content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt,
-        });
-        messages.push({
-            role: 'system',
-            content: '角色筛选必须严格执行：只输出本轮聊天中实际出场、参与互动或采取行动的角色，或虽未直接出场但被事件直接改变状态、关系、已知信息、目标、物品或后续剧情的角色。仅在对话、回忆、传闻、计划中被提及，且未参与、未受影响的角色不得生成档案；即使旧档案里有该角色，也不要仅因提及而重复输出。本次任务只输出角色/主角档案，不要输出故事时间线。插件会在角色档案保存后，使用独立请求补齐至本次更新结束楼层为止的所有未处理时间线楼层。',
-        });
-        if (settings.incremental) {
-            messages.push({
-                role: 'user',
-                content: `【旧档案】\n${oldProfiles.length ? oldProfiles.join('\n') : '无'}`,
-            });
-        }
-        messages.push({
-            role: 'user',
-            content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n\n${settings.incremental ? '【新对话】' : '最近的聊天记录摘要：'}\n${formatMessages(selected) || '(无有效对话内容)'}`,
-        });
-
-        setStatus('正在调用酒馆系统 API…');
+        messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
+        messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
+        messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
+        messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL });
+        messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线】\n${oldTimeline || '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${boundedStart + 1}-${boundedEnd + 1} 楼】\n${formatMessages(selected)}` });
+        setStatus('正在调用系统 API：一次回复生成档案、时间线和关系…');
         const response = await callSystemApi(messages, settings.responseLength);
-        const blocks = extractCharacterBlocks(response);
-        // A range can contain timeline events without any character profile changes.
-        // Do not prevent the independent timeline request in that case.
-
+        // Validate all sections before writing any of them. No automatic AI fallback.
+        const combined = parseCombinedResponse(response);
+        const events = parseTimelineResponse(JSON.stringify(combined.timeline));
+        const relationshipContent = mergeRelationships(oldRelationships, JSON.stringify(combined.relationships));
+        const blocks = combined.blocks;
+        $('#cwb-timeline-debug').text(`统一更新：本批调用 AI 1 次\n${response}`);
         const names = [];
         const skippedNames = [];
         let userUpdated = false;
@@ -135,20 +124,18 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             if (savedName) names.push(savedName);
             else skippedNames.push(name);
         }
-        let timelineResult = null;
-        let timelineError = null;
-        try {
-            timelineResult = await refreshTimeline(settings, text => setStatus(text), boundedEnd, boundedStart);
-        } catch (error) {
-            timelineError = error;
-            console.error('[CWB] 时间线同步刷新失败', error);
-        }
-        let relationshipError = null;
-        try { await updateRelationships(settings, boundedStart, boundedEnd); }
-        catch (error) { relationshipError = error; console.error('[CWB] 角色关系更新失败', error); }
+        const known = new Set(oldTimeline.split(/\r?\n/).map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim()));
+        const uniqueEvents = [...new Set(events)].filter(event => !known.has(event));
+        await saveTimeline(settings, uniqueEvents.map((event, index) => `[时间线.${index}]: ${event}`).join('\n'), boundedStart, boundedEnd);
+        await saveRelationshipSummary(relationshipContent, boundedStart, boundedEnd);
+        $('#cwb-relationship-status').text(`统一更新（AI 1 次）\n${relationshipContent}`);
+        const timelineResult = { addedRanges: [`${boundedStart + 1}-${boundedEnd + 1}`], addedEvents: uniqueEvents.length, coveredCount: boundedEnd - boundedStart + 1, totalFloors: boundedEnd - boundedStart + 1 };
+        const timelineError = null;
+        const relationshipError = null;
         const uniqueNames = [...new Set(names)];
         const skipped = [...new Set(skippedNames)];
         const trackerDetail = [
+            '本批统一生成，AI调用1次',
             uniqueNames.length ? `角色档案写入${uniqueNames.length}名` : (userUpdated ? '主角档案已写入' : '未写入角色档案'),
             skipped.length ? `未路由${skipped.length}名角色` : '',
             timelineError ? `时间线失败：${timelineError.message}` : `时间线：已覆盖${timelineResult?.coveredCount ?? 0}/${timelineResult?.totalFloors ?? 0}楼`,
@@ -186,7 +173,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             : timelineResult?.addedRanges.length
                 ? `；时间线已补齐第 ${timelineResult.addedRanges.join('、')} 楼`
                 : '；时间线楼层已覆盖，无需重复更新';
-        setStatus(`完成：总结索引楼层 ${boundedStart}-${boundedEnd}，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
+        setStatus(`完成（本批 AI 调用 1 次）：总结索引楼层 ${boundedStart}-${boundedEnd}，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
         if (!silent) notify(timelineError || relationshipError || updateLogError || overlapRanges.length ? 'warning' : 'success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
         return uniqueNames;
     } finally {
@@ -349,18 +336,7 @@ export async function batchUpdate(settings, onProgress) {
                 break;
             }
             onProgress?.(batch + 1, total);
-            let lastError;
-            for (let attempt = 1; attempt <= 3; attempt++) {
-                try {
-                    await updateRange(settings, batch * size, Math.min(state.messages.length - 1, (batch + 1) * size - 1), { silent: true });
-                    lastError = null;
-                    break;
-                } catch (error) {
-                    lastError = error;
-                    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 1500));
-                }
-            }
-            if (lastError) throw lastError;
+            await updateRange(settings, batch * size, Math.min(state.messages.length - 1, (batch + 1) * size - 1), { silent: true });
         }
         if (!state.batchStopRequested) notify('success', '批量更新全部完成。');
     } finally {
