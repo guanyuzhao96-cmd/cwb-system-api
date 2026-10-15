@@ -7,7 +7,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "修复已覆盖楼层无法再次提取时间线，角色无变更时也继续更新时间线。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/Wx-2025/ST-Amily2-Chat-Optimisation"

@@ -562,7 +562,16 @@ export async function getRelationshipSummary() {
     return entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId)).map(entry => entry.content).join('\n');
 }
 
-export async function saveRelationshipSummary(content) {
+export async function getRelationshipRanges() {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw new Error('当前角色卡未绑定主世界书。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const entries = await getEntries(bookName);
+    return mergeRanges(entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId))
+        .flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:关系楼层:')));
+}
+
+export async function saveRelationshipSummary(content, startIndex, endIndex) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存角色关系。');
     const chatId = state.chatId.replace(/ imported/g, '');
@@ -571,7 +580,8 @@ export async function saveRelationshipSummary(content) {
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId));
     const target = existing[0] || createWorldInfoEntry(bookName, data);
     if (!target) throw new Error('创建角色关系条目失败。');
-    applyEntryPatch(target, { comment: `CWB角色关系汇总-${chatId}`, content, keys: ['CWB:角色关系汇总', chatId, '角色关系'], enabled: true, type: 'constant', position: 0, order: 9998, preventRecursion: true });
+    const ranges = mergeRanges([...existing.flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:关系楼层:')), [startIndex, endIndex]]);
+    applyEntryPatch(target, { comment: `CWB角色关系汇总-${chatId}`, content, keys: ['CWB:角色关系汇总', chatId, '角色关系', ...ranges.map(([start, end]) => `CWB:关系楼层:${start}-${end}`)], enabled: true, type: 'constant', position: 0, order: 9998, preventRecursion: true });
     const duplicates = new Set(existing.slice(1));
     for (const key of Object.keys(data.entries)) if (duplicates.has(data.entries[key])) delete data.entries[key];
     await saveWorldInfo(bookName, data, true);

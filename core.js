@@ -6,6 +6,7 @@ import { state } from './state.js';
 import {
     getLastUpdatedFloor,
     getRelationshipSummary,
+    getRelationshipRanges,
     saveRelationshipSummary,
     getChatUpdateTracking,
     getTimelineEntries,
@@ -21,7 +22,7 @@ import {
     updateRoster,
 } from './lorebook.js';
 import { extractCharacterBlocks, notify, parseCustomFormat } from './utils.js';
-import { formatRanges, overlappingRanges } from './update-tracker.mjs';
+import { formatRanges, overlappingRanges, missingRanges } from './update-tracker.mjs';
 
 let autoTimer = null;
 
@@ -387,14 +388,29 @@ export async function updateRelationships(settings, startIndex = null, endIndex 
     if (end < start) throw new Error('当前范围没有聊天内容。');
     state.relationshipUpdating = true;
     try {
-        const previous = await getRelationshipSummary();
-        const response = await callSystemApi([
-            { role: 'system', content: RELATIONSHIP_PROMPT },
-            { role: 'user', content: `【已有关系】\n${previous || '无'}\n\n【新增聊天】\n${formatMessages(state.messages.slice(start, end + 1))}` },
-        ], settings.responseLength);
-        const content = mergeRelationships(previous, response);
-        await saveRelationshipSummary(content);
-        $('#cwb-relationship-status').text(`角色关系已保存：第 ${start + 1}-${end + 1} 楼。\n${content}`);
+        let content = await getRelationshipSummary();
+        const completed = await getRelationshipRanges();
+        // Standalone updates process every unhandled gap, rather than only the last six messages.
+        const ranges = startIndex === null ? missingRanges(end + 1, completed) : [[start, end]];
+        if (!ranges.length) ranges.push([start, end]); // Explicit retry can recover an earlier empty result.
+        const size = Math.max(1, Number(settings.threshold) || 20);
+        const checked = [];
+        for (const [rangeStart, rangeEnd] of ranges) {
+            for (let chunkStart = rangeStart; chunkStart <= rangeEnd; chunkStart += size) {
+                const chunkEnd = Math.min(rangeEnd, chunkStart + size - 1);
+                $('#cwb-relationship-status').text(`正在增量更新角色关系：第 ${chunkStart + 1}-${chunkEnd + 1} 楼…`);
+                const response = await callSystemApi([
+                    { role: 'system', content: RELATIONSHIP_PROMPT },
+                    { role: 'user', content: `【已有关系】\n${content || '无'}\n\n【新增聊天：第 ${chunkStart + 1}-${chunkEnd + 1} 楼】\n${formatMessages(state.messages.slice(chunkStart, chunkEnd + 1))}` },
+                ], settings.responseLength);
+                const merged = mergeRelationships(content, response);
+                // Advance coverage only after successful parsing, persistence, and server readback.
+                await saveRelationshipSummary(merged, chunkStart, chunkEnd);
+                content = merged;
+                checked.push(`${chunkStart + 1}-${chunkEnd + 1}`);
+            }
+        }
+        $('#cwb-relationship-status').text(`角色关系增量已保存：第 ${checked.join('、')} 楼。\n${content}`);
         return content;
     } catch (error) {
         $('#cwb-relationship-status').text(`角色关系更新失败：${error.message}`);

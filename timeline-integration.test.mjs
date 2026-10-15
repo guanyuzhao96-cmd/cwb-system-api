@@ -33,7 +33,12 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         eventSource: { on() {} }, event_types: {}, saveSettingsDebounced() {}, getRequestHeaders: () => ({}),
         generateRaw: async options => {
             requests.push(options);
-            if (options.systemPrompt.includes('角色关系增量整理器')) return JSON.stringify({ 关系更新: [{ 人物A: 'A', 方向: '↔', 人物B: 'B', 关系: ++relationRound === 1 ? '同班同学、情侣' : '同班同学、已分手' }] });
+            if (options.systemPrompt.includes('角色关系增量整理器')) {
+                relationRound++;
+                return JSON.stringify({ 关系更新: relationRound === 2
+                    ? [{ 人物A: 'B', 方向: '↔', 人物B: 'C', 关系: '互相讨厌' }]
+                    : [{ 人物A: 'A', 方向: '↔', 人物B: 'B', 关系: relationRound === 1 ? '同班同学、情侣' : '同班同学、已分手' }] });
+            }
             if (!options.systemPrompt.includes('INTEGRATION_CUSTOM_TIMELINE')) return '本次没有角色档案变化';
             const input = options.prompt.map(x => x.content).join('\n');
             const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
@@ -88,10 +93,23 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).content.includes('情侣'));
     // Exercise actual role update -> timeline -> relationship update, not just the standalone helper.
     await modules.get(resolve(root, 'core.js')).namespace.updateRange(extension_settings.cwb_system_api, 0, 2, { silent: true });
+    assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).content.includes('B ↔ C：互相讨厌'));
+    // Third round: newly appended message must trigger another request and update A/B.
+    contextData.chat.push({ mes: 'A和B分手，仍为同班同学' });
+    relationButton.handlers.click.call(relationButton);
+    for (let i = 0; i < 100 && relationButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
     const relationEntries = Object.values(disk.entries).filter(e => e.key.includes('CWB:角色关系汇总'));
     assert.equal(relationEntries.length, 1);
     assert.ok(relationEntries[0].content.includes('已分手'));
     assert.ok(!relationEntries[0].content.includes('情侣'));
+    assert.ok(relationEntries[0].content.includes('B ↔ C：互相讨厌'));
+    assert.ok(relationEntries[0].key.includes('CWB:关系楼层:0-3'));
+    // An eight-message gap must be processed in full, rather than just the most recent six.
+    const relationCallsBefore = relationRound;
+    contextData.chat.push(...Array.from({ length: 8 }, () => ({ mes: '后续互动' })));
+    await modules.get(resolve(root, 'core.js')).namespace.updateRelationships({ threshold: 2 });
+    assert.equal(relationRound - relationCallsBefore, 4);
+    assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).key.includes('CWB:关系楼层:0-11'));
     assert.equal(Object.values(disk.entries).filter(e => e.key.includes('CWB:故事时间线')).length, 1);
     failWrite = true;
     contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
