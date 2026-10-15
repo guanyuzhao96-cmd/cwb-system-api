@@ -9,7 +9,7 @@ import {
 } from '/scripts/extensions.js';
 import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
 import { testSystemApi } from './api.js';
-import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships } from './core.js';
+import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
 import { convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state } from './state.js';
 import { notify } from './utils.js';
@@ -106,6 +106,10 @@ function bindUi() {
             await refreshTimeline(settings());
         });
     });
+    $('#cwb-check-progress').on('click', function () { runButton($(this), '读取中…', refreshModuleProgress); });
+    for (const module of ['profiles', 'timeline', 'relationships']) {
+        $(`#cwb-retry-${module}`).on('click', function () { runButton($(this), '补漏中…', () => retryMissingModule(settings(), module)); });
+    }
     $('#cwb-test-api').on('click', function () {
         runButton($(this), '测试中…', async () => notify('success', await testSystemApi()));
     });
@@ -117,7 +121,8 @@ function bindUi() {
             const start = Number($('#cwb-start-floor').val());
             const end = Number($('#cwb-end-floor').val());
             if (!start || !end || start > end) throw new Error('请输入有效的起止楼层。');
-            return updateRange(settings(), start - 1, end - 1);
+            const module = $('#cwb-range-module').val() || 'all';
+            return updateRange(settings(), start - 1, end - 1, module === 'all' ? {} : { modules: [module] });
         });
     });
     $('#cwb-batch-update').on('click', async function () {
@@ -130,7 +135,7 @@ function bindUi() {
         const original = button.html();
         try {
             await batchUpdate(settings(), (current, total) => {
-                button.text(current ? `点击停止（${current}/${total}）` : '批量更新全聊天');
+                button.text(current ? `点击停止（${current}/${total}）` : '批量补齐未完成内容');
             });
         } catch (error) { notify('error', `批量更新失败：${error.message}`); }
         finally { button.html(original); }

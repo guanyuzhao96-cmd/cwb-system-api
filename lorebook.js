@@ -1,3 +1,4 @@
+import { applyModuleResult, intersectRanges } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
 import { getContext } from '/scripts/extensions.js';
 import {
@@ -508,7 +509,7 @@ export async function manageChatEntries(settings) {
         const patches = [];
         for (const entry of entries) {
             const keys = getKeys(entry);
-            if (keys.includes('CWB:更新记录')) {
+            if (keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度')) {
                 if (entry.enabled) patches.push({ uid: entry.uid, enabled: false });
                 continue;
             }
@@ -590,4 +591,60 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
     const stored = await response.json();
     if (stored?.entries?.[target.uid]?.content !== content) throw new Error('角色关系服务端回读不一致，无法确认保存成功。');
     return target;
+}
+
+export async function getModuleProgress() {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw Error('当前角色卡未绑定主世界书，无法读取模块进度。');
+    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
+    if (!response.ok) throw Error('无法从服务端读取模块进度。');
+    const data = await response.json();
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const entry = Object.values(data?.entries ?? {}).find(entry => getKeys(entry).includes('CWB:模块进度') && getKeys(entry).includes(chatId));
+    // Do not infer success from legacy prose markers or a single global floor number.
+    if (!entry) return legacyModuleProgress(data, chatId);
+    try { return JSON.parse(entry.content).modules ?? {}; }
+    catch { throw Error('模块进度记录损坏，无法确认完成范围；请手动检查进度条目。'); }
+}
+
+export async function recordModuleResult(module, start, end, error = null) {
+    const bookName = getPrimaryWorldbook();
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
+    if (!response.ok) throw Error('无法读取模块进度，未标记完成。');
+    const data = await response.json();
+    const existing = Object.values(data?.entries ?? {}).find(entry => getKeys(entry).includes('CWB:模块进度') && getKeys(entry).includes(chatId));
+    const previous = existing ? JSON.parse(existing.content).modules : legacyModuleProgress(data, chatId);
+    const modules = applyModuleResult(previous, module, start, end, error);
+    const content = JSON.stringify({ version: 1, numbering: 'zero-based inclusive', modules });
+    const target = existing || createWorldInfoEntry(bookName, data);
+    if (!target) throw Error('无法创建模块进度条目。');
+    applyEntryPatch(target, { comment: `CWB各模块更新进度-${chatId}`, content, keys: ['CWB:模块进度', chatId], enabled: false, type: 'selective', preventRecursion: true });
+    await saveWorldInfo(bookName, data, true);
+    const verify = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
+    if (!verify.ok || (await verify.json())?.entries?.[target.uid]?.content !== content) throw Error('模块进度服务端回读不一致，不能确认已标记完成。');
+    return modules;
+}
+
+export async function verifyProfileContent(settings, name, content, isUser = false) {
+    const bookName = isUser ? getPrimaryWorldbook() : await routeWorldbook(settings, name);
+    if (!bookName) throw Error(`角色 ${name} 未找到目录归属，未标记档案完成。`);
+    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
+    if (!response.ok) throw Error(`角色 ${name} 保存后回读失败。`);
+    const data = await response.json();
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!Object.values(data?.entries ?? {}).some(entry => getKeys(entry).includes(chatId) && getKeys(entry).includes(isUser ? 'CWB:主角档案' : 'CWB:自动档案') && entry.content === content)) throw Error(`角色 ${name} 服务端未确认保存。`);
+}
+
+
+function legacyModuleProgress(data, chatId) {
+    const entries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes(chatId));
+    const tracker = entries.find(entry => getKeys(entry).includes('CWB:更新记录'));
+    // v0.9.8 wrote this explicit confirmation only after all three sections saved.
+    if (!String(tracker?.content ?? '').includes('三个模块均成功，AI调用1次')) return {};
+    const global = parseTaggedRanges(getKeys(tracker), 'CWB:总结楼层:');
+    const timeline = entries.filter(entry => getKeys(entry).includes('CWB:故事时间线')).flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:时间线楼层:').map(([a, b]) => [a - 1, b - 1]));
+    const relationships = entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总')).flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:关系楼层:'));
+    const confirmed = intersectRanges(intersectRanges(global, timeline), relationships);
+    return Object.fromEntries(['profiles', 'timeline', 'relationships'].map(module => [module, { completed: confirmed, failed: [], source: 'v0.9.8三项成功记录与时间线/关系覆盖交叉核对' }]));
 }

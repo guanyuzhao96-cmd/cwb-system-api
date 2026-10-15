@@ -29,3 +29,33 @@ export function parseCombinedResponse(response) {
     if (!blocks.length && !text.includes('[--档案无变化--]')) throw new Error('统一回复缺少角色档案或无变化标记，本批未写入。');
     return { blocks, timeline, relationships };
 }
+
+
+export function parseCombinedParts(response) {
+    const text = String(response ?? '');
+    const read = (kind, validate) => {
+        try {
+            const start = `[--${kind}增量开始--]`, end = `[--${kind}增量结束--]`;
+            const pieces = text.split(start);
+            if (pieces.length !== 2 || pieces[1].split(end).length !== 2) throw Error(`${kind}增量区块缺失或重复`);
+            const value = JSON.parse(pieces[1].split(end)[0].trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+            validate(value);
+            return { value };
+        } catch (error) { return { error: error.message }; }
+    };
+    const blocks = extractCharacterBlocks(text);
+    const profileArea = text.split('[--时间线增量开始--]')[0].split('[--关系增量开始--]')[0];
+    const begins = [...profileArea.matchAll(/\[--(?:角色档案开始|Amily2::CHAR_START)--]/g)].length;
+    const profiles = begins !== blocks.length ? { error: '角色档案区块被截断' } : blocks.length ? { value: blocks }
+        : profileArea.includes('[--档案无变化--]') ? { value: [] } : { error: '角色档案缺失且没有无变化标记' };
+    return {
+        profiles,
+        timeline: read('时间线', value => {
+            if (!Array.isArray(value?.时间线)) throw Error('缺少时间线数组');
+            for (const event of value.时间线) {
+                if (typeof event === 'string' ? !event.trim() : !event || typeof event !== 'object' || typeof (event.事件 ?? event.event) !== 'string' || !(event.事件 ?? event.event).trim()) throw Error('时间线中有不合法或空事件');
+            }
+        }),
+        relationships: read('关系', value => { if (!Array.isArray(value?.关系更新) || !Array.isArray(value?.删除关系)) throw Error('缺少关系增量数组'); }),
+    };
+}

@@ -7,14 +7,14 @@
         <div class="inline-drawer-content">
             <div class="cwb-overview">
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"> 启用插件</label>
-                <div id="cwb-status" class="cwb-status" role="status">v0.9.8 · 尚未初始化</div>
+                <div id="cwb-status" class="cwb-status" role="status">v0.9.9 · 尚未初始化</div>
             </div>
 
             <p class="cwb-help">统一更新：每批仅调用一次 AI，同时生成角色档案、时间线增量、关系增量。单独按钮仅用于补漏。</p>
             <div class="cwb-primary-actions">
                 <button id="cwb-manual-update" class="menu_button cwb-primary"><i class="fa-solid fa-wand-magic-sparkles"></i> 更新最近内容</button>
                 <button id="cwb-open-viewer" class="menu_button"><i class="fa-solid fa-address-card"></i> 查看角色档案</button>
-                <button id="cwb-batch-update" class="menu_button"><i class="fa-solid fa-layer-group"></i> 批量更新全聊天</button>
+                <button id="cwb-batch-update" class="menu_button"><i class="fa-solid fa-layer-group"></i> 批量补齐未完成内容</button>
             </div>
 
             <button id="cwb-refresh-timeline" class="menu_button">单独增量更新时间线</button>
@@ -24,7 +24,8 @@
             <details class="cwb-section"><summary>角色关系汇总</summary><pre id="cwb-relationship-status" class="cwb-route-status">随角色更新同步维护；只保留一个条目。</pre></details>
 
             <div class="cwb-range">
-                <span class="cwb-section-label">指定楼层</span>
+                <span class="cwb-section-label">指定楼层（从1开始，含起止）</span>
+                <select id="cwb-range-module" class="text_pole"><option value="all">全部三项</option><option value="profiles">仅角色与主角档案</option><option value="timeline">仅时间线</option><option value="relationships">仅角色关系</option></select>
                 <div class="cwb-floor-row">
                     <input id="cwb-start-floor" class="text_pole" type="number" min="1" inputmode="numeric" placeholder="起始">
                     <span aria-hidden="true">—</span>
@@ -33,6 +34,17 @@
                 </div>
             </div>
 
+            <details class="cwb-section" open>
+                <summary>各模块防漏进度</summary>
+                <div class="cwb-section-body">
+                    <p class="cwb-help">分别记录成功范围；中间有缺口不会显示为全部完成。格式错误或保存失败保留缺口。仅承接可交叉核对的旧版三项成功范围；其余旧范围显示“未确认”，不根据正文旧楼层标记推断成功。补漏按阈值分批，每批仅调用一次 AI；也可在“指定楼层”选择单项手动重做。</p>
+                    <button id="cwb-check-progress" class="menu_button">刷新进度（不调用AI）</button>
+                    <div id="cwb-progress-error" role="status"></div>
+                    <pre id="cwb-progress-profiles" class="cwb-route-status">角色档案进度待读取</pre><button id="cwb-retry-profiles" class="menu_button">补漏角色档案</button>
+                    <pre id="cwb-progress-timeline" class="cwb-route-status">时间线进度待读取</pre><button id="cwb-retry-timeline" class="menu_button">补漏时间线</button>
+                    <pre id="cwb-progress-relationships" class="cwb-route-status">角色关系进度待读取</pre><button id="cwb-retry-relationships" class="menu_button">补漏角色关系</button>
+                </div>
+            </details>
             <details class="cwb-section">
                 <summary>更新设置</summary>
                 <div class="cwb-section-body">
@@ -81,7 +93,7 @@
                     <label>增量融合<textarea id="cwb-incremental-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
                     <label>时间线增量提示词（独立请求）<textarea id="cwb-timeline-incremental-prompt" rows="10" class="text_pole textarea_compact cwb-prompt-large"></textarea></label>
                     <div class="cwb-prompt-actions">
-                        <span class="cwb-help">内置提示词 v0.9.8</span>
+                        <span class="cwb-help">内置提示词 v0.9.9</span>
                         <button id="cwb-reset-prompts" class="menu_button">恢复默认</button>
                     </div>
                 </div>

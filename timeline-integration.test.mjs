@@ -129,13 +129,43 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const batchSettings = { ...extension_settings.cwb_system_api, threshold: 4 };
     await modules.get(resolve(root, 'core.js')).namespace.batchUpdate(batchSettings);
     assert.equal(requests.length - beforeBatch, 3, '12 messages / 4 = 3 batches, exactly 3 AI requests');
+    const beforeRepeat = requests.length;
+    await modules.get(resolve(root, 'core.js')).namespace.batchUpdate(batchSettings);
+    assert.equal(requests.length, beforeRepeat, 'repeated batch must call AI zero times');
+    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '新一批剧情' })));
     invalidCombined = true;
     const beforeInvalid = requests.length;
-    const savedBeforeInvalid = JSON.stringify(disk);
+    const savedBeforeInvalid = Object.values(disk.entries).filter(e => !e.key.includes('CWB:模块进度')).map(e => JSON.stringify(e)).join('');
     await assert.rejects(modules.get(resolve(root, 'core.js')).namespace.batchUpdate(batchSettings), /关系|时间线/);
     assert.equal(requests.length - beforeInvalid, 1, 'invalid reply does not trigger hidden retries');
-    assert.equal(JSON.stringify(disk), savedBeforeInvalid, 'missing section must not partially update entries');
+    assert.equal(Object.values(disk.entries).filter(e => !e.key.includes('CWB:模块进度')).map(e => JSON.stringify(e)).join(''), savedBeforeInvalid, 'invalid content sections must not overwrite existing content');
+    const ledgerAfterFailure = await modules.get(resolve(root, 'lorebook.js')).namespace.getModuleProgress();
+    assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.profiles.failed)), []);
+    assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.timeline.failed)), [[12, 15]]);
+    assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.relationships.failed)), [[12, 15]]);
+    assert.ok($('#cwb-progress-timeline').text().includes('连续成功至第 12 楼'));
+
     invalidCombined = false;
+    const beforeRepair = requests.length;
+    const profileSnapshot = JSON.stringify(Object.values(disk.entries).find(e => e.key.includes('CWB:主角档案')));
+    await modules.get(resolve(root, 'core.js')).namespace.retryMissingModule(batchSettings, 'timeline');
+    assert.equal(requests.length - beforeRepair, 1);
+    assert.equal(JSON.stringify(Object.values(disk.entries).find(e => e.key.includes('CWB:主角档案'))), profileSnapshot, 'timeline repair must not rewrite profiles');
+    let progressAfterRepair = await modules.get(resolve(root, 'lorebook.js')).namespace.getModuleProgress();
+    assert.deepEqual(JSON.parse(JSON.stringify(progressAfterRepair.timeline.failed)), []);
+    assert.deepEqual(JSON.parse(JSON.stringify(progressAfterRepair.relationships.failed)), [[12, 15]]);
+    // Batch should now request only the relationship gap, then the next batch should be a no-op.
+    const beforeRelationshipRepair = requests.length;
+    await modules.get(resolve(root, 'core.js')).namespace.batchUpdate(batchSettings);
+    assert.equal(requests.length - beforeRelationshipRepair, 1);
+    const beforeFinalRepeat = requests.length;
+    await modules.get(resolve(root, 'core.js')).namespace.batchUpdate(batchSettings);
+    assert.equal(requests.length, beforeFinalRepeat);
+    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '自动阈值新剧情' })));
+    const beforeAuto = requests.length;
+    modules.get(resolve(root, 'core.js')).namespace.maybeAutoUpdate({ ...batchSettings, enabled: true, autoUpdate: true });
+    await new Promise(resolve => setTimeout(resolve, 1350));
+    assert.equal(requests.length - beforeAuto, 1, 'automatic threshold update uses one combined call and skips completed floors');
     failWrite = true;
     contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
     // Force a visibly different response, so readback must detect failed persistence.

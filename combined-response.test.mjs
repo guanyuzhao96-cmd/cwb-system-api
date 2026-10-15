@@ -11,3 +11,12 @@ test('combined response requires all three sections, including explicit empty de
     assert.throws(() => parseCombinedResponse(valid.replace('[--档案无变化--]', '')), /角色档案/);
     assert.throws(() => parseCombinedResponse(valid + valid), /重复/);
 });
+
+test('independent parsing salvages valid parts without marking a malformed part successful', async () => {
+    const { parseCombinedParts } = await import('./combined-response.mjs');
+    const parts = parseCombinedParts(valid.replace('{"时间线":[]}', '{invalid}'));
+    assert.ok(parts.timeline.error);
+    assert.deepEqual(parts.profiles.value, []);
+    assert.deepEqual(parts.relationships.value.关系更新, []);
+    assert.ok(parseCombinedParts('[--角色档案开始--]\n[姓名]:A\n' + valid.replace('[--档案无变化--]', '')).profiles.error);
+});

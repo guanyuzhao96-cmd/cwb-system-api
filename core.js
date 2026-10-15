@@ -1,4 +1,5 @@
-import { COMBINED_OUTPUT_PROTOCOL, parseCombinedResponse } from './combined-response.mjs';
+import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
+import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
@@ -6,6 +7,9 @@ import { callSystemApi } from './api.js';
 import { state } from './state.js';
 import {
     getLastUpdatedFloor,
+    getModuleProgress,
+    recordModuleResult,
+    verifyProfileContent,
     getRelationshipSummary,
     getRelationshipRanges,
     saveRelationshipSummary,
@@ -59,125 +63,117 @@ function setStatus(text) {
     $('#cwb-status').text(text);
 }
 
-export async function updateRange(settings, startIndex, endIndex, { silent = false } = {}) {
-    if (state.updating) throw new Error('已有角色档案更新任务正在运行。');
+export async function refreshModuleProgress() {
     refreshChatState();
-    const boundedStart = Math.max(0, Number(startIndex) || 0);
-    const boundedEnd = Math.min(state.messages.length - 1, Number(endIndex));
-    if (boundedEnd < boundedStart || !state.messages.length) throw new Error('指定范围内没有聊天内容。');
-    if (!getTargetWorldbook(settings) && !(settings.multiWorldbookRouting && listWorldbooks().length)) {
-        throw new Error('当前角色未绑定主世界书，请先绑定或选择指定世界书。');
+    const progress = await getModuleProgress();
+    for (const module of Object.keys(MODULE_LABELS)) {
+        const status = moduleStatus(progress, module, state.messages.length);
+        $(`#cwb-progress-${module}`).text(`${MODULE_LABELS[module]}：连续成功至第 ${status.through} 楼\n已成功：${displayRanges(status.completed)}\n未确认/待补：${displayRanges(status.missing)}\n已知失败：${displayRanges(status.failed)}${status.latest?.error ? `\n最近错误：${status.latest.error}` : ''}`);
     }
+    return progress;
+}
 
-    let updateTracking = null;
+export async function retryMissingModule(settings, module) {
+    if (!MODULE_LABELS[module]) throw Error('未知模块。');
+    if (state.updating || state.batchRunning || state.repairing) throw Error('已有更新或补漏任务正在运行。');
+    state.repairing = true;
     try {
-        updateTracking = await getChatUpdateTracking(state.messages.length);
-        const overlaps = overlappingRanges(boundedStart, boundedEnd, updateTracking?.completedRanges);
-        if (overlaps.length) {
-            const message = `本次总结楼层 ${boundedStart}-${boundedEnd} 与已总结范围 ${formatRanges(overlaps)} 重叠；仍继续更新并记录重复范围。`;
-            setStatus(message);
+        const progress = await refreshModuleProgress();
+        const gaps = moduleStatus(progress, module, state.messages.length).missing;
+        const size = Math.max(1, Number(settings.threshold) || 20);
+        for (const [start, end] of gaps) {
+            for (let current = start; current <= end; current += size) {
+                await updateRange(settings, current, Math.min(end, current + size - 1), { modules: [module], silent: true });
+            }
         }
-    } catch (error) {
-        console.warn('[CWB] 读取全聊天更新记录失败', error);
-    }
+        if (!gaps.length) setStatus(`${MODULE_LABELS[module]}没有待补范围。`);
+    } finally { state.repairing = false; }
+}
 
+export async function updateRange(settings, startIndex, endIndex, { silent = false, modules = Object.keys(MODULE_LABELS) } = {}) {
+    if (state.updating || state.timelineUpdating || state.relationshipUpdating) throw new Error('已有更新任务正在运行。');
+    refreshChatState();
+    const start = Math.max(0, Number(startIndex) || 0);
+    const end = Math.min(state.messages.length - 1, Number(endIndex));
+    if (end < start || !state.messages.length) throw new Error('指定范围内没有聊天内容。');
+    const targets = [...new Set(modules)].filter(module => MODULE_LABELS[module]);
+    if (!targets.length) throw Error('未选择更新模块。');
+    const chatId = state.chatId;
     state.updating = true;
-    setStatus(`正在读取总结索引楼层 ${boundedStart}-${boundedEnd}…`);
+    const names = [], failures = [], successes = [];
     try {
-        const selected = state.messages.slice(boundedStart, boundedEnd + 1);
-        const oldProfiles = await getTriggeredOldProfiles(settings, selected);
-        const oldTimeline = (await getTimelineEntries()).map(entry => entry.content).join('\n');
-        const oldRelationships = await getRelationshipSummary();
+        await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
+        const selected = state.messages.slice(start, end + 1);
+        const oldProfiles = targets.includes('profiles') ? await getTriggeredOldProfiles(settings, selected) : [];
+        const oldTimeline = targets.includes('timeline') ? (await getTimelineEntries()).map(entry => entry.content).join('\n') : '';
+        const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
         const messages = [];
         if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
-        messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
-        messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
-        messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
-        messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL });
-        messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线】\n${oldTimeline || '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${boundedStart + 1}-${boundedEnd + 1} 楼】\n${formatMessages(selected)}` });
-        setStatus('正在调用系统 API：一次回复生成档案、时间线和关系…');
-        const response = await callSystemApi(messages, settings.responseLength);
-        // Validate all sections before writing any of them. No automatic AI fallback.
-        const combined = parseCombinedResponse(response);
-        const events = parseTimelineResponse(JSON.stringify(combined.timeline));
-        const relationshipContent = mergeRelationships(oldRelationships, JSON.stringify(combined.relationships));
-        const blocks = combined.blocks;
-        $('#cwb-timeline-debug').text(`统一更新：本批调用 AI 1 次\n${response}`);
-        const names = [];
-        const skippedNames = [];
-        let userUpdated = false;
-        const currentUserName = getContext()?.name1 || '用户';
-        for (const block of blocks) {
-            const parsed = parseCustomFormat(block);
-            const recordType = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
-            if (recordType === '时间线' || recordType === 'TIMELINE') {
-                continue;
+        if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
+        if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
+        if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
+        messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
+        messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线】\n${oldTimeline || '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
+        setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：本批仅调用 AI 1 次…`);
+        let response;
+        try { response = await callSystemApi(messages, settings.responseLength); }
+        catch (error) {
+            if (state.chatId === chatId) for (const module of targets) await recordModuleResult(module, start, end, error.message);
+            throw error;
+        }
+        if (state.chatId !== chatId || (getContext()?.chatId && getContext().chatId !== chatId)) throw Error('生成期间切换了聊天，本次未写入，请回到原聊天后重试。');
+        const parts = parseCombinedParts(response);
+        $('#cwb-timeline-debug').text(`统一更新：AI 1 次，第 ${start + 1}-${end + 1} 楼\n${response}`);
+        for (const module of targets) {
+            try {
+                const part = parts[module];
+                if (part.error) throw Error(part.error);
+                if (module === 'profiles') {
+                    const prepared = part.value.map(block => {
+                        const parsed = parseCustomFormat(block);
+                        const type = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
+                        const name = characterNameFromBlock(block);
+                        if (!name || ['时间线', 'TIMELINE'].includes(type)) throw Error('角色档案姓名或档案类型不合法');
+                        return { block, name, isUser: type === '主角' || type === 'USER' || name === (getContext()?.name1 || '用户') };
+                    });
+                    let userUpdated = false;
+                    for (const { block, name, isUser } of prepared) {
+                        const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
+                        if (!saved) throw Error(`角色 ${name} 未路由到世界书，档案未全部完成`);
+                        await verifyProfileContent(settings, name, block, isUser);
+                        if (isUser) userUpdated = true; else names.push(saved);
+                    }
+                    if (names.length) await updateRoster(settings, [...new Set(names)], start, end);
+                    else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
+                } else if (module === 'timeline') {
+                    const events = parseTimelineResponse(JSON.stringify(part.value));
+                    const known = new Set(oldTimeline.split(/\r?\n/).map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim()));
+                    const unique = [...new Set(events)].filter(event => !known.has(event));
+                    await saveTimeline(settings, unique.map((event, index) => `[时间线.${index}]: ${event}`).join('\n'), start, end);
+                } else {
+                    const content = mergeRelationships(oldRelationships, JSON.stringify(part.value));
+                    await saveRelationshipSummary(content, start, end);
+                    $('#cwb-relationship-status').text(content);
+                }
+                await recordModuleResult(module, start, end);
+                successes.push(MODULE_LABELS[module]);
+            } catch (error) {
+                failures.push(`${MODULE_LABELS[module]}：${error.message}`);
+                try { await recordModuleResult(module, start, end, error.message); }
+                catch (progressError) { failures.push(`进度未确认：${progressError.message}`); }
             }
-            const name = characterNameFromBlock(block);
-            if (!name) continue;
-            if (recordType === '主角' || recordType === 'USER' || name === currentUserName) {
-                await saveUserDescription(settings, currentUserName, block, boundedStart, boundedEnd);
-                userUpdated = true;
-                continue;
-            }
-            const savedName = await saveCharacterDescription(settings, name, block, boundedStart, boundedEnd);
-            if (savedName) names.push(savedName);
-            else skippedNames.push(name);
         }
-        const known = new Set(oldTimeline.split(/\r?\n/).map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim()));
-        const uniqueEvents = [...new Set(events)].filter(event => !known.has(event));
-        await saveTimeline(settings, uniqueEvents.map((event, index) => `[时间线.${index}]: ${event}`).join('\n'), boundedStart, boundedEnd);
-        await saveRelationshipSummary(relationshipContent, boundedStart, boundedEnd);
-        $('#cwb-relationship-status').text(`统一更新（AI 1 次）\n${relationshipContent}`);
-        const timelineResult = { addedRanges: [`${boundedStart + 1}-${boundedEnd + 1}`], addedEvents: uniqueEvents.length, coveredCount: boundedEnd - boundedStart + 1, totalFloors: boundedEnd - boundedStart + 1 };
-        const timelineError = null;
-        const relationshipError = null;
-        const uniqueNames = [...new Set(names)];
-        const skipped = [...new Set(skippedNames)];
-        const trackerDetail = [
-            '本批统一生成，AI调用1次',
-            uniqueNames.length ? `角色档案写入${uniqueNames.length}名` : (userUpdated ? '主角档案已写入' : '未写入角色档案'),
-            skipped.length ? `未路由${skipped.length}名角色` : '',
-            timelineError ? `时间线失败：${timelineError.message}` : `时间线：已覆盖${timelineResult?.coveredCount ?? 0}/${timelineResult?.totalFloors ?? 0}楼`,
-            relationshipError ? `角色关系失败：${relationshipError.message}` : '角色关系已更新',
-        ].filter(Boolean).join('；');
-        let updateLogError = null;
-        try {
-            await recordChatUpdateRange(boundedStart, boundedEnd, state.messages.length, trackerDetail, updateTracking?.trackingStartIndex ?? state.messages.length);
-        } catch (error) {
-            updateLogError = error;
-            console.error('[CWB] 写入全聊天更新记录失败', error);
+        if (!failures.length && targets.length === 3) {
+            await recordChatUpdateRange(start, end, state.messages.length, '三个模块均成功，AI调用1次', 0);
         }
-        if (!uniqueNames.length && !userUpdated) {
-            const roleMessage = skipped.length
-                ? `未更新：${skipped.join('、')} 未列入任何世界书目录。`
-                : '模型生成了内容，但没有识别出角色或主角档案。';
-            const timelineMessage = timelineError ? `时间线同步失败：${timelineError.message}` : timelineResult?.addedRanges.length ? `时间线已补齐第 ${timelineResult.addedRanges.join('、')} 楼。` : '时间线楼层已覆盖，无需重复更新。';
-            const overlapMessage = updateTracking && overlappingRanges(boundedStart, boundedEnd, updateTracking.completedRanges).length
-                ? `；本次与已总结楼层 ${formatRanges(overlappingRanges(boundedStart, boundedEnd, updateTracking.completedRanges))} 重叠`
-                : '';
-            const logMessage = (updateLogError ? `；更新记录写入失败：${updateLogError.message}` : '') + (relationshipError ? `；角色关系失败：${relationshipError.message}` : '；角色关系已更新');
-            const message = `${roleMessage} ${timelineMessage}${overlapMessage}${logMessage}`;
-            setStatus(message);
-            if (!silent) notify('warning', message);
-            return [];
-        }
-        if (uniqueNames.length) await updateRoster(settings, uniqueNames, boundedStart, boundedEnd);
-        else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
-        const skippedSuffix = skipped.length ? `；跳过未列目录角色：${skipped.join('、')}` : '';
-        const overlapRanges = updateTracking ? overlappingRanges(boundedStart, boundedEnd, updateTracking.completedRanges) : [];
-        const overlapSuffix = overlapRanges.length ? `；重复总结楼层：${formatRanges(overlapRanges)}` : '';
-        const updateLogSuffix = (updateLogError ? `；更新记录写入失败：${updateLogError.message}` : '；已更新主世界书的全聊天总结记录') + (relationshipError ? `；角色关系失败：${relationshipError.message}` : '；角色关系已更新');
-        const timelineSuffix = timelineError
-            ? `；时间线同步失败：${timelineError.message}`
-            : timelineResult?.addedRanges.length
-                ? `；时间线已补齐第 ${timelineResult.addedRanges.join('、')} 楼`
-                : '；时间线楼层已覆盖，无需重复更新';
-        setStatus(`完成（本批 AI 调用 1 次）：总结索引楼层 ${boundedStart}-${boundedEnd}，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
-        if (!silent) notify(timelineError || relationshipError || updateLogError || overlapRanges.length ? 'warning' : 'success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
-        return uniqueNames;
+        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
+        setStatus(message);
+        if (failures.length) throw Error(message);
+        if (!silent) notify('success', message);
+        return [...new Set(names)];
     } finally {
         state.updating = false;
+        if (state.chatId === chatId) await refreshModuleProgress().catch(error => $('#cwb-progress-error').text(`进度读取失败：${error.message}`));
     }
 }
 
@@ -219,7 +215,7 @@ function parseTimelineResponse(response) {
 }
 
 export async function refreshTimeline(settings, onProgress = () => {}, endIndex = Number.MAX_SAFE_INTEGER, retryStartIndex = null) {
-    if (state.timelineUpdating) throw new Error('时间线刷新任务正在运行。');
+    if (state.timelineUpdating || state.updating || state.batchRunning || state.repairing) throw new Error('已有更新任务正在运行。');
     refreshChatState();
     if (!state.messages.length) throw new Error('当前聊天为空，无法刷新时间线。');
     const scanStartFloor = 1;
@@ -279,6 +275,7 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
                 const savedEntries = await saveTimeline(settings, content, startFloor - 1, endFloor - 1);
                 diagnostics.push(`保存成功：解析 ${events.length} 条，去重后新增 ${unique.length} 条；UID ${savedEntries?.[0]?.uid ?? '未知'}。`);
                 showDiagnostics();
+                await recordModuleResult('timeline', startFloor - 1, endFloor - 1);
                 addedEvents += unique.length;
                 previous = `${previous}${previous ? '\n\n' : ''}【楼层${range}】\n${content}`;
                 addedRanges.push(range);
@@ -299,17 +296,15 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
 export async function maybeAutoUpdate(settings) {
     clearTimeout(autoTimer);
     autoTimer = setTimeout(async () => {
-        if (!settings.enabled || !settings.autoUpdate || state.updating || state.batchRunning) return;
+        if (!settings.enabled || !settings.autoUpdate || state.updating || state.batchRunning || state.repairing) return;
         try {
             refreshChatState();
-            const lastFloor = await getLastUpdatedFloor(settings);
+            const progress = await getModuleProgress();
             const threshold = Math.max(1, Number(settings.threshold) || 20);
-            const pending = state.messages.length - lastFloor;
-            setStatus(`总层数 ${state.messages.length}；已更新至 ${lastFloor}；待更新 ${Math.max(0, pending)}。`);
-            if (pending >= threshold) {
-                notify('info', `检测到 ${pending} 层新内容，开始自动更新。`);
-                await updateRange(settings, lastFloor, state.messages.length - 1);
-            }
+            const latestAttempt = Math.max(0, ...Object.values(progress).flatMap(item => [item.latest?.end !== undefined ? item.latest.end + 1 : 0, ...(item.completed ?? []).map(([, end]) => end + 1)]));
+            const pending = state.messages.length - latestAttempt;
+            setStatus(`总层数 ${state.messages.length}；新增待处理 ${Math.max(0, pending)}；缺口可手动补漏。`);
+            if (pending >= threshold) await batchUpdate(settings);
         } catch (error) {
             console.error('[CWB] 自动更新失败', error);
             notify('error', `自动更新失败：${error.message}`);
@@ -319,30 +314,27 @@ export async function maybeAutoUpdate(settings) {
 }
 
 export async function batchUpdate(settings, onProgress) {
-    if (state.batchRunning) {
-        state.batchStopRequested = true;
-        return;
-    }
+    if (state.batchRunning) { state.batchStopRequested = true; return; }
+    if (state.updating || state.repairing || state.timelineUpdating || state.relationshipUpdating) throw Error('已有更新任务正在运行。');
     refreshChatState();
     if (!state.messages.length) throw new Error('当前聊天为空。');
-    const size = Math.max(1, Number(settings.threshold) || 20);
-    const total = Math.ceil(state.messages.length / size);
     state.batchRunning = true;
     state.batchStopRequested = false;
     try {
-        for (let batch = 0; batch < total; batch++) {
-            if (state.batchStopRequested) {
-                notify('info', `批量更新已在第 ${batch} 批后停止。`);
-                break;
-            }
-            onProgress?.(batch + 1, total);
-            await updateRange(settings, batch * size, Math.min(state.messages.length - 1, (batch + 1) * size - 1), { silent: true });
+        const progress = await refreshModuleProgress();
+        const plan = pendingBatches(progress, state.messages.length, Math.max(1, Number(settings.threshold) || 20));
+        if (!plan.length) { setStatus('三项均已覆盖全部聊天，无需重复更新，AI 调用 0 次。'); return; }
+        for (let index = 0; index < plan.length; index++) {
+            if (state.batchStopRequested) break;
+            const batch = plan[index];
+            onProgress?.(index + 1, plan.length);
+            await updateRange(settings, batch.start, batch.end, { silent: true, modules: batch.modules });
         }
-        if (!state.batchStopRequested) notify('success', '批量更新全部完成。');
+        if (!state.batchStopRequested) notify('success', '批量补齐完成，已完成内容没有重复生成。');
     } finally {
         state.batchRunning = false;
         state.batchStopRequested = false;
-        onProgress?.(0, total);
+        onProgress?.(0, 0);
     }
 }
 
@@ -351,13 +343,13 @@ export async function onChatChanged(settings) {
     if (!settings.enabled) return;
     await manageChatEntries(settings);
     if (settings.multiWorldbookRouting) await updateMasterDirectory(settings);
-    const floor = await getLastUpdatedFloor(settings);
-    setStatus(`总层数 ${state.messages.length}；角色世界书已更新至第 ${floor} 层。`);
+    const progress = await refreshModuleProgress();
+    setStatus(`总层数 ${state.messages.length}；${Object.keys(MODULE_LABELS).map(module => `${MODULE_LABELS[module]}连续完成至${moduleStatus(progress, module, state.messages.length).through}楼`).join('；')}。`);
 }
 
 
 export async function updateRelationships(settings, startIndex = null, endIndex = null) {
-    if (state.relationshipUpdating) throw new Error('角色关系更新正在运行。');
+    if (state.relationshipUpdating || state.updating || state.batchRunning || state.repairing) throw new Error('已有更新任务正在运行。');
     refreshChatState();
     const end = Math.min(state.messages.length - 1, endIndex ?? state.messages.length - 1);
     const start = Math.max(0, startIndex ?? end - (Number(settings.scanDepth) || 6) + 1);
@@ -382,6 +374,7 @@ export async function updateRelationships(settings, startIndex = null, endIndex 
                 const merged = mergeRelationships(content, response);
                 // Advance coverage only after successful parsing, persistence, and server readback.
                 await saveRelationshipSummary(merged, chunkStart, chunkEnd);
+                await recordModuleResult('relationships', chunkStart, chunkEnd);
                 content = merged;
                 checked.push(`${chunkStart + 1}-${chunkEnd + 1}`);
             }
