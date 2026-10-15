@@ -190,12 +190,11 @@ export async function updateRecent(settings) {
     return updateRange(settings, Math.max(0, state.messages.length - depth), state.messages.length - 1);
 }
 
-function timelineRange(entry) {
-    for (const key of entry.keys ?? []) {
+function timelineRanges(entry) {
+    return (entry.keys ?? []).flatMap(key => {
         const match = String(key).match(/^CWB:时间线楼层:(\d+)-(\d+)$/) || String(key).match(/^(\d+)-(\d+)$/);
-        if (match) return [Number(match[1]), Number(match[2])];
-    }
-    return null;
+        return match ? [[Number(match[1]), Number(match[2])]] : [];
+    });
 }
 
 function parseTimelineResponse(response) {
@@ -222,11 +221,6 @@ function parseTimelineResponse(response) {
     throw new Error(`时间线 API 返回格式无法解析：${cleaned.slice(0, 240)}`);
 }
 
-function timelineTag(entry) {
-    const range = timelineRange(entry);
-    return range ? `楼层${range[0]}-${range[1]}` : '楼层范围未知';
-}
-
 export async function refreshTimeline(settings, onProgress = () => {}, endIndex = Number.MAX_SAFE_INTEGER) {
     if (state.timelineUpdating) throw new Error('时间线刷新任务正在运行。');
     refreshChatState();
@@ -240,17 +234,13 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
         const total = state.messages.length;
         const covered = new Array(total + 1).fill(false);
         for (const entry of existing) {
-            const range = timelineRange(entry);
-            if (!range) continue;
+            for (const range of timelineRanges(entry)) {
             const start = Math.max(1, range[0]);
             const end = Math.min(total, range[1]);
             for (let floor = start; floor <= end; floor++) covered[floor] = true;
+            }
         }
-        let previous = existing
-            .slice()
-            .sort((a, b) => (timelineRange(a)?.[0] ?? 0) - (timelineRange(b)?.[0] ?? 0))
-            .map(entry => `【${timelineTag(entry)}】\n${entry.content}`)
-            .join('\n\n');
+        let previous = existing.map(entry => entry.content).join('\n\n');
         const chunkSize = Math.max(1, Number(settings.threshold) || 20);
         const addedRanges = [];
         let floor = scanStartFloor;

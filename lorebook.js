@@ -234,36 +234,57 @@ export async function saveUserDescription(settings, userName, content, startFloo
     return safeName;
 }
 
-export async function saveTimeline(settings, content, startFloor, endFloor) {
+function timelineKeys(entry) {
+    return getKeys(entry).filter(key => /^CWB:时间线楼层:\d+-\d+$/.test(String(key)) || /^\d+-\d+$/.test(String(key)))
+        .map(key => String(key).replace(/^CWB:时间线楼层:/, ''));
+}
+
+function mergeTimelineContent(contents) {
+    const lines = contents.flatMap(content => String(content ?? '').split(/\r?\n/))
+        .map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim())
+        .filter(line => line && !/^【(?:时间线楼层|故事时间线|主线时间线)/.test(line)
+            && line !== '（本范围已检查，无新增重要事件）' && line !== '（暂无重要事件）');
+    // Preserve unrecognised legacy text as well as dated events.
+    const unique = [...new Set(lines.map(line => line.replace(/\s*[|｜]\s*/g, '｜')))];
+    unique.sort((a, b) => {
+        const dateA = a.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+        const dateB = b.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+        return dateA && dateB ? dateA.localeCompare(dateB) : dateA ? -1 : dateB ? 1 : 0;
+    });
+    return `【主线时间线】\n${unique.length ? unique.map((line, index) => `[时间线.${index}]: ${line}`).join('\n') : '（暂无重要事件）'}`;
+}
+
+// Merge and remove legacy per-range entries in the same worldbook save.
+async function writeTimeline(content, startFloor, endFloor) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存故事时间线。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const floorRange = `${startFloor + 1}-${endFloor + 1}`;
-    const entries = await getEntries(bookName);
-    const floorTag = `CWB:时间线楼层:${floorRange}`;
-    const existing = entries.find(entry => getKeys(entry).includes('CWB:故事时间线')
-        && getKeys(entry).includes(chatId)
-        && (getKeys(entry).includes(floorTag) || getKeys(entry).includes(floorRange)));
-    const entryData = {
-        comment: `CWB故事时间线-${chatId}-楼层${floorRange}`,
-        content,
-        keys: ['CWB:故事时间线', chatId, '故事时间线', floorTag],
-        enabled: true,
-        type: 'constant',
-        position: 0,
-        order: 10000,
-        preventRecursion: true,
-    };
-    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
-    else await createEntries(bookName, [entryData]);
+    const data = await loadWorldInfo(bookName);
+    if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
+    const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
+    if (!existing.length && content === undefined) return [];
+    const ranges = existing.flatMap(timelineKeys).map(range => range.split('-').map(Number));
+    if (content !== undefined) ranges.push([startFloor + 1, endFloor + 1]);
+    const target = existing[0] || createWorldInfoEntry(bookName, data);
+    if (!target) throw new Error('创建世界书条目 UID 失败。');
+    applyEntryPatch(target, {
+        comment: `CWB故事时间线-${chatId}`,
+        content: mergeTimelineContent([...existing.map(entry => entry.content), content]),
+        keys: ['CWB:故事时间线', chatId, '故事时间线', ...mergeRanges(ranges).map(([start, end]) => `CWB:时间线楼层:${start}-${end}`)],
+        enabled: true, type: 'constant', position: 0, order: 10000, preventRecursion: true,
+    });
+    const removed = new Set(existing.slice(1));
+    for (const key of Object.keys(data.entries)) if (removed.has(data.entries[key])) delete data.entries[key];
+    await saveWorldInfo(bookName, data, true);
+    return [{ ...target, keys: getKeys(target), enabled: isEnabled(target) }];
+}
+
+export async function saveTimeline(settings, content, startFloor, endFloor) {
+    return writeTimeline(content, startFloor, endFloor);
 }
 
 export async function getTimelineEntries() {
-    const bookName = getPrimaryWorldbook();
-    if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法读取故事时间线。');
-    const chatId = state.chatId.replace(/ imported/g, '');
-    const entries = await getEntries(bookName);
-    return entries.filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
+    return writeTimeline();
 }
 
 export async function getChatUpdateTracking(totalMessages = 0) {
