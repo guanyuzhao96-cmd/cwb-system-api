@@ -106,7 +106,8 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         setStatus('正在调用酒馆系统 API…');
         const response = await callSystemApi(messages, settings.responseLength);
         const blocks = extractCharacterBlocks(response);
-        if (!blocks.length) throw new Error('模型回复中没有合法的角色档案块。');
+        // A range can contain timeline events without any character profile changes.
+        // Do not prevent the independent timeline request in that case.
 
         const names = [];
         const skippedNames = [];
@@ -132,7 +133,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         let timelineResult = null;
         let timelineError = null;
         try {
-            timelineResult = await refreshTimeline(settings, text => setStatus(text), boundedEnd);
+            timelineResult = await refreshTimeline(settings, text => setStatus(text), boundedEnd, boundedStart);
         } catch (error) {
             timelineError = error;
             console.error('[CWB] 时间线同步刷新失败', error);
@@ -221,7 +222,7 @@ function parseTimelineResponse(response) {
     throw new Error(`时间线 API 返回格式无法解析：${cleaned.slice(0, 240)}`);
 }
 
-export async function refreshTimeline(settings, onProgress = () => {}, endIndex = Number.MAX_SAFE_INTEGER) {
+export async function refreshTimeline(settings, onProgress = () => {}, endIndex = Number.MAX_SAFE_INTEGER, retryStartIndex = null) {
     if (state.timelineUpdating) throw new Error('时间线刷新任务正在运行。');
     refreshChatState();
     if (!state.messages.length) throw new Error('当前聊天为空，无法刷新时间线。');
@@ -240,9 +241,17 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
             for (let floor = start; floor <= end; floor++) covered[floor] = true;
             }
         }
+        // Explicit character updates must check their selected range again, even if
+        // a previous request marked it covered but returned no events (or was swiped).
+        // Standalone refresh retries the latest batch, while still filling older gaps.
+        const retryFloor = retryStartIndex === null
+            ? Math.max(1, scanEndFloor - (Math.max(1, Number(settings.threshold) || 20)) + 1)
+            : Math.max(1, Number(retryStartIndex) + 1);
+        for (let current = retryFloor; current <= scanEndFloor; current++) covered[current] = false;
         let previous = existing.map(entry => entry.content).join('\n\n');
         const chunkSize = Math.max(1, Number(settings.threshold) || 20);
         const addedRanges = [];
+        let addedEvents = 0;
         let floor = scanStartFloor;
         while (floor <= scanEndFloor) {
             if (covered[floor]) { floor++; continue; }
@@ -264,15 +273,16 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
                 const unique = [...new Set(events)].filter(event => !known.has(event));
                 const content = `【时间线楼层：${range}】\n${unique.length ? unique.map((event, index) => `[时间线.${index}]: ${event}`).join('\n') : '（本范围已检查，无新增重要事件）'}`;
                 await saveTimeline(settings, content, startFloor - 1, endFloor - 1);
+                addedEvents += unique.length;
                 previous = `${previous}${previous ? '\n\n' : ''}【楼层${range}】\n${content}`;
                 addedRanges.push(range);
                 for (let current = startFloor; current <= endFloor; current++) covered[current] = true;
             }
         }
         const coveredCount = covered.slice(scanStartFloor, scanEndFloor + 1).filter(Boolean).length;
-        const result = { addedRanges, coveredCount, totalFloors: scanEndFloor - scanStartFloor + 1 };
+        const result = { addedRanges, addedEvents, coveredCount, totalFloors: scanEndFloor - scanStartFloor + 1 };
         setStatus(addedRanges.length
-            ? `时间线已补齐：${addedRanges.map(range => `第 ${range} 楼`).join('、')}；已覆盖 ${coveredCount}/${total} 楼。`
+            ? `时间线已补齐：${addedRanges.map(range => `第 ${range} 楼`).join('、')}；新增 ${addedEvents} 条事件；已覆盖 ${coveredCount}/${scanEndFloor} 楼。`
             : `时间线无需重复更新：已覆盖当前聊天全部 ${total} 楼。`);
         return result;
     } finally {

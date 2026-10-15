@@ -54,11 +54,57 @@ test('refresh fills only the gap between disjoint ranges and repeats without API
     h.context.callSystemApi = async () => { calls++; return '{"时间线":["2025-02-01｜甲｜事件乙"]}'; };
     const source = readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, '');
     vm.runInContext(source, h.context);
-    const result = await h.context.refreshTimeline({ threshold: 20 });
+    const result = await h.context.refreshTimeline({ threshold: 20 }, () => {}, 59, 60);
     assert.equal(result.addedRanges.join(','), '21-40');
     assert.equal(result.coveredCount, 60);
     assert.equal(calls, 1);
     assert.equal(Object.keys(h.data().entries).length, 1);
-    await h.context.refreshTimeline({ threshold: 20 });
+    await h.context.refreshTimeline({ threshold: 20 }, () => {}, 59, 60);
     assert.equal(calls, 1);
+});
+
+
+test('consecutive new rounds append to one entry; covered empty results can recover', async () => {
+    const h = harness();
+    let count = 20, calls = 0, empty = false;
+    h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: count }, () => ({ mes: '正文' })), characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] });
+    h.context.$ = () => ({ text() {} });
+    h.context.callSystemApi = async () => { calls++; return JSON.stringify({ 时间线: empty ? [] : [`2025-01-${String(count / 20).padStart(2, '0')}｜甲｜事件${count}`] }); };
+    vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
+    await h.context.refreshTimeline({ threshold: 20 });
+    count = 40;
+    await h.context.refreshTimeline({ threshold: 20 });
+    count = 60; empty = true;
+    await h.context.refreshTimeline({ threshold: 20 });
+    assert.equal(Object.keys(h.data().entries).length, 1);
+    assert.ok(h.data().entries[0].content.includes('事件20'));
+    assert.ok(h.data().entries[0].content.includes('事件40'));
+    assert.ok(!h.data().entries[0].content.includes('事件60'));
+    empty = false;
+    const recovered = await h.context.refreshTimeline({ threshold: 20 });
+    assert.equal(recovered.addedEvents, 1);
+    assert.ok(h.data().entries[0].content.includes('事件60'));
+    const repeated = await h.context.refreshTimeline({ threshold: 20 });
+    assert.equal(repeated.addedEvents, 0);
+    assert.equal(h.data().entries[0].content.match(/事件60/g).length, 1);
+    assert.equal(calls, 5);
+});
+
+test('no character blocks still triggers independent timeline with selected bounds', async () => {
+    const h = harness();
+    h.context.getContext = () => ({ chatId: 'chat', name1: '用户', chat: [{ mes: '新事件' }] });
+    Object.assign(h.context, {
+        $: () => ({ text() {} }), getTargetWorldbook: () => 'main',
+        getChatUpdateTracking: async () => null, overlappingRanges: () => [],
+        getTriggeredOldProfiles: async () => [], callSystemApi: async () => '无角色变化',
+        extractCharacterBlocks: () => [], recordChatUpdateRange: async () => {}, notify() {},
+    });
+    vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
+    let called = false;
+    h.context.refreshTimeline = async (_, progress, end, start) => {
+        called = true; assert.equal(start, 0); assert.equal(end, 0);
+        return { addedRanges: ['1-1'], coveredCount: 1, totalFloors: 1 };
+    };
+    await h.context.updateRange({}, 0, 0, { silent: true });
+    assert.equal(called, true);
 });
