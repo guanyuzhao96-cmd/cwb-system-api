@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 test('settings button -> real API wrapper -> incremental prompt -> server readback, three rounds', { skip: !vm.SourceTextModule && 'Requires --experimental-vm-modules' }, async () => {
     const nodes = new Map(), requests = [], modules = new Map();
+    let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
     const contextData = { chatId: 'integration-chat', characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = {};
@@ -32,7 +33,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         eventSource: { on() {} }, event_types: {}, saveSettingsDebounced() {}, getRequestHeaders: () => ({}),
         generateRaw: async options => {
             requests.push(options);
-            if (!options.systemPrompt.includes('INTEGRATION_CUSTOM_TIMELINE')) throw Error('custom timeline prompt not used');
+            if (options.systemPrompt.includes('角色关系增量整理器')) return JSON.stringify({ 关系更新: [{ 人物A: 'A', 方向: '↔', 人物B: 'B', 关系: ++relationRound === 1 ? '同班同学、情侣' : '同班同学、已分手' }] });
+            if (!options.systemPrompt.includes('INTEGRATION_CUSTOM_TIMELINE')) return '本次没有角色档案变化';
             const input = options.prompt.map(x => x.content).join('\n');
             const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
             return JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] });
@@ -80,6 +82,17 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     await click();
     assert.equal(Object.values(disk.entries)[0].content.match(/新增事件/g).length, 3);
     assert.ok($('#cwb-timeline-debug').text().includes('新增 0 条'));
+    const relationButton = $('#cwb-update-relationships');
+    relationButton.handlers.click.call(relationButton);
+    for (let i = 0; i < 100 && relationButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
+    assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).content.includes('情侣'));
+    // Exercise actual role update -> timeline -> relationship update, not just the standalone helper.
+    await modules.get(resolve(root, 'core.js')).namespace.updateRange(extension_settings.cwb_system_api, 0, 2, { silent: true });
+    const relationEntries = Object.values(disk.entries).filter(e => e.key.includes('CWB:角色关系汇总'));
+    assert.equal(relationEntries.length, 1);
+    assert.ok(relationEntries[0].content.includes('已分手'));
+    assert.ok(!relationEntries[0].content.includes('情侣'));
+    assert.equal(Object.values(disk.entries).filter(e => e.key.includes('CWB:故事时间线')).length, 1);
     failWrite = true;
     contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
     // Force a visibly different response, so readback must detect failed persistence.

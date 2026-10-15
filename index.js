@@ -9,7 +9,7 @@ import {
 } from '/scripts/extensions.js';
 import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
 import { testSystemApi } from './api.js';
-import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline } from './core.js';
+import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships } from './core.js';
 import { convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state } from './state.js';
 import { notify } from './utils.js';
@@ -97,6 +97,9 @@ async function runButton(button, label, action) {
 
 function bindUi() {
     $('#cwb-system-settings').on('input change', 'input, textarea, select', saveFromUi);
+    $('#cwb-update-relationships').on('click', function () {
+        runButton($(this), '关系更新中…', () => updateRelationships(settings()));
+    });
     $('#cwb-refresh-timeline').on('click', function () {
         runButton($(this), '时间线更新中…', async () => {
             saveFromUi();

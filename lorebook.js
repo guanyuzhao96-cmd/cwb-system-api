@@ -553,3 +553,31 @@ export async function convertLegacyEntries(settings) {
     notify(patches.length ? 'success' : 'info', patches.length ? `已转换 ${patches.length} 个旧版档案。` : '没有发现需要转换的旧版档案。');
     return patches.length;
 }
+
+export async function getRelationshipSummary() {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法读取角色关系。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const entries = await getEntries(bookName);
+    return entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId)).map(entry => entry.content).join('\n');
+}
+
+export async function saveRelationshipSummary(content) {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存角色关系。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const data = structuredClone(await loadWorldInfo(bookName));
+    if (!data?.entries) throw new Error('无法读取主世界书。');
+    const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId));
+    const target = existing[0] || createWorldInfoEntry(bookName, data);
+    if (!target) throw new Error('创建角色关系条目失败。');
+    applyEntryPatch(target, { comment: `CWB角色关系汇总-${chatId}`, content, keys: ['CWB:角色关系汇总', chatId, '角色关系'], enabled: true, type: 'constant', position: 0, order: 9998, preventRecursion: true });
+    const duplicates = new Set(existing.slice(1));
+    for (const key of Object.keys(data.entries)) if (duplicates.has(data.entries[key])) delete data.entries[key];
+    await saveWorldInfo(bookName, data, true);
+    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
+    if (!response.ok) throw new Error('角色关系保存后回读失败。');
+    const stored = await response.json();
+    if (stored?.entries?.[target.uid]?.content !== content) throw new Error('角色关系服务端回读不一致，无法确认保存成功。');
+    return target;
+}

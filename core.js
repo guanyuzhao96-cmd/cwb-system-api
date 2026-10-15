@@ -1,9 +1,12 @@
+import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
 import { callSystemApi } from './api.js';
 import { state } from './state.js';
 import {
     getLastUpdatedFloor,
+    getRelationshipSummary,
+    saveRelationshipSummary,
     getChatUpdateTracking,
     getTimelineEntries,
     getTargetWorldbook,
@@ -139,12 +142,16 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             timelineError = error;
             console.error('[CWB] 时间线同步刷新失败', error);
         }
+        let relationshipError = null;
+        try { await updateRelationships(settings, boundedStart, boundedEnd); }
+        catch (error) { relationshipError = error; console.error('[CWB] 角色关系更新失败', error); }
         const uniqueNames = [...new Set(names)];
         const skipped = [...new Set(skippedNames)];
         const trackerDetail = [
             uniqueNames.length ? `角色档案写入${uniqueNames.length}名` : (userUpdated ? '主角档案已写入' : '未写入角色档案'),
             skipped.length ? `未路由${skipped.length}名角色` : '',
             timelineError ? `时间线失败：${timelineError.message}` : `时间线：已覆盖${timelineResult?.coveredCount ?? 0}/${timelineResult?.totalFloors ?? 0}楼`,
+            relationshipError ? `角色关系失败：${relationshipError.message}` : '角色关系已更新',
         ].filter(Boolean).join('；');
         let updateLogError = null;
         try {
@@ -161,7 +168,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             const overlapMessage = updateTracking && overlappingRanges(boundedStart, boundedEnd, updateTracking.completedRanges).length
                 ? `；本次与已总结楼层 ${formatRanges(overlappingRanges(boundedStart, boundedEnd, updateTracking.completedRanges))} 重叠`
                 : '';
-            const logMessage = updateLogError ? `；更新记录写入失败：${updateLogError.message}` : '';
+            const logMessage = (updateLogError ? `；更新记录写入失败：${updateLogError.message}` : '') + (relationshipError ? `；角色关系失败：${relationshipError.message}` : '；角色关系已更新');
             const message = `${roleMessage} ${timelineMessage}${overlapMessage}${logMessage}`;
             setStatus(message);
             if (!silent) notify('warning', message);
@@ -172,14 +179,14 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         const skippedSuffix = skipped.length ? `；跳过未列目录角色：${skipped.join('、')}` : '';
         const overlapRanges = updateTracking ? overlappingRanges(boundedStart, boundedEnd, updateTracking.completedRanges) : [];
         const overlapSuffix = overlapRanges.length ? `；重复总结楼层：${formatRanges(overlapRanges)}` : '';
-        const updateLogSuffix = updateLogError ? `；更新记录写入失败：${updateLogError.message}` : '；已更新主世界书的全聊天总结记录';
+        const updateLogSuffix = (updateLogError ? `；更新记录写入失败：${updateLogError.message}` : '；已更新主世界书的全聊天总结记录') + (relationshipError ? `；角色关系失败：${relationshipError.message}` : '；角色关系已更新');
         const timelineSuffix = timelineError
             ? `；时间线同步失败：${timelineError.message}`
             : timelineResult?.addedRanges.length
                 ? `；时间线已补齐第 ${timelineResult.addedRanges.join('、')} 楼`
                 : '；时间线楼层已覆盖，无需重复更新';
         setStatus(`完成：总结索引楼层 ${boundedStart}-${boundedEnd}，更新 ${uniqueNames.length} 个角色${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
-        if (!silent) notify(timelineError || updateLogError || overlapRanges.length ? 'warning' : 'success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
+        if (!silent) notify(timelineError || relationshipError || updateLogError || overlapRanges.length ? 'warning' : 'success', `已更新 ${uniqueNames.length} 个角色档案${userUpdated ? '及主角档案' : ''}${skippedSuffix}${overlapSuffix}${timelineSuffix}${updateLogSuffix}。`);
         return uniqueNames;
     } finally {
         state.updating = false;
@@ -369,4 +376,28 @@ export async function onChatChanged(settings) {
     if (settings.multiWorldbookRouting) await updateMasterDirectory(settings);
     const floor = await getLastUpdatedFloor(settings);
     setStatus(`总层数 ${state.messages.length}；角色世界书已更新至第 ${floor} 层。`);
+}
+
+
+export async function updateRelationships(settings, startIndex = null, endIndex = null) {
+    if (state.relationshipUpdating) throw new Error('角色关系更新正在运行。');
+    refreshChatState();
+    const end = Math.min(state.messages.length - 1, endIndex ?? state.messages.length - 1);
+    const start = Math.max(0, startIndex ?? end - (Number(settings.scanDepth) || 6) + 1);
+    if (end < start) throw new Error('当前范围没有聊天内容。');
+    state.relationshipUpdating = true;
+    try {
+        const previous = await getRelationshipSummary();
+        const response = await callSystemApi([
+            { role: 'system', content: RELATIONSHIP_PROMPT },
+            { role: 'user', content: `【已有关系】\n${previous || '无'}\n\n【新增聊天】\n${formatMessages(state.messages.slice(start, end + 1))}` },
+        ], settings.responseLength);
+        const content = mergeRelationships(previous, response);
+        await saveRelationshipSummary(content);
+        $('#cwb-relationship-status').text(`角色关系已保存：第 ${start + 1}-${end + 1} 楼。\n${content}`);
+        return content;
+    } catch (error) {
+        $('#cwb-relationship-status').text(`角色关系更新失败：${error.message}`);
+        throw error;
+    } finally { state.relationshipUpdating = false; }
 }
