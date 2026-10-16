@@ -1,13 +1,11 @@
 import { parseCustomFormat, buildCustomFormat } from './utils.js';
 
-export const PROFILE_RULES = `角色与主角档案必须精简，只允许：档案类型、姓名、当前状态、角色已知信息、角色不知信息、长期目标、短期目标、重要物品.N、已解锁能力.N、剧情.N。
-删除好感度、态度/情绪评分、信任度等数值，删除性经历人数/对象/次数及其他计数统计，不记录任何数值增减过程。人物之间的同学、亲属、情侣、敌对、暗恋、后宫成员等关系统一写独立关系增量，角色档案不得再列人际关系或关系表。
-当前状态只写仍影响后续剧情的处境，一句即可；已知/不知只写重要事实与秘密边界，不罗列琐碎信息。目标、物品、能力只保留仍有效的关键内容；能力只写名称与已证实效果，不写等级/数值变化日志。
-个人剧情只记录该角色亲历、得知或直接承受后果的关键事件，每条“日期｜关键行动与结果”，尽量40字内；合并重复、略去闲聊、普通动作、情绪起伏和数值变化，不复制整份全局时间线。已确认的关键历史与秘密边界不能为缩短字数而丢弃。
-只输出本轮确有这些事实变化的角色；仅被提到、仅数值变化或仅关系标签变化的角色不输出档案。主角无关键变化也不强制输出。角色没有变化时用[--档案无变化--]，不得为凑字段编写内容。旧档案中的已删除字段不继承，即使其他提示词要求保留也以此规则为准。`;
+export const PROFILE_RULES = `角色与主角档案只允许“档案类型”“姓名”和“剧情.N”字段，其他字段一律删除，不记录状态、已知/未知、目标、物品、能力、关系、好感、数值或次数。
+个人关键剧情必须同时满足：角色亲自参与、亲自获知或直接承受后果；并且事件强力推动或改变主线、重大冲突、关键秘密、角色核心目标或后续走向。只保留重大决定及其结果、关键冲突转折、重要秘密揭露、目标达成/失败及其持续影响等事件。仅被提及、与主线联系弱、无后续影响的事件不得记录。
+日常互动、普通对话、行动步骤、情绪变化、重复背景、枝节、未执行的计划、数值变化和一般生活细节全部省略；不要把同一事件拆成多条，也不要复制全局时间线。只输出本轮确有新增或实质变化的个人关键剧情，格式为“日期｜关键事件及结果”，每条尽量不超过32个汉字，合并重复。
+旧档案只保留符合以上强相关标准的个人关键剧情；不能确认相关性时宁可省略。角色没有符合标准的新剧情时用[--档案无变化--]。即使其他提示词要求保留更多字段，也必须遵守本规则。`;
 
-const scalar = new Set(['当前状态', '角色已知信息', '角色不知信息', '长期目标', '短期目标']);
-const lists = new Set(['重要物品', '已解锁能力', '剧情']);
+const lists = new Set(['剧情']);
 const stat = '(?:好感(?:度|值)?|信任(?:度|值)|依赖(?:度|值)|服从(?:度|值)|忠诚(?:度|值)|堕落(?:度|值)|亲密(?:度|值)|欲望(?:度|值)|经验值|经验点|金币数|累计次数|性经历人数|与主角次数)';
 const statPattern = new RegExp(stat);
 function conciseValue(value) {
@@ -25,12 +23,6 @@ export function sanitizeProfileContent(content) {
     if (!name) return null;
     const type = parsed.档案类型 || parsed.record_type || '角色';
     const clean = { 档案类型: type, 姓名: name };
-    for (const key of scalar) {
-        if (parsed[key] !== undefined && typeof parsed[key] !== 'object') {
-            const value = conciseValue(parsed[key]);
-            if (value) clean[key] = value;
-        }
-    }
     for (const key of lists) {
         const original = parsed[key];
         const items = Array.isArray(original) ? original : original && typeof original === 'object' ? Object.values(original) : original === undefined ? [] : [original];
@@ -42,5 +34,6 @@ export function sanitizeProfileContent(content) {
 
 export function hasProfileFacts(content) {
     const parsed = parseCustomFormat(content);
-    return [...scalar, ...lists].some(key => parsed[key] !== undefined);
+    const items = parsed.剧情;
+    return Array.isArray(items) ? items.some(item => String(item ?? '').trim()) : typeof items === 'string' && Boolean(items.trim());
 }

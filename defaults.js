@@ -4,21 +4,14 @@ const PROFILE_FORMAT = `只输出档案数据，不解释、不用Markdown代码
 [--角色档案开始--]
 [档案类型]:角色或主角
 [姓名]:实际姓名
-[当前状态]:一句关键处境
-[角色已知信息]:已确认的关键事实，多条用分号
-[角色不知信息]:会影响剧情的秘密或误会，多条用分号
-[长期目标]:核心目标
-[短期目标]:当前目标
-[重要物品.0]:物品｜当前持有与用途
-[已解锁能力.0]:名称｜已证实效果
-[剧情.0]:YYYY-MM-DD或日期未知｜关键行动与结果
+[剧情.0]:日期｜关键事件及结果（角色亲历、获知或直接承受后果；强力影响主线或后续走向）
 [--角色档案结束--]
-上面是允许字段示例，无依据或无内容就省略，不输出占位内容。主角与其他角色使用相同精简字段。`;
+上面是唯一允许的档案字段；无符合强相关标准的新剧情则输出[--档案无变化--]。主角与其他角色使用相同格式。`;
 
 export const cwbCompleteDefaultSettings = {
     cwb_break_armor_prompt: '你是动态世界书整理器。只整理给定聊天中已发生的事实，不续写、不推测，不让角色知道其尚未获知的秘密。',
     cwb_char_card_prompt: `从给定聊天整理角色与主角的精简动态档案。\n${PROFILE_FORMAT}\n${PROFILE_RULES}`,
-    cwb_incremental_char_card_prompt: `融合旧档案与新对话，为确有关键事实变化的角色输出更新后的完整精简档案；保留关键历史和信息边界，合并重复，删除失效状态。\n${PROFILE_FORMAT}\n${PROFILE_RULES}`,
+    cwb_incremental_char_card_prompt: `融合旧档案与新对话，只为有强相关个人关键剧情新增或实质变化的角色输出档案；重新筛选旧剧情，删除关联弱、无后续影响或过于琐碎的记录，合并重复。\n${PROFILE_FORMAT}\n${PROFILE_RULES}`,
 };
 
 // Replace only exact fingerprints of the previous built-in prompts; preserve custom prompts.

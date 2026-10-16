@@ -41,7 +41,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
                 relationRound++;
                 const input = options.prompt.map(x => x.content).join('\n');
                 const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
-                return '[--角色档案开始--]\n[档案类型]:主角\n[姓名]:主角\n[当前状态]:参与本轮事件\n[--角色档案结束--]\n'
+                return '[--角色档案开始--]\n[档案类型]:主角\n[姓名]:主角\n[剧情.0]:日期未知｜本轮关键事件改变主线走向\n[--角色档案结束--]\n'
                     + '[--时间线增量开始--]\n' + JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] }) + '\n[--时间线增量结束--]\n'
                     + '[--关系增量开始--]\n' + JSON.stringify({ 关系更新: [{ 人物A: 'B', 方向: '↔', 人物B: 'C', 关系: '互相讨厌' }], 删除关系: [] }) + '\n[--关系增量结束--]';
             }
