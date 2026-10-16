@@ -247,13 +247,26 @@ function mergeTimelineContent(contents) {
         .map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim())
         .filter(line => line && !/^【(?:时间线楼层|故事时间线|主线时间线)/.test(line)
             && line !== '（本范围已检查，无新增重要事件）' && line !== '（暂无重要事件）');
-    // Preserve unrecognised legacy text as well as dated events.
-    const unique = [...new Set(lines.map(line => line.replace(/\s*[|｜]\s*/g, '｜')))];
-    unique.sort((a, b) => {
-        const dateA = a.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
-        const dateB = b.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
-        return dateA && dateB ? dateA.localeCompare(dateB) : dateA ? -1 : dateB ? 1 : 0;
-    });
+    const byDate = new Map(), undated = [], seenUndated = new Set();
+    for (const raw of lines) {
+        const line = raw.replace(/\s*[|｜]\s*/g, '｜');
+        const parts = line.split('｜').map(part => part.trim());
+        const dateMatch = parts[0]?.match(/^(\d{4}-\d{1,2}-\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/);
+        const date = dateMatch?.[1] || (parts[0] === '日期未知' ? '日期未知' : null);
+        if (!date || parts.length < 2) {
+            if (!seenUndated.has(line)) { seenUndated.add(line); undated.push(line); }
+            continue;
+        }
+        // Old entries used date｜people｜event; discard the standalone people column.
+        const event = (parts.length >= 3 ? parts.slice(2) : parts.slice(1)).join('｜').trim();
+        if (!event) continue;
+        const events = byDate.get(date) ?? [];
+        for (const item of event.split(/[；;]/).map(value => value.trim()).filter(Boolean)) if (!events.includes(item)) events.push(item);
+        byDate.set(date, events);
+    }
+    const dated = [...byDate].sort(([a], [b]) => a === '日期未知' ? 1 : b === '日期未知' ? -1 : a.localeCompare(b))
+        .map(([date, events]) => `${date}｜${events.join('；')}`);
+    const unique = [...dated, ...undated];
     return `【主线时间线】\n${unique.length ? unique.map((line, index) => `[时间线.${index}]: ${line}`).join('\n') : '（暂无重要事件）'}`;
 }
 

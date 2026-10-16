@@ -29,11 +29,11 @@ function harness(entries = {}) {
 const entry = (uid, chat, range, content) => ({ uid, key: ['CWB:故事时间线', chat, `CWB:时间线楼层:${range}`], content });
 
 test('legacy entries merge atomically, retain UID, deduplicate and isolate other chats', async () => {
-    const h = harness({ 0: entry(0, 'chat', '1-20', '[时间线.0]: 2025-02-02｜甲｜事件乙'), 1: entry(1, 'chat', '41-60', '[时间线.0]: 2025-01-01｜甲｜事件甲\n[时间线.1]: 2025-02-02｜甲｜事件乙'), 2: entry(2, 'other', '1-10', 'other') });
+    const h = harness({ 0: entry(0, 'chat', '1-20', '[时间线.0]: 2025-02-02｜甲｜事件乙'), 1: entry(1, 'chat', '41-60', '[时间线.0]: 2025-01-01｜甲｜事件甲\n[时间线.1]: 2025-02-02｜甲｜事件乙\n[时间线.2]: 2025-02-02｜乙｜事件丙'), 2: entry(2, 'other', '1-10', 'other') });
     await h.context.getTimelineEntries();
     assert.equal(h.saves(), 1);
     assert.deepEqual(Object.keys(h.data().entries), ['0', '2']);
-    assert.equal(h.data().entries[0].content, '【主线时间线】\n[时间线.0]: 2025-01-01｜甲｜事件甲\n[时间线.1]: 2025-02-02｜甲｜事件乙');
+    assert.equal(h.data().entries[0].content, '【主线时间线】\n[时间线.0]: 2025-01-01｜事件甲\n[时间线.1]: 2025-02-02｜事件乙；事件丙');
     assert.ok(h.data().entries[0].key.includes('CWB:时间线楼层:41-60'));
     await h.context.saveTimeline({}, '【时间线楼层：21-40】\n（本范围已检查，无新增重要事件）', 20, 39);
     assert.ok(h.data().entries[0].key.includes('CWB:时间线楼层:1-60'));
@@ -49,6 +49,7 @@ test('first save and retry keep one entry; failed migration preserves originals'
     await h.context.saveTimeline({}, '[时间线.0]: 日期未知｜甲｜事件', 0, 19);
     assert.equal(Object.values(h.data().entries).filter(entry => entry.key.includes('CWB:故事时间线')).length, 1);
     assert.equal(h.data().entries[0].content.match(/日期未知/g).length, 1);
+    assert.ok(h.data().entries[0].content.includes('日期未知｜事件'));
     const failed = harness({ 0: entry(0, 'chat', '1-20', '旧资料'), 1: entry(1, 'chat', '21-40', '补充资料') });
     failed.fail();
     await assert.rejects(failed.context.getTimelineEntries(), /save failed/);
@@ -74,6 +75,17 @@ test('refresh fills only the gap between disjoint ranges and repeats without API
     assert.equal(Object.values(h.data().entries).filter(entry => entry.key.includes('CWB:故事时间线')).length, 1);
     await h.context.refreshTimeline({ threshold: 20 }, () => {}, 59, 60);
     assert.equal(calls, 1);
+});
+
+test('timeline parser merges same-day events, omits people columns and normalizes legacy format for deduplication', () => {
+    const h = harness();
+    vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
+    const parsed = h.context.parseTimelineResponse(JSON.stringify({ 时间线: [
+        { 日期: '2026-10-16', 人物: '甲、乙', 事件: '甲揭露秘密' },
+        { 日期: '2026-10-16', 人物: '乙', 事件: '乙承担后果' },
+    ] }));
+    assert.deepEqual(JSON.parse(JSON.stringify(parsed)), ['2026-10-16｜甲揭露秘密；乙承担后果']);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.context.uniqueTimelineEntries(parsed, ['[时间线.0]: 2026-10-16｜甲、乙｜甲揭露秘密']))), ['2026-10-16｜乙承担后果']);
 });
 
 

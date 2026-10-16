@@ -7,7 +7,7 @@ import {
     extension_settings,
     renderExtensionTemplateAsync,
 } from '/scripts/extensions.js';
-import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt, ensureProfilePromptRules } from './defaults.js';
+import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt, ensureProfilePromptRules, ensureTimelinePromptRules } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
 import { cleanupProfileFields, convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
@@ -44,6 +44,8 @@ function settings() {
         const enforced = ensureProfilePromptRules(migrated);
         if (enforced !== current[key]) { current[key] = enforced; promptsChanged = true; }
     }
+    const timelinePrompt = ensureTimelinePromptRules(current.timelineIncrementalPrompt);
+    if (timelinePrompt !== current.timelineIncrementalPrompt) { current.timelineIncrementalPrompt = timelinePrompt; promptsChanged = true; }
     if (promptsChanged) saveSettingsDebounced();
     return extension_settings[MODULE_NAME];
 }

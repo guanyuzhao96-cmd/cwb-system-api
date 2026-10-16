@@ -32,4 +32,9 @@ test('timeline prompts retain only concise key information and major events', ()
     }
     assert.match(TIMELINE_CONCISION_RULES, /不记录日常/);
     assert.match(TIMELINE_CONCISION_RULES, /不超过28个汉字/);
+    for (const prompt of [COMBINED_OUTPUT_PROTOCOL, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES]) {
+        assert.match(prompt, /同一天.*合并|同一日期.*合并/);
+        assert.match(prompt, /日期.*只.*一次/);
+        assert.match(prompt, /不得单独列出人物或出场角色|不得单独列出出场角色|不得输出“人物”/);
+    }
 });

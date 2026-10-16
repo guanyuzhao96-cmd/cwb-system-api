@@ -155,8 +155,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
                     else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
                 } else if (module === 'timeline') {
                     const events = parseTimelineResponse(JSON.stringify(part.value));
-                    const known = new Set(oldTimeline.split(/\r?\n/).map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim()));
-                    const unique = [...new Set(events)].filter(event => !known.has(event));
+                    const unique = uniqueTimelineEntries(events, oldTimeline.split(/\r?\n/));
                     await saveTimeline(settings, unique.map((event, index) => `[时间线.${index}]: ${event}`).join('\n'), start, end);
                 } else {
                     const content = mergeRelationships(oldRelationships, JSON.stringify(part.value));
@@ -209,17 +208,60 @@ function parseTimelineResponse(response) {
         }
     }
     const items = Array.isArray(parsed) ? parsed : parsed?.时间线 ?? parsed?.events;
-    if (Array.isArray(items)) return items.map(item => {
+    if (Array.isArray(items)) return consolidateTimelineEntries(items.map(item => {
         if (typeof item === 'string') return item.trim();
         const date = String(item?.日期 ?? item?.date ?? '日期未知').trim();
-        const people = String(item?.人物 ?? item?.people ?? '人物未明').trim();
         const event = String(item?.事件 ?? item?.event ?? '').trim();
-        return event ? `${date}｜${people}｜${event}` : '';
-    }).filter(Boolean);
+        return event ? `${date}｜${event}` : '';
+    }).filter(Boolean));
     const lines = cleaned.split(/\r?\n/).map(line => line.replace(/^\s*(?:[-*•]\s*)?\[?时间线(?:\.\d+)?\]?\s*[:：]\s*/, '').trim()).filter(Boolean);
     const events = lines.filter(line => line.includes('｜') || line.includes('|'));
-    if (events.length) return events.map(line => line.replace(/\s*[|｜]\s*/g, '｜'));
+    if (events.length) return consolidateTimelineEntries(events.map(line => line.replace(/\s*[|｜]\s*/g, '｜')));
     throw new Error(`时间线 API 返回格式无法解析：${cleaned.slice(0, 240)}`);
+}
+
+function normalizeTimelineLine(line) {
+    const cleaned = String(line ?? '').replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim().replace(/\s*[|｜]\s*/g, '｜');
+    const fields = cleaned.split('｜').map(field => field.trim());
+    if (!/^(?:\d{4}-\d{1,2}-\d{1,2}|日期未知)$/.test(fields[0] ?? '') || fields.length < 2) return cleaned;
+    // Legacy format was date｜people｜event; discard the standalone people column.
+    const event = (fields.length >= 3 ? fields.slice(2) : fields.slice(1)).join('｜').trim();
+    return event ? `${fields[0]}｜${event}` : '';
+}
+
+function consolidateTimelineEntries(entries) {
+    const grouped = new Map(), undated = [];
+    for (const entry of entries) {
+        const normalized = normalizeTimelineLine(entry);
+        const match = normalized.match(/^((?:\d{4}-\d{1,2}-\d{1,2})|日期未知)｜(.+)$/);
+        if (!match) { if (normalized) undated.push(normalized); continue; }
+        const [, date, event] = match;
+        const current = grouped.get(date) ?? [];
+        if (!current.includes(event)) current.push(event);
+        grouped.set(date, current);
+    }
+    return [...[...grouped].map(([date, events]) => `${date}｜${events.join('；')}`), ...undated];
+}
+
+function uniqueTimelineEntries(entries, existingLines) {
+    const known = new Set();
+    for (const line of existingLines) {
+        const normalized = normalizeTimelineLine(line);
+        const match = normalized.match(/^((?:\d{4}-\d{1,2}-\d{1,2})|日期未知)｜(.+)$/);
+        if (match) for (const event of match[2].split(/[；;]/).map(part => part.trim()).filter(Boolean)) known.add(`${match[1]}｜${event}`);
+    }
+    const fresh = [];
+    for (const line of entries) {
+        const normalized = normalizeTimelineLine(line);
+        const match = normalized.match(/^((?:\d{4}-\d{1,2}-\d{1,2})|日期未知)｜(.+)$/);
+        if (!match) { if (normalized) fresh.push(normalized); continue; }
+        for (const event of match[2].split(/[；;]/).map(part => part.trim()).filter(Boolean)) {
+            const key = `${match[1]}｜${event}`;
+            if (!known.has(key)) fresh.push(key);
+            known.add(key);
+        }
+    }
+    return consolidateTimelineEntries(fresh);
 }
 
 export async function refreshTimeline(settings, onProgress = () => {}, endIndex = Number.MAX_SAFE_INTEGER, retryStartIndex = null) {
@@ -278,8 +320,7 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
                 diagnostics.push(`API 原始返回（第 ${range} 楼）：\n${response}`);
                 showDiagnostics();
                 const events = parseTimelineResponse(response);
-                const known = new Set(previous.split(/\r?\n/).map(line => line.replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim()).filter(Boolean));
-                const unique = [...new Set(events)].filter(event => !known.has(event));
+                const unique = uniqueTimelineEntries(events, previous.split(/\r?\n/));
                 const content = `【时间线楼层：${range}】\n${unique.length ? unique.map((event, index) => `[时间线.${index}]: ${event}`).join('\n') : '（本范围已检查，无新增重要事件）'}`;
                 const savedEntries = await saveTimeline(settings, content, startFloor - 1, endFloor - 1);
                 diagnostics.push(`保存成功：解析 ${events.length} 条，去重后新增 ${unique.length} 条；UID ${savedEntries?.[0]?.uid ?? '未知'}。`);

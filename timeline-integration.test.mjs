@@ -13,7 +13,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
     const contextData = { chatId: 'integration-chat', characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
-    const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词' } };
+    const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
         if (typeof key === 'object') return key;
         if (!nodes.has(key)) nodes.set(key, {
@@ -81,12 +81,14 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         assert.ok(extension_settings.cwb_system_api[key].includes('CWB角色档案强相关筛选规则'));
         assert.ok(extension_settings.cwb_system_api[key].includes('只允许“档案类型”“姓名”和“剧情.N”字段'));
     }
+    assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.startsWith('旧自定义时间线提示词'));
+    assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('同一日期的所有关键进展合并为一条'));
     $('#cwb-system-settings').handlers.click.call({ attr: () => 'timeline' });
     assert.equal(document.getElementById('cwb-progress-details').open, true);
     assert.equal(document.getElementById('cwb-detail-timeline').scrolled, true);
     const button = $('#cwb-refresh-timeline');
     assert.equal(typeof button.handlers.click, 'function');
-    assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('增量整理器'));
+    assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('旧自定义时间线提示词'));
     $('#cwb-timeline-incremental-prompt').val('INTEGRATION_CUSTOM_TIMELINE 按新增聊天提取事件，只输出时间线 JSON');
     $('#cwb-system-settings').handlers['input change']();
     assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.startsWith('INTEGRATION_CUSTOM_TIMELINE'));
@@ -103,7 +105,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         assert.ok(timelines[0].content.includes(`新增事件${n}`));
     }
     assert.equal(requests.length, 3);
+    assert.ok(requests[0].systemPrompt.includes('日期只出现一次'));
+    assert.ok(requests[0].systemPrompt.includes('不得单独列出出场角色'));
     assert.equal(Object.values(disk.entries)[0].content.match(/新增事件/g).length, 3);
+    assert.equal(Object.values(disk.entries)[0].content.match(/日期未知/g).length, 1, 'same-day updates should share a single date prefix');
+    assert.ok(!Object.values(disk.entries)[0].content.includes('｜主角｜'), 'people must not have a separate column');
     assert.ok($('#cwb-timeline-debug').text().includes('保存成功'));
     await click();
     assert.equal(Object.values(disk.entries)[0].content.match(/新增事件/g).length, 3);
