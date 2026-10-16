@@ -7,7 +7,7 @@ import {
     extension_settings,
     renderExtensionTemplateAsync,
 } from '/scripts/extensions.js';
-import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt } from './defaults.js';
+import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt, ensureProfilePromptRules } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
 import { cleanupProfileFields, convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
@@ -38,10 +38,13 @@ function settings() {
         if (extension_settings[MODULE_NAME][key] === undefined) extension_settings[MODULE_NAME][key] = value;
     });
     const current = extension_settings[MODULE_NAME];
+    let promptsChanged = false;
     for (const key of ['fullPrompt', 'incrementalPrompt']) {
         const migrated = migrateBuiltinProfilePrompt(current[key], key);
-        if (migrated !== current[key]) { current[key] = migrated; saveSettingsDebounced(); }
+        const enforced = ensureProfilePromptRules(migrated);
+        if (enforced !== current[key]) { current[key] = enforced; promptsChanged = true; }
     }
+    if (promptsChanged) saveSettingsDebounced();
     return extension_settings[MODULE_NAME];
 }
 

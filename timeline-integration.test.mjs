@@ -13,7 +13,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
     const contextData = { chatId: 'integration-chat', characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
-    const extension_settings = {};
+    const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词' } };
     function $(key) {
         if (typeof key === 'object') return key;
         if (!nodes.has(key)) nodes.set(key, {
@@ -76,6 +76,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         return mod;
     }
     const index = await load(resolve(root, 'index.js')); await index.link((specifier, parent) => load(specifier.startsWith('/') ? specifier : resolve(dirname(parent.identifier), specifier))); await index.evaluate(); await initialized();
+    for (const key of ['fullPrompt', 'incrementalPrompt']) {
+        assert.ok(extension_settings.cwb_system_api[key].startsWith('旧的自定义'));
+        assert.ok(extension_settings.cwb_system_api[key].includes('CWB角色档案强相关筛选规则'));
+        assert.ok(extension_settings.cwb_system_api[key].includes('只允许“档案类型”“姓名”和“剧情.N”字段'));
+    }
     $('#cwb-system-settings').handlers.click.call({ attr: () => 'timeline' });
     assert.equal(document.getElementById('cwb-progress-details').open, true);
     assert.equal(document.getElementById('cwb-detail-timeline').scrolled, true);
