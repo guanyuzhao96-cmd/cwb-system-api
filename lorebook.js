@@ -1,5 +1,5 @@
 import { sanitizeProfileContent } from './profile-utils.mjs';
-import { applyModuleResult, intersectRanges } from './module-progress.mjs';
+import { applyModuleResult, intersectRanges, mergeModuleProgress } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
 import { getContext } from '/scripts/extensions.js';
 import {
@@ -616,8 +616,9 @@ export async function getModuleProgress() {
     const chatId = state.chatId.replace(/ imported/g, '');
     const entry = Object.values(data?.entries ?? {}).find(entry => getKeys(entry).includes('CWB:模块进度') && getKeys(entry).includes(chatId));
     // Do not infer success from legacy prose markers or a single global floor number.
-    if (!entry) return legacyModuleProgress(data, chatId);
-    try { return JSON.parse(entry.content).modules ?? {}; }
+    const legacy = legacyModuleProgress(data, chatId);
+    if (!entry) return legacy;
+    try { return mergeModuleProgress(JSON.parse(entry.content).modules ?? {}, legacy); }
     catch { throw Error('模块进度记录损坏，无法确认完成范围；请手动检查进度条目。'); }
 }
 
@@ -628,7 +629,7 @@ export async function recordModuleResult(module, start, end, error = null) {
     if (!response.ok) throw Error('无法读取模块进度，未标记完成。');
     const data = await response.json();
     const existing = Object.values(data?.entries ?? {}).find(entry => getKeys(entry).includes('CWB:模块进度') && getKeys(entry).includes(chatId));
-    const previous = existing ? JSON.parse(existing.content).modules : legacyModuleProgress(data, chatId);
+    const previous = mergeModuleProgress(existing ? JSON.parse(existing.content).modules : {}, legacyModuleProgress(data, chatId));
     const modules = applyModuleResult(previous, module, start, end, error);
     const content = JSON.stringify({ version: 1, numbering: 'zero-based inclusive', modules });
     const target = existing || createWorldInfoEntry(bookName, data);

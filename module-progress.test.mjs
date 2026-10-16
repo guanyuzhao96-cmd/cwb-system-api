@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyModuleResult, moduleStatus, pendingBatches, intersectRanges } from './module-progress.mjs';
+import { applyModuleResult, moduleStatus, pendingBatches, intersectRanges, mergeModuleProgress } from './module-progress.mjs';
 
 test('a hole cannot be hidden by later success; repair closes only the selected module gap', () => {
     let progress = {};
@@ -31,4 +31,15 @@ test('100 completed floors resume at 101; repeated batch makes no requests', () 
 test('legacy migration only trusts intersected confirmed ranges, including disjoint gaps', () => {
     assert.deepEqual(intersectRanges([[0, 99]], [[0, 79]]), [[0, 79]]);
     assert.deepEqual(intersectRanges([[0, 19], [40, 99]], [[10, 59]]), [[10, 19], [40, 59]]);
+});
+
+test('refresh merges confirmed legacy coverage into partially populated module progress', () => {
+    const legacy = Object.fromEntries(['profiles', 'timeline', 'relationships'].map(module => [module, { completed: [[0, 99]], failed: [] }]));
+    const saved = { profiles: { completed: [[0, 119]], failed: [] }, timeline: { completed: [], failed: [[80, 99]] } };
+    const merged = mergeModuleProgress(saved, legacy);
+    assert.deepEqual(merged.profiles.completed, [[0, 119]]);
+    assert.deepEqual(merged.timeline.completed, [[0, 79]]);
+    assert.deepEqual(merged.timeline.failed, [[80, 99]]);
+    assert.deepEqual(merged.relationships.completed, [[0, 99]]);
+    assert.equal(moduleStatus(merged, 'relationships', 120).through, 100);
 });

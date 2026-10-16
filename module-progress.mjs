@@ -14,6 +14,24 @@ export function applyModuleResult(progress, module, start, end, error = null) {
     };
     return next;
 }
+export function mergeModuleProgress(saved, legacy) {
+    const merged = structuredClone(saved ?? {});
+    for (const module of Object.keys(MODULE_LABELS)) {
+        const current = merged[module] ?? {};
+        const fallback = legacy?.[module] ?? {};
+        const failed = mergeRanges(current.failed ?? []);
+        const completed = mergeRanges([...(fallback.completed ?? []), ...(current.completed ?? [])]);
+        // An explicit failure in the newer record must override older success for that range.
+        merged[module] = {
+            ...fallback,
+            ...current,
+            completed: failed.reduce((ranges, [start, end]) => removeRange(ranges, start, end), completed),
+            failed,
+            latest: current.latest ?? fallback.latest,
+        };
+    }
+    return merged;
+}
 export function moduleStatus(progress, module, total) {
     const item = progress?.[module] ?? {};
     const completed = mergeRanges(item.completed);

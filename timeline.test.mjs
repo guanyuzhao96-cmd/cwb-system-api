@@ -1,4 +1,4 @@
-import { MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches } from './module-progress.mjs';
+import { MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { mergeRelationships } from './relationship-utils.mjs';
 import { test } from 'node:test';
@@ -12,7 +12,7 @@ import { mergeRanges, parseTaggedRanges } from './update-tracker.mjs';
 function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     const context = vm.createContext({
-        MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches,
+        MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         structuredClone, getRequestHeaders: () => ({}),
         fetch: async () => ({ ok: true, json: async () => structuredClone(data) }),
@@ -151,4 +151,17 @@ test('v0.9.8 confirmed 100-floor progress migrates, arbitrary prose markers do n
     assert.deepEqual(JSON.parse(JSON.stringify(reloaded.relationships.completed)), [[0, 99]]);
     const prose = harness({ 0: { uid: 0, key: ['chat'], content: '本条勿动【前197楼总结已完成】' } });
     assert.deepEqual(JSON.parse(JSON.stringify(await prose.context.getModuleProgress())), {});
+});
+
+test('partial saved module progress does not hide confirmed legacy coverage after refresh', async () => {
+    const h = harness({
+        0: { uid: 0, key: ['CWB:更新记录', 'chat', 'CWB:总结楼层:0-99'], content: '三个模块均成功，AI调用1次' },
+        1: { uid: 1, key: ['CWB:故事时间线', 'chat', 'CWB:时间线楼层:1-100'], content: '旧时间线' },
+        2: { uid: 2, key: ['CWB:角色关系汇总', 'chat', 'CWB:关系楼层:0-99'], content: 'A ↔ B：同学' },
+        3: { uid: 3, key: ['CWB:模块进度', 'chat'], content: JSON.stringify({ version: 1, modules: { profiles: { completed: [[0, 119]], failed: [] } } }) },
+    });
+    const progress = await h.context.getModuleProgress();
+    assert.deepEqual(JSON.parse(JSON.stringify(progress.profiles.completed)), [[0, 119]]);
+    assert.deepEqual(JSON.parse(JSON.stringify(progress.timeline.completed)), [[0, 99]]);
+    assert.deepEqual(JSON.parse(JSON.stringify(progress.relationships.completed)), [[0, 99]]);
 });
