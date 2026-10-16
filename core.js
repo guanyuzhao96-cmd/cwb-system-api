@@ -2,7 +2,7 @@ import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profil
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
-import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
+import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
 import { callSystemApi } from './api.js';
 import { state } from './state.js';
@@ -272,6 +272,7 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
                 showDiagnostics();
                 const response = await callSystemApi([
                     { role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT },
+                    { role: 'system', content: TIMELINE_CONCISION_RULES },
                     { role: 'user', content: `【已有时间线】\n${previous || '无'}\n\n【本次新增聊天：第 ${range} 楼】\n${formatMessages(selected)}\n\n请提取本次新增聊天中的新事件；不要将已有记录当成本次输出。` },
                 ], settings.responseLength);
                 diagnostics.push(`API 原始返回（第 ${range} 楼）：\n${response}`);

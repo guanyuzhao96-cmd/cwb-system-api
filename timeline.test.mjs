@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
+import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { mergeRanges, parseTaggedRanges } from './update-tracker.mjs';
 
@@ -13,7 +13,7 @@ function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     const context = vm.createContext({
         MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches,
-        DEFAULT_TIMELINE_INCREMENTAL_PROMPT, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
+        DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         structuredClone, getRequestHeaders: () => ({}),
         fetch: async () => ({ ok: true, json: async () => structuredClone(data) }),
         mergeRanges, parseTaggedRanges, state: { chatId: 'chat' },
@@ -60,10 +60,14 @@ test('refresh fills only the gap between disjoint ranges and repeats without API
     let calls = 0;
     h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: 60 }, () => ({ mes: '正文' })), characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] });
     h.context.$ = () => ({ text() {} });
-    h.context.callSystemApi = async () => { calls++; return '{"时间线":["2025-02-01｜甲｜事件乙"]}'; };
+    h.context.callSystemApi = async messages => {
+        calls++;
+        assert.ok(messages.some(message => message.content === TIMELINE_CONCISION_RULES), 'custom timeline prompt must still receive the compactness rule');
+        return '{"时间线":["2025-02-01｜甲｜事件乙"]}';
+    };
     const source = readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, '');
     vm.runInContext(source, h.context);
-    const result = await h.context.refreshTimeline({ threshold: 20 }, () => {}, 59, 60);
+    const result = await h.context.refreshTimeline({ threshold: 20, timelineIncrementalPrompt: '自定义提示词' }, () => {}, 59, 60);
     assert.equal(result.addedRanges.join(','), '21-40');
     assert.equal(result.coveredCount, 60);
     assert.equal(calls, 1);
