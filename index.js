@@ -7,10 +7,10 @@ import {
     extension_settings,
     renderExtensionTemplateAsync,
 } from '/scripts/extensions.js';
-import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
+import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
-import { convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
+import { cleanupProfileFields, convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state } from './state.js';
 import { notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
@@ -37,6 +37,11 @@ function settings() {
     Object.entries(defaults).forEach(([key, value]) => {
         if (extension_settings[MODULE_NAME][key] === undefined) extension_settings[MODULE_NAME][key] = value;
     });
+    const current = extension_settings[MODULE_NAME];
+    for (const key of ['fullPrompt', 'incrementalPrompt']) {
+        const migrated = migrateBuiltinProfilePrompt(current[key], key);
+        if (migrated !== current[key]) { current[key] = migrated; saveSettingsDebounced(); }
+    }
     return extension_settings[MODULE_NAME];
 }
 
@@ -116,6 +121,14 @@ function bindUi() {
     for (const module of ['profiles', 'timeline', 'relationships']) {
         $(`#cwb-retry-${module}`).on('click', function () { runButton($(this), '补漏中…', () => retryMissingModule(settings(), module)); });
     }
+    $('#cwb-cleanup-profiles').on('click', function () {
+        runButton($(this), '精简中…', async () => {
+            if (state.updating || state.batchRunning || state.timelineUpdating || state.relationshipUpdating || state.repairing) throw Error('请等待当前更新任务结束后再清理。');
+            refreshChatState();
+            const result = await cleanupProfileFields(settings());
+            $('#cwb-status').text(`已精简 ${result.changed} 条当前聊天档案；未识别格式跳过 ${result.skipped} 条。本操作不调用 AI。`);
+        });
+    });
     $('#cwb-test-api').on('click', function () {
         runButton($(this), '测试中…', async () => notify('success', await testSystemApi()));
     });

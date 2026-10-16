@@ -6,7 +6,7 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.10.0</span><h2>更新工作台</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.10.1</span><h2>更新工作台</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
@@ -58,6 +58,8 @@
             <details class="cwb-section">
                 <summary>单项工具与结果<span>时间线、关系和原始回复</span></summary>
                 <div class="cwb-section-body">
+                    <button id="cwb-cleanup-profiles" class="menu_button cwb-full-width">精简已有角色档案（不调用 AI）</button>
+                    <p class="cwb-help">删除好感与计数统计、重复关系字段，保留关键剧情、信息边界、目标、物品和能力。仅处理当前聊天由本插件生成的角色及主角档案。</p>
                     <div class="cwb-secondary-actions"><button id="cwb-refresh-timeline" class="menu_button">单独更新时间线</button><button id="cwb-update-relationships" class="menu_button">单独更新关系</button></div>
                     <details class="cwb-log"><summary>角色关系汇总</summary><pre id="cwb-relationship-status" class="cwb-route-status">尚未读取</pre></details>
                     <details class="cwb-log"><summary>本次 AI 回复与保存详情</summary><pre id="cwb-timeline-debug" class="cwb-route-status">尚未调用 AI</pre></details>
@@ -110,7 +112,7 @@
                     <details class="cwb-prompt-editor"><summary>角色增量规则</summary><label class="cwb-sr-only" for="cwb-incremental-prompt">角色增量规则</label><textarea id="cwb-incremental-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></details>
                     <details class="cwb-prompt-editor"><summary>时间线增量规则</summary><label class="cwb-sr-only" for="cwb-timeline-incremental-prompt">时间线增量规则</label><textarea id="cwb-timeline-incremental-prompt" rows="10" class="text_pole textarea_compact cwb-prompt-large"></textarea></details>
                     <div class="cwb-prompt-actions">
-                        <span class="cwb-help">内置提示词 v0.10.0</span>
+                        <span class="cwb-help">内置提示词 v0.10.1</span>
                         <button id="cwb-reset-prompts" class="menu_button">恢复默认</button>
                     </div>
                 </div>

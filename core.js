@@ -1,3 +1,4 @@
+import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
@@ -108,7 +109,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
     try {
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
         const selected = state.messages.slice(start, end + 1);
-        const oldProfiles = targets.includes('profiles') ? await getTriggeredOldProfiles(settings, selected) : [];
+        const oldProfiles = targets.includes('profiles') ? (await getTriggeredOldProfiles(settings, selected)).map(sanitizeProfileContent).filter(Boolean) : [];
         const oldTimeline = targets.includes('timeline') ? (await getTimelineEntries()).map(entry => entry.content).join('\n') : '';
         const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
         const messages = [];
@@ -116,6 +117,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
         if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
         if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
+        if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
         messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线】\n${oldTimeline || '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
         setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：本批仅调用 AI 1 次…`);
@@ -138,8 +140,10 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
                         const type = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
                         const name = characterNameFromBlock(block);
                         if (!name || ['时间线', 'TIMELINE'].includes(type)) throw Error('角色档案姓名或档案类型不合法');
-                        return { block, name, isUser: type === '主角' || type === 'USER' || name === (getContext()?.name1 || '用户') };
-                    });
+                        const cleaned = sanitizeProfileContent(block);
+                        if (!cleaned || !hasProfileFacts(cleaned)) return null;
+                        return { block: cleaned, name, isUser: type === '主角' || type === 'USER' || name === (getContext()?.name1 || '用户') };
+                    }).filter(Boolean);
                     let userUpdated = false;
                     for (const { block, name, isUser } of prepared) {
                         const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);

@@ -6,13 +6,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT } from './defaults.js';
+import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { mergeRanges, parseTaggedRanges } from './update-tracker.mjs';
 
 function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     const context = vm.createContext({
         MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches,
-        DEFAULT_TIMELINE_INCREMENTAL_PROMPT, structuredClone, getRequestHeaders: () => ({}),
+        DEFAULT_TIMELINE_INCREMENTAL_PROMPT, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
+        structuredClone, getRequestHeaders: () => ({}),
         fetch: async () => ({ ok: true, json: async () => structuredClone(data) }),
         mergeRanges, parseTaggedRanges, state: { chatId: 'chat' },
         getContext: () => ({ characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] }),

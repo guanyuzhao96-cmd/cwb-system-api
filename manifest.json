@@ -7,8 +7,8 @@
   "js": "index.js",
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
-  "version": "0.10.0",
-  "description": "手机布局优化：三项进度总览、主要更新操作、折叠补漏与设置，全屏移动面板。",
+  "version": "0.10.1",
+  "description": "精简角色档案：移除好感、数值记录和重复关系字段，支持无AI清理旧档案。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/Wx-2025/ST-Amily2-Chat-Optimisation"
 }

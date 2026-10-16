@@ -1,3 +1,4 @@
+import { sanitizeProfileContent } from './profile-utils.mjs';
 import { applyModuleResult, intersectRanges } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
 import { getContext } from '/scripts/extensions.js';
@@ -647,4 +648,33 @@ function legacyModuleProgress(data, chatId) {
     const relationships = entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总')).flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:关系楼层:'));
     const confirmed = intersectRanges(intersectRanges(global, timeline), relationships);
     return Object.fromEntries(['profiles', 'timeline', 'relationships'].map(module => [module, { completed: confirmed, failed: [], source: 'v0.9.8三项成功记录与时间线/关系覆盖交叉核对' }]));
+}
+
+
+export async function cleanupProfileFields(settings) {
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const primary = getPrimaryWorldbook();
+    const targets = [...new Set([...books, primary].filter(Boolean))];
+    let changed = 0, skipped = 0;
+    for (const bookName of targets) {
+        const entries = await getEntries(bookName);
+        const patches = [];
+        for (const entry of entries) {
+            const keys = getKeys(entry);
+            if (!keys.includes(chatId) || (!keys.includes('CWB:自动档案') && !keys.includes('CWB:主角档案'))) continue;
+            const content = sanitizeProfileContent(entry.content);
+            if (content === null) { skipped++; continue; }
+            if (content !== entry.content) patches.push({ uid: entry.uid, content });
+        }
+        if (patches.length) {
+            await patchEntries(bookName, patches);
+            const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
+            if (!response.ok) throw Error('精简档案保存后回读失败。');
+            const stored = await response.json();
+            for (const patch of patches) if (stored?.entries?.[patch.uid]?.content !== patch.content) throw Error('精简档案回读不一致，无法确认清理成功。');
+            changed += patches.length;
+        }
+    }
+    return { changed, skipped };
 }
