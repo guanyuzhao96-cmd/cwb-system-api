@@ -1,0 +1,17 @@
+name: Extension regression tests
+on:
+  push:
+    branches: [main, fix/character-card-owned-records]
+  pull_request:
+
+jobs:
+  node-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Unit and integration tests
+        run: node --experimental-vm-modules --test *.test.mjs
