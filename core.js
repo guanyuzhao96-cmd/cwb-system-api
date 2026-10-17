@@ -390,8 +390,8 @@ export async function batchUpdate(settings, onProgress) {
 
 export async function onChatChanged(settings) {
     refreshChatState();
-    if (!settings.enabled) return;
     await manageChatEntries(settings);
+    if (!settings.enabled) return;
     if (settings.multiWorldbookRouting) await updateMasterDirectory(settings);
     const progress = await refreshModuleProgress();
     setStatus(`总层数 ${state.messages.length}；${Object.keys(MODULE_LABELS).map(module => `${MODULE_LABELS[module]}连续完成至${moduleStatus(progress, module, state.messages.length).through}楼`).join('；')}。`);

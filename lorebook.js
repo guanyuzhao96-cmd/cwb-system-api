@@ -17,6 +17,8 @@ import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges, updat
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
 const isEnabled = entry => entry?.enabled !== false && entry?.disable !== true;
+const PLUGIN_REFERENCE_KEYS = ['CWB:世界书目录', 'CWB:角色档案目录', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:更新记录', 'CWB:模块进度'];
+const isPluginReferenceEntry = entry => getKeys(entry).some(key => PLUGIN_REFERENCE_KEYS.includes(key));
 
 export function getPrimaryWorldbook() {
     const context = getContext();
@@ -279,7 +281,13 @@ async function writeTimeline(content, startFloor, endFloor) {
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
     if (!existing.length && content === undefined) return [];
-    if (existing.length === 1 && content === undefined) return existing.map(entry => ({ ...entry, keys: getKeys(entry), enabled: isEnabled(entry) }));
+    if (existing.length === 1 && content === undefined) {
+        if (isEnabled(existing[0])) {
+            applyEntryPatch(existing[0], { enabled: false, type: 'selective' });
+            await saveWorldInfo(bookName, data, true);
+        }
+        return existing.map(entry => ({ ...entry, keys: getKeys(entry), enabled: isEnabled(entry) }));
+    }
     const ranges = existing.flatMap(timelineKeys).map(range => range.split('-').map(Number));
     if (content !== undefined) ranges.push([startFloor + 1, endFloor + 1]);
     const target = existing[0] || createWorldInfoEntry(bookName, data);
@@ -288,7 +296,7 @@ async function writeTimeline(content, startFloor, endFloor) {
         comment: `CWB故事时间线-${chatId}`,
         content: mergeTimelineContent([...existing.map(entry => entry.content), content]),
         keys: ['CWB:故事时间线', chatId, '故事时间线', ...mergeRanges(ranges).map(([start, end]) => `CWB:时间线楼层:${start}-${end}`)],
-        enabled: true, type: 'constant', position: 0, order: 10000, preventRecursion: true,
+        enabled: false, type: 'selective', position: 0, order: 10000, preventRecursion: true,
     });
     const removed = new Set(existing.slice(1));
     for (const key of Object.keys(data.entries)) if (removed.has(data.entries[key])) delete data.entries[key];
@@ -420,8 +428,8 @@ export async function updateMasterDirectory(settings) {
         comment,
         content,
         keys: ['CWB:角色档案目录', chatId, '角色档案目录'],
-        enabled: true,
-        type: 'constant',
+        enabled: false,
+        type: 'selective',
         position: 0,
         order: 10000,
         preventRecursion: true,
@@ -514,8 +522,8 @@ export async function getLastUpdatedFloor(settings) {
 }
 
 export async function manageChatEntries(settings) {
-    if (settings.worldbookTarget === 'custom') return;
-    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const customTarget = settings.worldbookTarget === 'custom';
+    const books = customTarget ? [getPrimaryWorldbook()] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
     if (state.chatId.startsWith('unknown_chat')) return;
     const chatId = state.chatId.replace(/ imported/g, '');
     for (const bookName of books.filter(Boolean)) {
@@ -523,10 +531,15 @@ export async function manageChatEntries(settings) {
         const patches = [];
         for (const entry of entries) {
             const keys = getKeys(entry);
+            if (isPluginReferenceEntry(entry)) {
+                if (entry.enabled) patches.push({ uid: entry.uid, enabled: false, type: 'selective' });
+                continue;
+            }
             if (keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度')) {
                 if (entry.enabled) patches.push({ uid: entry.uid, enabled: false });
                 continue;
             }
+            if (customTarget || settings.enabled === false) continue;
             if (!keys.includes('Amily2角色总集') && !keys.includes(chatId) && !keys.includes(state.chatId)) continue;
             const shouldEnable = keys.includes(chatId) || keys.includes(state.chatId);
             if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
@@ -596,7 +609,7 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
     const target = existing[0] || createWorldInfoEntry(bookName, data);
     if (!target) throw new Error('创建角色关系条目失败。');
     const ranges = mergeRanges([...existing.flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:关系楼层:')), [startIndex, endIndex]]);
-    applyEntryPatch(target, { comment: `CWB角色关系汇总-${chatId}`, content, keys: ['CWB:角色关系汇总', chatId, '角色关系', ...ranges.map(([start, end]) => `CWB:关系楼层:${start}-${end}`)], enabled: true, type: 'constant', position: 0, order: 9998, preventRecursion: true });
+    applyEntryPatch(target, { comment: `CWB角色关系汇总-${chatId}`, content, keys: ['CWB:角色关系汇总', chatId, '角色关系', ...ranges.map(([start, end]) => `CWB:关系楼层:${start}-${end}`)], enabled: false, type: 'selective', position: 0, order: 9998, preventRecursion: true });
     const duplicates = new Set(existing.slice(1));
     for (const key of Object.keys(data.entries)) if (duplicates.has(data.entries[key])) delete data.entries[key];
     await saveWorldInfo(bookName, data, true);

@@ -40,7 +40,24 @@ test('legacy entries merge atomically, retain UID, deduplicate and isolate other
     await h.context.saveTimeline({}, '[时间线.0]: 2025-03-01｜乙｜事件丙', 60, 79);
     assert.deepEqual(Object.keys(h.data().entries), ['0', '2']);
     assert.ok(h.data().entries[0].content.includes('事件丙'));
+    assert.equal(h.data().entries[0].disable, true, 'plugin reference timeline must not be injected');
+    assert.equal(h.data().entries[0].selective, true);
     assert.equal(h.data().entries[2].content, 'other');
+});
+
+test('reference-only entries stay disabled on save and chat refresh', async () => {
+    const h = harness({
+        0: { uid: 0, key: ['CWB:故事时间线', 'chat'], content: '旧时间线', disable: false },
+        1: { uid: 1, key: ['CWB:角色关系汇总', 'chat'], content: '旧关系', disable: false },
+        2: { uid: 2, key: ['CWB:角色档案目录', 'chat'], content: '目录', disable: false },
+        3: { uid: 3, key: ['CWB:自动档案', 'chat', '角色甲'], content: '档案', disable: false },
+    });
+    h.context.listWorldbooks = () => ['main'];
+    await h.context.saveRelationshipSummary('甲 ↔ 乙：同学', 0, 10);
+    assert.equal(h.data().entries[1].disable, true, 'relationship summaries must not be injected');
+    await h.context.manageChatEntries({ enabled: false, worldbookTarget: 'primary', multiWorldbookRouting: false });
+    for (const uid of ['0', '1', '2']) assert.equal(h.data().entries[uid].disable, true);
+    assert.equal(h.data().entries[3].disable, false, 'disabled plugin must not change profile injection');
 });
 
 test('first save and retry keep one entry; failed migration preserves originals', async () => {
