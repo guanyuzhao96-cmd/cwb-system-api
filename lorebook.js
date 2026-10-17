@@ -5,7 +5,6 @@ import { getRequestHeaders } from '/script.js';
 import { extension_settings, getContext } from '/scripts/extensions.js';
 import {
     createWorldInfoEntry,
-    loadWorldInfo,
     saveWorldInfo,
     selected_world_info,
     world_info,
@@ -140,7 +139,7 @@ export async function routeSummary(settings = {}) {
 
 export async function getEntries(bookName) {
     if (!bookName) return [];
-    const data = await loadWorldInfo(bookName);
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) return [];
     return Object.values(data.entries).map(entry => ({
         ...entry,
@@ -165,7 +164,7 @@ function applyEntryPatch(target, patch) {
 }
 
 export async function patchEntries(bookName, patches) {
-    const data = await loadWorldInfo(bookName);
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     for (const patch of patches) {
         const target = data.entries[patch.uid] ?? Object.values(data.entries).find(entry => Number(entry.uid) === Number(patch.uid));
@@ -175,7 +174,7 @@ export async function patchEntries(bookName, patches) {
 }
 
 export async function createEntries(bookName, entries) {
-    const data = await loadWorldInfo(bookName);
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     for (const entry of entries) {
         const target = createWorldInfoEntry(bookName, data);
@@ -186,7 +185,7 @@ export async function createEntries(bookName, entries) {
 }
 
 export async function deleteEntries(bookName, uids) {
-    const data = await loadWorldInfo(bookName);
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     for (const uid of uids) {
         delete data.entries[uid];
@@ -979,7 +978,7 @@ async function writeTimeline(content, startFloor, endFloor) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存故事时间线。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = structuredClone(await loadWorldInfo(bookName));
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
     if (!existing.length && content === undefined) return [];
@@ -1302,7 +1301,7 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存角色关系。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = structuredClone(await loadWorldInfo(bookName));
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error('无法读取主世界书。');
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId));
     const target = existing[0] || createWorldInfoEntry(bookName, data);
