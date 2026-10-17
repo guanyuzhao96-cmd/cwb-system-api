@@ -213,7 +213,8 @@ function referencedProfileBooks(primaryData, chatId) {
     for (const entry of Object.values(primaryData?.entries ?? {})) {
         const keys = getKeys(entry);
         if (!keys.includes('CWB:角色档案目录') || !keys.includes(chatId)) continue;
-        // Follow only the current chat's existing directory; ignore unrelated books.
+        // The plugin's per-chat directory already records where routed profiles live.
+        // Trust only names that still exist in Tavern's worldbook list.
         for (const match of String(entry.content ?? '').matchAll(/世界书《([^》]+)》/g)) {
             const name = match[1].trim();
             if (world_names.includes(name)) books.add(name);
@@ -227,6 +228,8 @@ async function scanGeneratedContent(phase, onProgress) {
     if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天 ID，已停止扫描以保护其他聊天数据。');
     const primary = getPrimaryWorldbook();
     if (!primary) throw Error('当前角色卡没有主世界书，无法安全定位本聊天的生成记录。');
+    // Read the master once, then follow its per-chat profile directory. This avoids
+    // fetching every worldbook in Tavern when the plugin already knows the targets.
     const primaryData = await readWorldbookFromServer(primary);
     const configured = extension_settings?.cwb_system_api;
     const configuredTarget = configured?.worldbookTarget === 'custom' ? configured.customWorldbook : null;
@@ -248,7 +251,8 @@ async function scanGeneratedContent(phase, onProgress) {
         snapshot.entries = [];
         for (const entry of Object.values(snapshot.data.entries)) {
             const keys = getKeys(entry);
-            // Older plugin versions and reordered keys may place either value elsewhere.
+            // Older plugin versions and manually reordered Tavern keys may keep
+            // the chat ID and marker in a different order. Match both by value.
             const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys.includes(marker) && keys.includes(chatId));
             if (!type) continue;
             snapshot.entries.push({
@@ -264,6 +268,7 @@ async function scanGeneratedContent(phase, onProgress) {
         bookCount: books.length,
     };
 }
+
 export async function getGeneratedContentPreview(onProgress) {
     const { chatId, entries } = await scanGeneratedContent('scan', onProgress);
     return { chatId, entries };
@@ -745,11 +750,70 @@ export async function getModuleProgress() {
     const legacy = moduleProgressFromLegacy(data, chatId);
     const identityKey = getStableChatIdentityKey();
     if (saved && entry && identityKey && !getKeys(entry).includes(identityKey)) {
-        // One-time migration binds the old chat-ID record to stable chat metadata.
+        // One-time migration: bind existing chat-ID progress to SillyTavern's
+        // stable chat metadata so a later rename/replacement can still find it.
         await persistUpdateState(bookName, chatId, data, saved);
     }
     if (saved) return mergeModuleProgress(saved.modules ?? {}, legacy);
     return legacy;
+}
+
+export async function getProgressRecoveryCandidates() {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw Error('当前角色卡未绑定主世界书，无法查找旧进度。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const data = await readWorldbookFromServer(bookName);
+    const identityKey = getStableChatIdentityKey();
+    if (findSavedUpdateState(data, chatId).state) return [];
+    const candidates = new Map();
+    for (const entry of Object.values(data.entries)) {
+        const keys = getKeys(entry);
+        if (!keys.includes('CWB:更新状态') || keys.includes(chatId) || (identityKey && keys.includes(identityKey))) continue;
+        const sourceChatId = keys.find(key => key !== 'CWB:更新状态' && !String(key).startsWith('CWB:聊天身份:'));
+        if (!sourceChatId || candidates.has(sourceChatId)) continue;
+        let saved;
+        try { saved = JSON.parse(entry.content); } catch { continue; }
+        if (!saved || typeof saved !== 'object' || Array.isArray(saved)) continue;
+        const modules = saved.modules ?? {};
+        const ranges = Object.values(modules).flatMap(module => module?.completed ?? []);
+        const through = ranges.length ? Math.max(...ranges.map(([, end]) => end)) + 1 : 0;
+        candidates.set(sourceChatId, {
+            chatId: String(sourceChatId), comment: String(entry.comment ?? ''), uid: Number(entry.uid),
+            through, totalMessages: Number(saved.tracking?.totalMessages) || 0,
+            updatedAt: String(saved.updatedAt ?? ''),
+        });
+    }
+    return [...candidates.values()].sort((a, b) => b.through - a.through || b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function copyProgressFromChat(sourceChatId) {
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw Error('当前角色卡未绑定主世界书，无法找回进度。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!chatId || chatId.startsWith('unknown_chat') || !sourceChatId || sourceChatId === chatId) throw Error('当前或来源聊天 ID 无效，未复制进度。');
+    const data = await readWorldbookFromServer(bookName);
+    const existing = findSavedUpdateState(data, chatId);
+    if (existing.state) throw Error('当前聊天已经有进度存档；为防止覆盖，未复制其他聊天记录。');
+    const source = Object.values(data.entries).find(entry => getKeys(entry).includes('CWB:更新状态') && getKeys(entry).includes(sourceChatId));
+    if (!source) throw Error('找不到所选来源的进度存档；原始存档未修改。');
+    let saved;
+    try { saved = JSON.parse(source.content); }
+    catch { throw Error('所选来源的进度存档损坏，未复制任何内容。'); }
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw Error('所选来源的进度存档格式无效，未复制任何内容。');
+    const target = createWorldInfoEntry(bookName, data);
+    if (!target) throw Error('无法创建当前聊天的进度副本。');
+    const identityKey = getStableChatIdentityKey();
+    applyEntryPatch(target, {
+        comment: `CWB插件更新状态-${chatId}`,
+        content: source.content,
+        keys: ['CWB:更新状态', chatId, ...(identityKey ? [identityKey] : [])],
+        enabled: false, type: 'selective', preventRecursion: true,
+    });
+    await saveWorldInfo(bookName, data, true);
+    const persisted = await readWorldbookFromServer(bookName);
+    const stored = Object.values(persisted.entries).find(entry => Number(entry.uid) === Number(target.uid));
+    if (!stored || stored.content !== source.content || !getKeys(stored).includes(chatId)) throw Error('进度副本保存后回读不一致；来源存档仍保留，请刷新后检查。');
+    return { bookName, sourceChatId, chatId, uid: Number(target.uid) };
 }
 
 export async function recordModuleResult(module, start, end, error = null) {
@@ -831,7 +895,8 @@ function findSavedUpdateState(data, chatId) {
 function getStableChatIdentityKey() {
     const metadata = getContext()?.chatMetadata;
     const integrity = String(metadata?.integrity ?? '').trim();
-    // Branches can inherit their parent's integrity ID; keep them file-scoped.
+    // SillyTavern branches may inherit their parent's integrity ID; keep those
+    // scoped to their own chat filename to avoid sharing progress across branches.
     if (!integrity || metadata?.main_chat) return null;
     return `CWB:聊天身份:${integrity}`;
 }
