@@ -1,4 +1,4 @@
-import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
+import { PROFILE_RULES, reconcileProfileExperienceCount, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
@@ -186,7 +186,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         const type = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
                         const name = characterNameFromBlock(block);
                         if (!name || ['时间线', 'TIMELINE'].includes(type)) throw Error('角色档案姓名或档案类型不合法');
-                        const cleaned = sanitizeProfileContent(block);
+                        const cleaned = reconcileProfileExperienceCount(block, oldProfiles);
                         if (!cleaned || !hasProfileFacts(cleaned)) return null;
                         return { block: cleaned, name, isUser: type === '主角' || type === 'USER' || name === (getContext()?.name1 || '用户') };
                     }).filter(Boolean);

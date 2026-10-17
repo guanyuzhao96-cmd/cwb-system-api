@@ -10,6 +10,7 @@ test('full and incremental defaults request the expanded profile fields and deta
         assert.match(prompt, /64个汉字/);
         assert.match(prompt, /严禁记录任何任务或系统相关内容/);
     }
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /旧档案人数为基数.*只增加本轮新剧情明确确认.*成年对象/);
 });
 
 test('saved custom prompts retain their text and receive the current mandatory profile rules once', () => {

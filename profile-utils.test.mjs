@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeProfileContent, hasProfileFacts, PROFILE_RULES } from './profile-utils.mjs';
+import { sanitizeProfileContent, reconcileProfileExperienceCount, hasProfileFacts, PROFILE_RULES } from './profile-utils.mjs';
 
 test('profile sanitizer preserves the requested factual fields and removes unrelated data', () => {
     const source = `[--角色档案开始--]
@@ -29,7 +29,7 @@ test('profile sanitizer preserves the requested factual fields and removes unrel
     assert.match(cleaned, /角色已知信息\.0/);
     assert.match(cleaned, /角色未知信息\.0/);
     assert.match(cleaned, /性经历人员\.0/);
-    assert.match(cleaned, /性经历人数]:1/);
+    assert.match(cleaned, /性经历人数]:3/, 'total count is not recalculated from a partial names list');
     assert.match(cleaned, /额外补充\.0/);
     assert.doesNotMatch(cleaned, /当前状态|长期目标|好感|与主角次数|人际关系|后宫成员|重要物品|已解锁能力/);
     assert.match(cleaned, /性经历人员\.0]:林思雨/);
@@ -70,4 +70,28 @@ test('profile rules explicitly restrict known and unknown facts to plot-critical
     assert.match(PROFILE_RULES, /已知信息.*未知信息.*主线剧情强相关/s);
     assert.match(PROFILE_RULES, /普通日常.*即使真实也不记录/);
     assert.match(PROFILE_RULES, /严禁记录任何任务或系统相关内容/);
+});
+
+test('sanitizing a profile never replaces the stored experience total with list length', () => {
+    const cleaned = sanitizeProfileContent('[--角色档案开始--]\n[姓名]:甲\n[性经历人员.0]:乙\n[性经历人数]:7\n[--角色档案结束--]');
+    assert.match(cleaned, /性经历人数]:7/);
+    assert.match(cleaned, /性经历人员\.0]:乙/);
+});
+
+test('incremental experience count adds only newly named people to the old baseline', () => {
+    const oldProfile = '[--角色档案开始--]\n[档案类型]:角色\n[姓名]:甲\n[性经历人员.0]:乙\n[性经历人数]:5\n[--角色档案结束--]';
+    const incremental = '[--角色档案开始--]\n[档案类型]:角色\n[姓名]:甲\n[性经历人员.0]:丙\n[性经历人员.1]:丙\n[性经历人数]:99\n[剧情.0]:确认与丙发生关系\n[--角色档案结束--]';
+    const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
+    assert.match(reconciled, /性经历人数]:6/);
+    assert.match(reconciled, /性经历人员\.0]:乙/);
+    assert.match(reconciled, /性经历人员\.1]:丙/);
+    assert.doesNotMatch(reconciled, /性经历人员\.2/);
+});
+
+test('incremental experience count does not increment for an already known partner', () => {
+    const oldProfile = '[--角色档案开始--]\n[姓名]:甲\n[性经历人员.0]:乙\n[性经历人数]:5\n[--角色档案结束--]';
+    const incremental = '[--角色档案开始--]\n[姓名]:甲\n[性经历人员.0]:乙\n[性经历人数]:6\n[--角色档案结束--]';
+    const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
+    assert.match(reconciled, /性经历人数]:5/);
+    assert.equal((reconciled.match(/\[性经历人员\.\d+\]/g) ?? []).length, 1);
 });
