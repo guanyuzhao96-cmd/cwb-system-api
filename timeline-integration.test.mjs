@@ -12,7 +12,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     let invalidCombined = false;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
-    const contextData = { chatId: 'integration-chat', characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
+    const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
         if (typeof key === 'object') return key;
@@ -194,6 +194,15 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     modules.get(resolve(root, 'core.js')).namespace.maybeAutoUpdate({ ...batchSettings, enabled: true, autoUpdate: true });
     await new Promise(resolve => setTimeout(resolve, 1350));
     assert.equal(requests.length - beforeAuto, 1, 'automatic threshold update uses one combined call and skips completed floors');
+    const progressStore = modules.get(resolve(root, 'lorebook.js')).namespace;
+    const identityTag = 'CWB:聊天身份:stable-integration-chat';
+    assert.ok(Object.values(disk.entries).some(entry => entry.key.includes('CWB:更新状态') && entry.key.includes(identityTag)));
+    contextData.chatId = 'integration-chat-renamed';
+    modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-chat-renamed';
+    const renamedProgress = await progressStore.getModuleProgress();
+    assert.ok(renamedProgress.timeline.completed.length > 0, 'stable chat metadata retains progress after the chat filename changes');
+    contextData.chatId = 'integration-chat';
+    modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-chat';
     // Legacy whole-chat tracking and module progress should converge into one
     // chat-scoped record without losing disjoint module or duplicate ranges.
     const beforeMigration = structuredClone(disk);
@@ -205,6 +214,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             relationships: { completed: [[0, 1]], failed: [] },
         } }) };
     cache = structuredClone(disk);
+    contextData.chatId = 'migration-chat';
+    contextData.chatMetadata = { integrity: 'migration-integrity' };
     modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'migration-chat';
     await modules.get(resolve(root, 'lorebook.js')).namespace.recordModuleResult('relationships', 2, 3);
     const migrated = Object.values(disk.entries).filter(e => e.key.includes('CWB:更新状态') && e.key.includes('migration-chat'));
@@ -218,6 +229,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.deepEqual(migratedState.tracking.duplicates, [[3, 4]]);
     disk = beforeMigration;
     cache = structuredClone(disk);
+    contextData.chatId = 'integration-chat';
+    contextData.chatMetadata = { integrity: 'stable-integration-chat' };
     modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-chat';
     const beforeDelete = structuredClone(disk);
     const deleteUid = Math.max(-1, ...Object.keys(disk.entries).map(Number)) + 1;
