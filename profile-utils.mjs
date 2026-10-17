@@ -135,3 +135,14 @@ export function hasProfileFacts(content) {
         return Array.isArray(items) ? items.some(item => String(item ?? '').trim()) : typeof items === 'string' && Boolean(items.trim());
     }) || Boolean(parsed['性经历人数']);
 }
+
+export function replaceProfilePlot(content, events) {
+    if (!Array.isArray(events) || events.some(event => typeof event !== 'string')) throw new Error('剧情精简结果必须是字符串列表。');
+    const profile = parseCustomFormat(content);
+    const name = String(profile['姓名'] ?? '').trim();
+    if (!name) throw new Error('原角色档案缺少姓名，无法安全精简。');
+    const cleaned = events.map(event => event.trim()).filter(Boolean);
+    if (cleaned.some(event => event.length > 128)) throw new Error(`角色 ${name} 的单条剧情超过128字。`);
+    profile['剧情'] = cleaned;
+    return buildCustomFormat(profile);
+}
