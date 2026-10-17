@@ -2,7 +2,7 @@ import { parseCustomFormat, buildCustomFormat } from './utils.js';
 
 export const PROFILE_RULES = `角色与主角档案只允许“档案类型”“姓名”“角色已知信息.N”“角色未知信息.N”“性经历人员.N”“性经历人数”“额外补充.N”和“剧情.N”字段，其他字段一律删除，不记录状态、目标、物品、能力、关系、好感或无关数值。
 “角色已知信息”与“角色未知信息”都必须与主线剧情强相关，并会实质影响角色的重要选择、核心关系、重大冲突、关键秘密或后续走向。已知信息只记录该角色亲自经历、亲自获知或已被明确告知的重要事实；不得把叙述者知道、但角色未接触的信息混入。未知信息只记录剧情明确确认且对后续扮演和主线发展重要、但该角色尚未获知的事实或秘密；不得凭空推断角色不知道什么。角色获知后，应从未知移到已知，避免两边重复。普通日常、一般对话、临时情绪、无后续影响的细节、单纯被提及的信息，即使真实也不记录。
-“性经历人员”只记录剧情明确确认已发生性行为的成年对象姓名；仅在对象明确为18岁以上时记录，未成年或年龄不明一律省略。不得依据暧昧、恋爱、亲吻或推测补全经历，不写露骨过程。“性经历人数”按已确认成年对象去重计数，必须与名单一致；不明时省略，只有明确确认没有经历时才写0，不把次数当人数。
+“性经历人员”只记录剧情明确确认已发生性行为的成年对象姓名；仅在对象明确为18岁以上时记录，未成年或年龄不明一律省略。不得依据暧昧、恋爱、亲吻或推测补全经历，不写露骨过程。全量整理时，“性经历人数”按当前全部已确认成年对象去重计数；增量更新时，最终人数必须等于旧档案人数加上本轮剧情中新确认且此前未记录的成年对象数，不得把名单长度当总人数，也不得将旧人数清零。对象名单可能只列出本轮新增对象；合并档案时保留旧名单并去重。没有新增对象时沿用旧人数。不明时省略，只有明确确认没有经历时才写0，不把次数当人数。
 “额外补充”只记录会影响后续理解或角色塑造、且其他字段未覆盖的重要事实；必须与剧情强相关，不得记录普通生活细节或重复已知、未知、剧情内容。
 个人关键剧情必须同时满足：角色亲自参与、亲自获知或直接承受后果；并且事件强力推动或改变主线、重大冲突、关键秘密、角色核心目标或后续走向。只保留重大决定及其结果、关键冲突转折、重要秘密揭露、目标达成/失败及其持续影响等事件。仅被提及、与主线联系弱、无后续影响的事件不得记录。
 角色档案严禁记录任何任务或系统相关内容，包括任务目标/进度/提示、系统消息/提示/面板/状态/数值/奖励、签到、积分、功能说明、操作过程及界面文本；即使角色亲自经历、内容会影响数值或在剧情中出现，也不得写入任何字段。发现这类内容时整条删除，不要改写后保留。
@@ -37,13 +37,51 @@ export function sanitizeProfileContent(content) {
     }
     for (const key of scalars) {
         const value = String(parsed[key] ?? '').trim();
-        if (key === '性经历人数' && clean['性经历人员']?.length) {
-            clean[key] = String(clean['性经历人员'].length);
-        } else if (/^\d+$/.test(value)) {
+        if (/^\d+$/.test(value)) {
             clean[key] = String(Number(value));
         }
     }
     return buildCustomFormat(clean);
+}
+
+function uniquePeople(value) {
+    const items = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+    return [...new Set(items.map(item => String(item ?? '').trim()).filter(Boolean))];
+}
+
+function validCount(value) {
+    const match = String(value ?? '').trim().match(/^\d+$/);
+    return match ? Number(match[0]) : null;
+}
+
+/**
+ * Incremental outputs may list only partners newly confirmed in this batch.
+ * Keep the old count as the baseline, add only newly named partners, and merge
+ * the names so a later batch can deduplicate against the same history.
+ */
+export function reconcileProfileExperienceCount(content, previousProfiles = []) {
+    const sanitized = sanitizeProfileContent(content);
+    if (!sanitized) return null;
+    const current = parseCustomFormat(sanitized);
+    const name = String(current.姓名 ?? '').trim();
+    const previous = previousProfiles.map(profile => parseCustomFormat(profile))
+        .find(profile => String(profile.姓名 ?? '').trim() === name);
+    const currentPeople = uniquePeople(current['性经历人员']);
+    if (!previous) {
+        const count = validCount(current['性经历人数']);
+        const resolved = count === null ? currentPeople.length : Math.max(count, currentPeople.length);
+        if (resolved > 0 || current['性经历人数'] !== undefined) current['性经历人数'] = String(resolved);
+        return buildCustomFormat(current);
+    }
+
+    const previousPeople = uniquePeople(previous['性经历人员']);
+    const previousCount = validCount(previous['性经历人数']) ?? previousPeople.length;
+    const previousSet = new Set(previousPeople);
+    const newPeople = currentPeople.filter(person => !previousSet.has(person));
+    const mergedPeople = uniquePeople([...previousPeople, ...currentPeople]);
+    if (mergedPeople.length) current['性经历人员'] = mergedPeople;
+    current['性经历人数'] = String(previousCount + newPeople.length);
+    return buildCustomFormat(current);
 }
 
 export function hasProfileFacts(content) {

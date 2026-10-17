@@ -11,7 +11,7 @@ import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrat
 import { testSystemApi } from './api.js';
 import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
-import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, deleteReviewedProfileFact, generateWorldbookDirectories, getGeneratedContentPreview, getProfileInfoReviewQueue, getProgressRecoveryCandidates, listWorldbooks, routeSummary } from './lorebook.js';
+import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, deleteReviewedProfileFact, generateWorldbookDirectories, getGeneratedContentPreview, getProfileCountAuditQueue, getProfileInfoReviewQueue, getProgressRecoveryCandidates, listWorldbooks, routeSummary, saveReviewedProfileCount } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { escapeHtml, notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
@@ -36,6 +36,8 @@ const defaults = {
 let profileInfoReview = null;
 let profileInfoReviewIndex = 0;
 let profileInfoReviewDeleted = 0;
+let profileCountAudit = null;
+let profileCountAuditSelected = new Set();
 
 function settings() {
     extension_settings[MODULE_NAME] ??= structuredClone(defaults);
@@ -137,6 +139,71 @@ function assertActiveProfileReview() {
         renderProfileInfoReview();
         throw Error('当前聊天已变化，请重新开始审查，未删除任何信息。');
     }
+}
+
+function renderProfileCountAudit() {
+    const area = $('#cwb-profile-audit');
+    if (!profileCountAudit) { area.prop('hidden', true).empty(); return; }
+    area.prop('hidden', false);
+    if (profileCountAudit.stage === 'select') {
+        const profiles = profileCountAudit.queue.profiles;
+        if (!profiles.length) {
+            area.html('<div class="cwb-review-summary">当前聊天没有可核对的插件生成角色档案。</div>');
+            return;
+        }
+        const items = profiles.map(profile => `<label class="cwb-audit-select-item">
+            <input type="checkbox" data-audit-select="${escapeHtml(profile.id)}" ${profileCountAuditSelected.has(profile.id) ? 'checked' : ''}>
+            <span><b>${escapeHtml(profile.name)}</b><small>世界书：${escapeHtml(profile.bookName)} · 当前人数：${profile.currentCount === null ? '未记录' : profile.currentCount} · 名单：${profile.partners.length} 人${profile.needsAttention ? ' · 建议核对' : ''}</small></span>
+        </label>`).join('');
+        area.html(`<div class="cwb-review-head"><strong>选择要核对的角色档案</strong><span>${profileCountAuditSelected.size}/${profiles.length} 已选</span></div>
+            <div class="cwb-audit-select-list">${items}</div>
+            <button class="menu_button cwb-full-width" data-audit-action="begin" ${profileCountAuditSelected.size ? '' : 'disabled'}>核对所选档案</button>
+            <small class="cwb-help">只列出当前聊天中插件生成的角色档案和主角档案；手工条目及其他聊天不会修改。</small>`);
+        return;
+    }
+    const profiles = profileCountAudit.profiles;
+    if (profileCountAudit.index >= profiles.length) {
+        area.html(`<div class="cwb-review-summary">核对完成：已检查 ${profileCountAudit.reviewed}/${profiles.length} 条，修改 ${profileCountAudit.corrected} 条。<button class="menu_button cwb-full-width" data-audit-action="close">结束核对</button></div>`);
+        return;
+    }
+    const profile = profiles[profileCountAudit.index];
+    const suggested = profile.referenceCount ?? profile.currentCount ?? profile.partners.length;
+    const partnerText = profile.partners.length ? profile.partners.join('、') : '档案未列出对象姓名';
+    const plotText = profile.plot.length ? profile.plot.join('\n') : '档案未记录个人关键剧情';
+    const comparison = profile.referenceCount === undefined ? '' : `<div class="cwb-audit-warning" data-audit-diff="${profile.referenceCount === profile.currentCount ? 'same' : 'different'}">动态信息：${profile.referenceCount} 人；角色档案：${profile.currentCount === null ? '未记录' : `${profile.currentCount} 人`}；${profile.referenceCount === profile.currentCount ? '两者一致' : '存在出入，请核对后修改。'}</div>`;
+    const warning = profile.needsAttention
+        ? `名单中有 ${profile.partners.length} 个不同对象，高于当前记录的 ${profile.currentCount ?? 0} 人，请检查是否漏计。`
+        : profile.currentCount === null
+            ? '档案没有有效人数，请结合既往人数与剧情新增对象填写最终人数。'
+            : '请按“旧档案人数 + 本轮剧情中新确认的不同对象”核对。人员名单可能只列出部分历史对象，不要直接把名单长度当作总人数。';
+    area.html(`<div class="cwb-review-head"><strong>核对 ${profileCountAudit.index + 1}/${profiles.length}：${escapeHtml(profile.name)}</strong><span>${profileCountAudit.reviewed} 条已完成</span></div>
+        ${comparison}<div class="cwb-audit-warning">${escapeHtml(warning)}</div>
+        <div class="cwb-audit-evidence"><h4>当前档案人数</h4><p>${profile.currentCount === null ? '未记录' : `${profile.currentCount} 人`}</p></div>
+        <div class="cwb-audit-evidence"><h4>性经历人员名单（${profile.partners.length} 个不同姓名）</h4><p>${escapeHtml(partnerText)}</p></div>
+        <div class="cwb-audit-evidence"><h4>用于对照的个人关键剧情</h4><p>${escapeHtml(plotText)}</p></div>
+        <label class="cwb-audit-count-row">动态信息人数<input id="cwb-audit-dynamic-count" class="text_pole" type="number" min="0" max="999999" step="1" inputmode="numeric" placeholder="手动填入动态信息中的人数" value="${profile.referenceCount === undefined ? '' : escapeHtml(profile.referenceCount)}"></label>
+        <button class="menu_button cwb-full-width" data-audit-action="compare">对比动态信息与档案人数</button>
+        <label class="cwb-audit-count-row">核对后的最终人数<input id="cwb-audit-count" class="text_pole" type="number" min="0" max="999999" step="1" inputmode="numeric" value="${escapeHtml(suggested)}"></label>
+        <div class="cwb-audit-actions"><button class="menu_button" data-audit-action="confirm">确认当前档案无误</button><button class="menu_button cwb-primary" data-audit-action="save">保存修改并继续</button></div>
+        <button class="menu_button cwb-full-width" data-audit-action="close">结束核对</button>
+        <small class="cwb-help">保存只修改《${escapeHtml(profile.bookName)}》中该角色档案的“性经历人数”字段，并核验写回结果。</small>`);
+}
+
+function assertActiveProfileAudit() {
+    refreshChatState();
+    if (!profileCountAudit || state.chatId !== profileCountAudit.chatId) {
+        profileCountAudit = null;
+        profileCountAuditSelected = new Set();
+        renderProfileCountAudit();
+        throw Error('当前聊天已变化，请重新扫描档案；未修改任何信息。');
+    }
+}
+
+function advanceProfileCountAudit(corrected = false) {
+    profileCountAudit.reviewed++;
+    if (corrected) profileCountAudit.corrected++;
+    profileCountAudit.index++;
+    renderProfileCountAudit();
 }
 
 async function runButton(button, label, action) {
@@ -255,6 +322,89 @@ function bindUi() {
             renderProfileInfoReview();
         } catch (error) {
             notify('warning', error.message);
+        }
+    });
+    $('#cwb-start-profile-audit').on('click', function () {
+        runButton($(this), '读取档案中…', async () => {
+            const release = acquireOperationLock(state, '性经历人数核对');
+            try {
+                refreshChatState();
+                const queue = await getProfileCountAuditQueue();
+                profileCountAudit = { stage: 'select', chatId: queue.chatId, queue };
+                profileCountAuditSelected = new Set();
+                renderProfileCountAudit();
+                $('#cwb-status').text(`已读取 ${queue.total} 条当前聊天插件档案；请勾选要核对的条目。`);
+            } finally { release(); }
+        });
+    });
+    $('#cwb-profile-audit').on('change', '[data-audit-select]', function () {
+        const id = $(this).attr('data-audit-select');
+        if ($(this).prop('checked')) profileCountAuditSelected.add(id);
+        else profileCountAuditSelected.delete(id);
+        renderProfileCountAudit();
+    });
+    $('#cwb-profile-audit').on('click', '[data-audit-action]', async function () {
+        try {
+            assertActiveProfileAudit();
+            const action = $(this).attr('data-audit-action');
+            if (action === 'close') {
+                profileCountAudit = null;
+                profileCountAuditSelected = new Set();
+                renderProfileCountAudit();
+                return;
+            }
+            if (action === 'begin') {
+                const selected = profileCountAudit.queue.profiles.filter(profile => profileCountAuditSelected.has(profile.id));
+                if (!selected.length) throw Error('请先至少勾选一条档案。');
+                profileCountAudit = { stage: 'review', chatId: profileCountAudit.chatId, profiles: selected, index: 0, reviewed: 0, corrected: 0 };
+                renderProfileCountAudit();
+                return;
+            }
+            const profile = profileCountAudit.profiles[profileCountAudit.index];
+            if (action === 'compare') {
+                const referenceValue = String($('#cwb-audit-dynamic-count').val() ?? '').trim();
+                const referenceCount = Number(referenceValue);
+                if (!/^\d+$/.test(referenceValue) || !Number.isSafeInteger(referenceCount) || referenceCount < 0 || referenceCount > 999999) {
+                    throw Error('请输入动态信息中 0 到 999999 之间的整数人数，再进行对比。');
+                }
+                profile.referenceCount = referenceCount;
+                renderProfileCountAudit();
+                $('#cwb-status').text(`已对比 ${profile.name}：动态信息 ${referenceCount} 人，档案 ${profile.currentCount === null ? '未记录' : `${profile.currentCount} 人`}。`);
+                return;
+            }
+            const rawCount = String($('#cwb-audit-count').val() ?? '').trim();
+            const count = Number(rawCount);
+            if (!/^\d+$/.test(rawCount) || !Number.isSafeInteger(count) || count < 0 || count > 999999) {
+                throw Error('请输入 0 到 999999 之间的整数人数。');
+            }
+            if (action === 'confirm') {
+                if (profile.referenceCount !== undefined && profile.referenceCount !== profile.currentCount) throw Error('动态信息与档案人数不一致，请按既往人数和新增剧情核对后点击“保存修改并继续”。');
+                if (profile.currentCount !== count) throw Error('输入值与当前档案人数不同；如需修正，请点击“保存修改并继续”。');
+                advanceProfileCountAudit(false);
+                return;
+            }
+            if (action === 'save') {
+                if (profile.currentCount === count) {
+                    advanceProfileCountAudit(false);
+                    return;
+                }
+                const release = acquireOperationLock(state, '保存性经历人数核对结果');
+                try {
+                    const result = await saveReviewedProfileCount(profileCountAudit, profile, count);
+                    profile.currentCount = count;
+                    profile.rawCount = String(count);
+                    profile.content = result.content;
+                    profile.needsAttention = profile.partners.length > count;
+                    advanceProfileCountAudit(true);
+                    $('#cwb-status').text(`已核对 ${result.name}：性经历人数已更新为 ${count}，并完成服务端回读核验。`);
+                } finally { release(); }
+                return;
+            }
+            throw Error('未知的档案核对操作。');
+        } catch (error) {
+            notify('error', error.message);
+            $('#cwb-status').text(`档案核对未完成：${error.message}`);
+            renderProfileCountAudit();
         }
     });
     $('#cwb-cleanup-profiles').on('click', function () {

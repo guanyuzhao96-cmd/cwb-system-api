@@ -310,6 +310,82 @@ export async function getProfileInfoReviewQueue(onProgress) {
     return { chatId, characters, totalFacts: characters.reduce((sum, character) => sum + character.facts.length, 0) };
 }
 
+function profileListValues(value) {
+    const items = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+    return [...new Set(items.map(item => String(item ?? '').trim()).filter(Boolean))];
+}
+
+export async function getProfileCountAuditQueue(onProgress) {
+    const { chatId, entries } = await scanGeneratedContent('profile-audit', onProgress);
+    const profiles = entries.filter(item => ['CWB:自动档案', 'CWB:主角档案'].includes(item.marker)).map(entry => {
+        const parsed = parseCustomFormat(entry.content);
+        const rawName = String(parsed?.姓名 ?? '').replace(/^[\s"'“‘【\[]+|[\s"'”’】\]]+$/g, '').trim();
+        const name = rawName || entry.keys.find(key => !['CWB:自动档案', 'CWB:主角档案', chatId].includes(key) && !/^\d+-\d+$/.test(String(key))) || entry.comment || `UID ${entry.uid}`;
+        const rawCount = String(parsed?.性经历人数 ?? '').trim();
+        const currentCount = /^\d+$/.test(rawCount) ? Number(rawCount) : null;
+        const partners = profileListValues(parsed?.性经历人员);
+        const plot = profileListValues(parsed?.剧情);
+        return {
+            id: `${entry.bookName}:${entry.uid}`,
+            name,
+            bookName: entry.bookName,
+            uid: entry.uid,
+            marker: entry.marker,
+            keys: entry.keys,
+            content: entry.content,
+            currentCount,
+            rawCount,
+            partners,
+            plot,
+            needsAttention: currentCount === null ? partners.length > 0 : partners.length > currentCount,
+        };
+    }).sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
+    return { chatId, profiles, total: profiles.length };
+}
+
+export async function saveReviewedProfileCount(review, profile, nextCount) {
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!review || review.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
+        throw Error('当前聊天已变化或无法确认，未修改档案。请重新开始核对。');
+    }
+    const count = Number(nextCount);
+    if (!profile || !['CWB:自动档案', 'CWB:主角档案'].includes(profile.marker)
+        || !Number.isSafeInteger(count) || count < 0 || count > 999999) {
+        throw Error('核对结果无效；人数必须是 0 到 999999 的整数。');
+    }
+    const current = await scanGeneratedContent('profile-audit-verify');
+    const currentEntry = current.entries.find(entry => entry.bookName === profile.bookName
+        && entry.uid === profile.uid
+        && entry.marker === profile.marker
+        && entry.keys.includes(chatId));
+    if (!currentEntry || currentEntry.content !== profile.content || currentEntry.keys.join('\0') !== profile.keys.join('\0')) {
+        throw Error('审查期间档案已变化，未修改任何内容。请重新扫描后再核对。');
+    }
+    const data = current.snapshots.get(profile.bookName);
+    const target = data?.entries?.[profile.uid] ?? Object.values(data?.entries ?? {}).find(entry => Number(entry.uid) === Number(profile.uid));
+    if (!target) throw Error('目标档案条目已不存在，未修改内容。');
+    const content = String(target.content ?? '');
+    const newline = content.includes('\r\n') ? '\r\n' : '\n';
+    const lines = content.split(/\r?\n/);
+    const countLines = [];
+    lines.forEach((line, index) => { if (/^\[性经历人数\]\s*:/.test(line)) countLines.push(index); });
+    if (countLines.length) {
+        const first = countLines[0];
+        lines[first] = `[性经历人数]:${count}`;
+        for (const duplicate of countLines.slice(1).reverse()) lines.splice(duplicate, 1);
+    } else {
+        const endMarker = lines.findIndex(line => /^\[--角色档案结束--\]$/.test(line));
+        lines.splice(endMarker >= 0 ? endMarker : lines.length, 0, `[性经历人数]:${count}`);
+    }
+    const nextContent = lines.join(newline);
+    target.content = nextContent;
+    await saveWorldInfo(profile.bookName, data, true);
+    const persisted = await readWorldbookFromServer(profile.bookName);
+    const stored = persisted.entries?.[profile.uid] ?? Object.values(persisted.entries ?? {}).find(entry => Number(entry.uid) === Number(profile.uid));
+    if (!stored || stored.content !== nextContent) throw Error('修改后世界书回读不一致，无法确认结果；请刷新后复查。');
+    return { name: profile.name, previousCount: profile.currentCount, count, bookName: profile.bookName, content: nextContent };
+}
+
 export async function deleteReviewedProfileFact(review, fact) {
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!review || review.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {

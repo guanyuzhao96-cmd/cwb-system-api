@@ -283,6 +283,46 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     disk = structuredClone(reviewBaseline);
     cache = structuredClone(disk);
 
+    const auditQueue = await lorebook.getProfileCountAuditQueue();
+    assert.ok(auditQueue.profiles.length > 0, 'manual count audit lists current-chat generated profiles');
+    let auditProfile = auditQueue.profiles[0];
+    const auditEntryBefore = disk.entries[auditProfile.uid].content;
+    disk.entries[auditProfile.uid].content += '\n并发修改保护测试';
+    await assert.rejects(lorebook.saveReviewedProfileCount(auditQueue, auditProfile, 7), /档案已变化/);
+    disk = structuredClone(reviewBaseline);
+    cache = structuredClone(disk);
+    const freshAudit = await lorebook.getProfileCountAuditQueue();
+    auditProfile = freshAudit.profiles[0];
+    const auditSave = await lorebook.saveReviewedProfileCount(freshAudit, auditProfile, 7);
+    const auditEntryAfter = disk.entries[auditProfile.uid].content;
+    assert.match(auditEntryAfter, /\[性经历人数\]:7/);
+    assert.equal(auditEntryAfter.replace(/^\[性经历人数\]:.*$/m, ''), auditEntryBefore.replace(/^\[性经历人数\]:.*$/m, ''), 'count edit changes no other profile fields');
+    assert.equal(auditSave.count, 7);
+
+    const auditButton = $('#cwb-start-profile-audit');
+    auditButton.handlers.click.call(auditButton);
+    for (let i = 0; i < 100 && auditButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
+    assert.equal(auditButton.prop('disabled'), false);
+    assert.match($('#cwb-profile-audit').html(), /选择要核对的角色档案/);
+    const auditArea = $('#cwb-profile-audit');
+    auditArea.handlers.change.call({ attr: () => auditProfile.id, prop: key => key === 'checked' });
+    assert.match(auditArea.html(), /核对所选档案/);
+    auditArea.handlers.click.call({ attr: () => 'begin' });
+    assert.match(auditArea.html(), /用于对照的个人关键剧情/);
+    $('#cwb-audit-dynamic-count').val('8');
+    auditArea.handlers.click.call({ attr: () => 'compare' });
+    assert.match(auditArea.html(), /动态信息：8 人/);
+    assert.match(auditArea.html(), /存在出入/);
+    $('#cwb-audit-count').val('7');
+    await auditArea.handlers.click.call({ attr: () => 'confirm' });
+    assert.match($('#cwb-status').text(), /人数不一致/);
+    assert.match(disk.entries[auditProfile.uid].content, /\[性经历人数\]:7/);
+    $('#cwb-audit-count').val('8');
+    await auditArea.handlers.click.call({ attr: () => 'save' });
+    assert.match(auditArea.html(), /核对完成/);
+    assert.match(auditArea.html(), /修改 1 条/);
+    assert.match(disk.entries[auditProfile.uid].content, /\[性经历人数\]:8/);
+
     const deleteUid = Math.max(-1, ...Object.keys(disk.entries).map(Number)) + 1;
     disk.entries[deleteUid] = { uid: deleteUid, key: ['手工条目', 'integration-chat'], comment: '手写资料', content: '必须保留' };
     disk.entries[deleteUid + 1] = { uid: deleteUid + 1, key: ['CWB:自动档案', 'other-chat', '角色甲', '1-3'], comment: '动态-角色甲', content: '其他聊天资料' };
