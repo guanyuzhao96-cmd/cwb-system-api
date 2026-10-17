@@ -1,6 +1,6 @@
 import { parseTimelineRecords, formatTimelineRecords } from './timeline-utils.mjs';
 import { sanitizeProfileContent } from './profile-utils.mjs';
-import { applyModuleResult, intersectRanges, mergeModuleProgress } from './module-progress.mjs';
+import { applyModuleResult, intersectRanges, mergeModuleProgress, MODULE_LABELS } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
 import { getContext } from '/scripts/extensions.js';
 import {
@@ -14,14 +14,21 @@ import {
 import { state } from './state.js';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
 import { directoryContent, duplicateLines, findRoutedBook, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
-import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges, updateTrackerContent } from './update-tracker.mjs';
+import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges } from './update-tracker.mjs';
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
 const isEnabled = entry => entry?.enabled !== false && entry?.disable !== true;
-const PLUGIN_REFERENCE_KEYS = ['CWB:世界书目录', 'CWB:角色档案目录', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:更新记录', 'CWB:模块进度'];
+const PLUGIN_REFERENCE_KEYS = ['CWB:世界书目录', 'CWB:角色档案目录', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度'];
 const isPluginReferenceEntry = entry => getKeys(entry).some(key => PLUGIN_REFERENCE_KEYS.includes(key));
 const ALWAYS_ON_REFERENCE_KEYS = ['CWB:故事时间线', 'CWB:角色关系汇总'];
 const isAlwaysOnReferenceEntry = entry => getKeys(entry).some(key => ALWAYS_ON_REFERENCE_KEYS.includes(key));
+const GENERATED_ENTRY_TYPES = [
+    ['CWB:自动档案', '角色档案'], ['CWB:主角档案', '主角档案'],
+    ['CWB:故事时间线', '时间线'], ['CWB:角色关系汇总', '角色关系'],
+    ['CWB:角色档案目录', '档案目录'], ['CWB:更新状态', '更新进度'],
+    ['CWB:更新记录', '旧版更新记录'], ['CWB:模块进度', '旧版模块进度'],
+    ['Amily2角色总集', '角色总览'],
+];
 
 export function getPrimaryWorldbook() {
     const context = getContext();
@@ -188,6 +195,75 @@ export async function deleteEntries(bookName, uids) {
     await saveWorldInfo(bookName, data, true);
 }
 
+export async function getGeneratedContentPreview() {
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天 ID，已停止扫描以保护其他聊天数据。');
+    const books = [...new Set([...listWorldbooks(), getPrimaryWorldbook()].filter(Boolean))];
+    const entries = [];
+    for (const bookName of books) {
+        const data = await readWorldbookFromServer(bookName);
+        for (const entry of Object.values(data.entries)) {
+            const keys = getKeys(entry);
+            const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys[0] === marker && keys[1] === chatId);
+            if (!type) continue;
+            entries.push({
+                bookName, uid: Number(entry.uid), marker: type[0], label: type[1],
+                comment: String(entry.comment ?? ''), content: String(entry.content ?? ''), keys: [...keys],
+            });
+        }
+    }
+    return { chatId, entries };
+}
+
+export async function deleteGeneratedContent(preview) {
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!preview || preview.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
+        throw Error('当前聊天已变化或无法确认，未删除任何内容。');
+    }
+    const current = await getGeneratedContentPreview();
+    const signature = item => JSON.stringify([item.bookName, item.uid, item.marker, item.label, item.comment, item.content, item.keys]);
+    const expected = preview.entries.map(signature).sort();
+    const actual = current.entries.map(signature).sort();
+    if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+        throw Error('预览后生成条目发生变化，未删除任何内容。请重新扫描并确认。');
+    }
+    if (!current.entries.length) return { deleted: 0, byType: {} };
+
+    const grouped = new Map();
+    for (const item of current.entries) {
+        if (!grouped.has(item.bookName)) grouped.set(item.bookName, []);
+        grouped.get(item.bookName).push(item);
+    }
+    let deleted = 0;
+    const byType = {};
+    for (const [bookName, targets] of grouped) {
+        const data = await readWorldbookFromServer(bookName);
+        const uidSet = new Set(targets.map(item => item.uid));
+        const toDelete = Object.values(data.entries).filter(entry => {
+            const keys = getKeys(entry);
+            return uidSet.has(Number(entry.uid)) && keys[0] === targets.find(item => item.uid === Number(entry.uid))?.marker && keys[1] === chatId;
+        });
+        if (toDelete.length !== targets.length) throw Error(`世界书《${bookName}》条目核对失败，未继续删除该世界书内容。`);
+        for (const entry of toDelete) {
+            const key = Object.keys(data.entries).find(k => data.entries[k] === entry);
+            if (key !== undefined) delete data.entries[key];
+            const type = targets.find(item => item.uid === Number(entry.uid))?.label;
+            if (type) byType[type] = (byType[type] ?? 0) + 1;
+        }
+        await saveWorldInfo(bookName, data, true);
+        const persisted = await readWorldbookFromServer(bookName);
+        const remaining = Object.values(persisted.entries).some(entry => {
+            const target = targets.find(item => item.uid === Number(entry.uid));
+            const keys = getKeys(entry);
+            return Boolean(target && keys[0] === target.marker && keys[1] === chatId);
+        });
+        if (remaining) throw Error(`世界书《${bookName}》删除后回读仍发现目标条目；请刷新后检查。`);
+        deleted += toDelete.length;
+    }
+    state.routeCache = null;
+    return { deleted, byType };
+}
+
 export async function saveCharacterDescription(settings, characterName, content, startFloor, endFloor) {
     const bookName = await routeWorldbook(settings, characterName);
     if (!bookName) return null;
@@ -303,16 +379,18 @@ export async function getChatUpdateTracking(totalMessages = 0) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) return null;
     const chatId = state.chatId.replace(/ imported/g, '');
-    const entries = await getEntries(bookName);
-    const entry = entries.find(item => getKeys(item).includes('CWB:更新记录') && getKeys(item).includes(chatId));
-    const keys = entry ? getKeys(entry) : [];
-    const completedRanges = mergeRanges(parseTaggedRanges(keys, 'CWB:总结楼层:'));
-    const duplicateRanges = mergeRanges(parseTaggedRanges(keys, 'CWB:重复总结楼层:'));
-    const trackingStartTag = keys.map(key => String(key).match(/^CWB:追踪起点:(\d+)$/)).find(Boolean);
-    const trackingStartIndex = trackingStartTag ? Number(trackingStartTag[1]) : Math.max(0, Number(totalMessages) || 0);
+    const data = await readWorldbookFromServer(bookName);
+    const { entry, state: saved } = findSavedUpdateState(data, chatId);
+    const legacy = saved ? [] : findLegacyUpdateRecords(data, chatId);
+    const legacyTracking = trackingFromLegacy(legacy, totalMessages);
+    const completedRanges = mergeRanges(saved?.tracking?.completed ?? legacyTracking.completed);
+    const duplicateRanges = mergeRanges(saved?.tracking?.duplicates ?? legacyTracking.duplicates);
+    const trackingStartIndex = Number.isInteger(saved?.tracking?.startIndex)
+        ? saved.tracking.startIndex
+        : legacyTracking.startIndex;
     return {
         bookName,
-        entry,
+        entry: entry ?? legacy[0] ?? null,
         completedRanges,
         duplicateRanges,
         trackingStartIndex,
@@ -324,40 +402,31 @@ export async function recordChatUpdateRange(startIndex, endIndex, totalMessages,
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存全聊天更新记录。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const entries = await getEntries(bookName);
-    const existing = entries.find(item => getKeys(item).includes('CWB:更新记录') && getKeys(item).includes(chatId));
-    const oldKeys = existing ? getKeys(existing) : [];
-    const oldCompleted = parseTaggedRanges(oldKeys, 'CWB:总结楼层:');
-    const oldDuplicates = parseTaggedRanges(oldKeys, 'CWB:重复总结楼层:');
-    const oldStart = oldKeys.map(key => String(key).match(/^CWB:追踪起点:(\d+)$/)).find(Boolean);
-    const trackingStartIndex = oldStart ? Number(oldStart[1]) : Math.max(0, Number(initialTrackingStart) || 0);
+    const data = await readWorldbookFromServer(bookName);
+    const { state: saved } = findSavedUpdateState(data, chatId);
+    const oldTrackers = findLegacyUpdateRecords(data, chatId);
+    const oldTracking = trackingFromLegacy(oldTrackers, initialTrackingStart);
+    const oldCompleted = mergeRanges(saved?.tracking?.completed ?? oldTracking.completed);
+    const oldDuplicates = mergeRanges(saved?.tracking?.duplicates ?? oldTracking.duplicates);
+    const trackingStartIndex = Number.isInteger(saved?.tracking?.startIndex)
+        ? saved.tracking.startIndex
+        : oldTracking.startIndex;
     const overlaps = overlappingRanges(startIndex, endIndex, oldCompleted);
-    const completedRanges = mergeRanges([...oldCompleted, [startIndex, endIndex]]);
-    const duplicateRanges = mergeRanges([...oldDuplicates, ...overlaps]);
-    const keys = [
-        'CWB:更新记录', chatId, '全聊天总结记录',
-        `CWB:追踪起点:${trackingStartIndex}`,
-        ...completedRanges.map(([start, end]) => `CWB:总结楼层:${start}-${end}`),
-        ...duplicateRanges.map(([start, end]) => `CWB:重复总结楼层:${start}-${end}`),
-    ];
-    const content = updateTrackerContent({
-        completedRanges,
-        duplicateRanges,
-        totalMessages,
-        trackingStartIndex,
-        latest: `${new Date().toLocaleString()}｜${startIndex}-${endIndex}楼｜${latest}`,
-    });
-    const data = {
-        comment: `CWB全聊天更新记录-${chatId}`,
-        content,
-        keys,
-        enabled: false,
-        type: 'selective',
-        preventRecursion: true,
+    const nextState = {
+        ...(saved ?? {}),
+        version: 2,
+        modules: saved?.modules ?? moduleProgressFromLegacy(data, chatId),
+        tracking: {
+            startIndex: trackingStartIndex,
+            totalMessages: Math.max(0, Number(totalMessages) || 0),
+            completed: mergeRanges([...oldCompleted, [startIndex, endIndex]]),
+            duplicates: mergeRanges([...oldDuplicates, ...overlaps]),
+            latest: `${new Date().toLocaleString()}｜${startIndex}-${endIndex}楼｜${latest}`,
+        },
+        updatedAt: new Date().toISOString(),
     };
-    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...data }]);
-    else await createEntries(bookName, [data]);
-    return { overlaps, completedRanges, duplicateRanges, trackingStartIndex };
+    await persistUpdateState(bookName, chatId, data, nextState);
+    return { overlaps, completedRanges: nextState.tracking.completed, duplicateRanges: nextState.tracking.duplicates, trackingStartIndex };
 }
 
 export async function updateRoster(settings, processedNames, startFloor, endFloor) {
@@ -610,34 +679,30 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
 export async function getModuleProgress() {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw Error('当前角色卡未绑定主世界书，无法读取模块进度。');
-    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
-    if (!response.ok) throw Error('无法从服务端读取模块进度。');
-    const data = await response.json();
     const chatId = state.chatId.replace(/ imported/g, '');
-    const entry = Object.values(data?.entries ?? {}).find(entry => getKeys(entry).includes('CWB:模块进度') && getKeys(entry).includes(chatId));
-    // Do not infer success from legacy prose markers or a single global floor number.
-    const legacy = legacyModuleProgress(data, chatId);
-    if (!entry) return legacy;
-    try { return mergeModuleProgress(JSON.parse(entry.content).modules ?? {}, legacy); }
-    catch { throw Error('模块进度记录损坏，无法确认完成范围；请手动检查进度条目。'); }
+    const data = await readWorldbookFromServer(bookName);
+    const { state: saved } = findSavedUpdateState(data, chatId);
+    const legacy = moduleProgressFromLegacy(data, chatId);
+    if (saved) return mergeModuleProgress(saved.modules ?? {}, legacy);
+    return legacy;
 }
 
 export async function recordModuleResult(module, start, end, error = null) {
     const bookName = getPrimaryWorldbook();
+    if (!bookName) throw Error('当前角色卡未绑定主世界书，无法保存模块进度。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
-    if (!response.ok) throw Error('无法读取模块进度，未标记完成。');
-    const data = await response.json();
-    const existing = Object.values(data?.entries ?? {}).find(entry => getKeys(entry).includes('CWB:模块进度') && getKeys(entry).includes(chatId));
-    const previous = mergeModuleProgress(existing ? JSON.parse(existing.content).modules : {}, legacyModuleProgress(data, chatId));
+    const data = await readWorldbookFromServer(bookName);
+    const { state: saved } = findSavedUpdateState(data, chatId);
+    const previous = mergeModuleProgress(saved?.modules ?? legacyModuleProgress(data, chatId), moduleProgressFromLegacy(data, chatId));
     const modules = applyModuleResult(previous, module, start, end, error);
-    const content = JSON.stringify({ version: 1, numbering: 'zero-based inclusive', modules });
-    const target = existing || createWorldInfoEntry(bookName, data);
-    if (!target) throw Error('无法创建模块进度条目。');
-    applyEntryPatch(target, { comment: `CWB各模块更新进度-${chatId}`, content, keys: ['CWB:模块进度', chatId], enabled: false, type: 'selective', preventRecursion: true });
-    await saveWorldInfo(bookName, data, true);
-    const verify = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
-    if (!verify.ok || (await verify.json())?.entries?.[target.uid]?.content !== content) throw Error('模块进度服务端回读不一致，不能确认已标记完成。');
+    const nextState = {
+        ...(saved ?? {}),
+        version: 2,
+        modules,
+        tracking: saved?.tracking ?? trackingFromLegacy(findLegacyUpdateRecords(data, chatId)),
+        updatedAt: new Date().toISOString(),
+    };
+    await persistUpdateState(bookName, chatId, data, nextState);
     return modules;
 }
 
@@ -654,14 +719,105 @@ export async function verifyProfileContent(settings, name, content, isUser = fal
 
 function legacyModuleProgress(data, chatId) {
     const entries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes(chatId));
-    const tracker = entries.find(entry => getKeys(entry).includes('CWB:更新记录'));
+    const trackers = entries.filter(entry => getKeys(entry).includes('CWB:更新记录'));
     // v0.9.8 wrote this explicit confirmation only after all three sections saved.
-    if (!String(tracker?.content ?? '').includes('三个模块均成功，AI调用1次')) return {};
-    const global = parseTaggedRanges(getKeys(tracker), 'CWB:总结楼层:');
+    if (!trackers.some(entry => String(entry.content ?? '').includes('三个模块均成功，AI调用1次'))) return {};
+    const global = mergeRanges(trackers.flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:总结楼层:')));
     const timeline = entries.filter(entry => getKeys(entry).includes('CWB:故事时间线')).flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:时间线楼层:').map(([a, b]) => [a - 1, b - 1]));
     const relationships = entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总')).flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:关系楼层:'));
     const confirmed = intersectRanges(intersectRanges(global, timeline), relationships);
     return Object.fromEntries(['profiles', 'timeline', 'relationships'].map(module => [module, { completed: confirmed, failed: [], source: 'v0.9.8三项成功记录与时间线/关系覆盖交叉核对' }]));
+}
+
+function parseTrackingStart(keys, fallback = 0) {
+    const tag = (keys ?? []).map(key => String(key).match(/^CWB:追踪起点:(\d+)$/)).find(Boolean);
+    return tag ? Number(tag[1]) : Math.max(0, Number(fallback) || 0);
+}
+
+function findSavedUpdateState(data, chatId) {
+    const matches = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:更新状态') && getKeys(entry).includes(chatId));
+    if (!matches.length) return { entry: null, state: null, duplicates: [] };
+    let state;
+    try { state = JSON.parse(matches[0].content); }
+    catch { throw Error('更新状态存档损坏，无法确认进度；原始存档已保留，请先导出备份。'); }
+    if (!state || typeof state !== 'object' || Array.isArray(state)) throw Error('更新状态存档格式无效，原始存档已保留。');
+    return { entry: matches[0], state, duplicates: matches.slice(1) };
+}
+
+function findLegacyUpdateRecords(data, chatId) {
+    return Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:更新记录') && getKeys(entry).includes(chatId));
+}
+
+function trackingFromLegacy(entries = [], fallbackStart = 0) {
+    const keys = entries.flatMap(getKeys);
+    const latestEntry = [...entries].reverse().find(entry => /最近一次：/.test(String(entry.content ?? '')));
+    const latest = String(latestEntry?.content ?? '').match(/最近一次：(.+)/)?.[1] ?? '';
+    return {
+        startIndex: parseTrackingStart(keys, fallbackStart),
+        totalMessages: 0,
+        completed: mergeRanges(parseTaggedRanges(keys, 'CWB:总结楼层:')),
+        duplicates: mergeRanges(parseTaggedRanges(keys, 'CWB:重复总结楼层:')),
+        latest,
+    };
+}
+
+function moduleProgressFromLegacy(data, chatId) {
+    const current = legacyModuleProgress(data, chatId);
+    const oldEntries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:模块进度') && getKeys(entry).includes(chatId));
+    if (!oldEntries.length) return current;
+    try {
+        const parsed = oldEntries.map(entry => JSON.parse(entry.content).modules ?? {});
+        const saved = Object.fromEntries(Object.keys(MODULE_LABELS).map(module => {
+            const rows = parsed.map(item => item[module] ?? {});
+            return [module, {
+                completed: mergeRanges(rows.flatMap(row => row.completed ?? [])),
+                failed: mergeRanges(rows.flatMap(row => row.failed ?? [])),
+                latest: rows.map(row => row.latest).filter(Boolean).at(-1),
+            }];
+        }));
+        return mergeModuleProgress(saved, current);
+    }
+    catch { throw Error('旧版模块进度存档损坏，无法迁移；原始存档已保留。'); }
+}
+
+async function readWorldbookFromServer(bookName) {
+    const response = await fetch('/api/worldinfo/get', {
+        method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache',
+    });
+    if (!response.ok) throw Error(`无法从服务端读取世界书《${bookName}》。`);
+    const data = await response.json();
+    if (!data?.entries) throw Error(`世界书《${bookName}》返回的数据格式无效。`);
+    return data;
+}
+
+async function persistUpdateState(bookName, chatId, data, nextState) {
+    const matches = Object.values(data.entries).filter(entry => {
+        const keys = getKeys(entry);
+        return keys.includes(chatId) && (keys.includes('CWB:更新状态') || keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度'));
+    });
+    const target = matches.find(entry => getKeys(entry).includes('CWB:更新状态')) || matches[0] || createWorldInfoEntry(bookName, data);
+    if (!target) throw Error('无法创建统一更新状态条目。');
+    const canonical = {
+        comment: `CWB插件更新状态-${chatId}`,
+        content: JSON.stringify({ version: 2, numbering: 'zero-based inclusive', ...nextState }),
+        keys: ['CWB:更新状态', chatId],
+        enabled: false,
+        type: 'selective',
+        preventRecursion: true,
+    };
+    applyEntryPatch(target, canonical);
+    for (const duplicate of matches) {
+        if (duplicate === target) continue;
+        const key = Object.keys(data.entries).find(key => data.entries[key] === duplicate);
+        if (key !== undefined) delete data.entries[key];
+    }
+    await saveWorldInfo(bookName, data, true);
+    const persisted = await readWorldbookFromServer(bookName);
+    const stored = Object.values(persisted.entries).find(entry => Number(entry.uid) === Number(target.uid));
+    if (!stored || stored.content !== canonical.content || !getKeys(stored).includes('CWB:更新状态')) {
+        throw Error('统一更新状态保存后回读不一致；进度未确认，请刷新后检查。');
+    }
+    return stored;
 }
 
 
