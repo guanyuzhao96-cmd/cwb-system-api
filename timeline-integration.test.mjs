@@ -227,7 +227,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     disk.entries[deleteUid + 3] = { uid: deleteUid + 3, key: ['CWB:自动档案', 'integration-chat', '角色乙', '1-3'], comment: '动态-角色乙', content: '当前聊天生成档案' };
     cache = structuredClone(disk);
     const lorebook = modules.get(resolve(root, 'lorebook.js')).namespace;
-    const preview = await lorebook.getGeneratedContentPreview();
+    const previewProgress = [];
+    const preview = await lorebook.getGeneratedContentPreview(item => previewProgress.push(item));
+    assert.ok(previewProgress.some(item => item.phase === 'scan' && item.current === item.total));
     assert.ok(preview.entries.some(e => e.marker === 'CWB:自动档案'));
     assert.ok(preview.entries.some(e => e.marker === 'CWB:故事时间线'));
     assert.ok(preview.entries.some(e => e.marker === 'CWB:更新状态'));
@@ -236,7 +238,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.equal(preview.entries.some(e => e.uid === deleteUid + 2), false, 'global directory entries are excluded from the deletion preview');
     const changedTarget = preview.entries[0];
     disk.entries[changedTarget.uid].content += '\n预览后手动修改';
-    await assert.rejects(lorebook.deleteGeneratedContent(preview), /发生变化/);
+    const deleteProgress = [];
+    await assert.rejects(lorebook.deleteGeneratedContent(preview, item => deleteProgress.push(item)), /发生变化/);
+    assert.ok(deleteProgress.some(item => item.phase === 'verify'), 'deletion reports its recheck phase');
     assert.ok(Object.values(disk.entries).some(e => e.key.includes('CWB:故事时间线')), 'stale preview aborts before deleting any entries');
     cache = structuredClone(disk);
     const deleteButton = $('#cwb-delete-generated');
