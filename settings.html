@@ -6,7 +6,7 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.13.2</span><h2>聊天世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.13.3</span><h2>聊天世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
@@ -76,6 +76,10 @@
                     </div>
                     <div class="cwb-subsection">
                         <h3>整理生成内容</h3>
+                        <button id="cwb-scan-duplicates" class="menu_button cwb-full-width">扫描重复存档与分支启用异常</button>
+                        <p class="cwb-help">检查主世界书、已激活和档案目录引用的世界书，列出具体条目。确认后备份并修复同聊天重复档案、总览、时间线及可安全合并的记录；不同分支只停用，差异不明的内容跳过并提示。</p>
+                        <pre id="cwb-duplicate-report" class="cwb-route-status" hidden></pre>
+                        <button id="cwb-repair-duplicates" class="menu_button cwb-full-width" hidden>备份并修复以上问题</button>
                         <button id="cwb-cleanup-profiles" class="menu_button cwb-full-width">精简已有角色档案</button>
                         <p class="cwb-help">不调用 AI；仅保留姓名和个人关键剧情，只处理当前聊天由本插件生成的角色及主角档案。</p>
                         <button id="cwb-delete-generated" class="menu_button cwb-full-width cwb-danger">删除本聊天生成的世界书数据</button>

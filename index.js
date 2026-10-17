@@ -15,6 +15,7 @@ import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, delet
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { escapeHtml, notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
+import { scanDuplicateArchives, repairDuplicateArchives } from './lorebook.js';
 
 const defaults = {
     enabled: false,
@@ -34,6 +35,7 @@ const defaults = {
 };
 
 let profileInfoReview = null;
+let duplicateArchivePreview = null;
 let profileInfoReviewIndex = 0;
 let profileInfoReviewDeleted = 0;
 let profileCountAudit = null;
@@ -223,6 +225,48 @@ async function runButton(button, label, action) {
 }
 
 function bindUi() {
+    $('#cwb-scan-duplicates').on('click', function () {
+        runButton($(this), '正在检查重复存档…', async () => {
+            const release = acquireOperationLock(state, '重复存档检查');
+            try {
+                refreshChatState();
+                duplicateArchivePreview = null;
+                $('#cwb-repair-duplicates').prop('hidden', true);
+                const preview = await scanDuplicateArchives(message => $('#cwb-status').text(message));
+                duplicateArchivePreview = preview;
+                const lines = [`已检查 ${preview.bookCount} 本相关世界书；仅合并当前聊天内的重复项，不跨分支合并。`,
+                    ...preview.plans.flatMap(plan => [`《${plan.bookName}》`, ...plan.actions]),
+                    ...(preview.warnings.length ? ['以下项目未自动处理：', ...preview.warnings] : []),
+                ];
+                if (!preview.plans.length) lines.push('没有发现可自动修复的问题。');
+                $('#cwb-duplicate-report').prop('hidden', false).text(lines.join('\n'));
+                $('#cwb-repair-duplicates').prop('hidden', !preview.plans.length);
+            } finally { release(); }
+        });
+    });
+    $('#cwb-repair-duplicates').on('click', function () {
+        runButton($(this), '正在修复并核验…', async () => {
+            const preview = duplicateArchivePreview;
+            if (!preview?.plans.length) throw Error('请先检查重复存档。');
+            if (!window.confirm(`确认执行报告列出的 ${preview.plans.reduce((sum, plan) => sum + plan.actions.length, 0)} 项修复？\n同聊天重复条目会合并后移除冗余条目；其他分支只停用，手工条目不改动。修复前将下载受影响世界书的完整备份。`)) return;
+            const release = acquireOperationLock(state, '重复存档修复');
+            try {
+                const backup = { backupType: 'CWB重复存档修复前备份', generatedAt: new Date().toISOString(), books: preview.plans.map(plan => ({ name: plan.bookName, data: plan.original })) };
+                const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
+                const link = document.createElement('a');
+                link.href = url; link.download = `cwb-archive-backup-${Date.now()}.json`;
+                document.body.append(link); link.click(); link.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+                const count = await repairDuplicateArchives(preview, message => $('#cwb-status').text(message));
+                $('#cwb-duplicate-report').text(`已完成并回读核验 ${count} 项修复。冗余条目已合并移除，修复前数据保存在下载的备份中；可重新扫描复查。`);
+                notify('success', `已完成 ${count} 项修复，合并移除的条目可从下载备份找回。`);
+            } finally {
+                duplicateArchivePreview = null;
+                $('#cwb-repair-duplicates').prop('hidden', true);
+                release();
+            }
+        });
+    });
     $('#cwb-system-settings').on('input change', 'input, textarea, select', saveFromUi);
     $('#cwb-system-settings').on('click', '[data-cwb-progress]', function () {
         const module = $(this).attr('data-cwb-progress');

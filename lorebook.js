@@ -274,6 +274,104 @@ export async function getGeneratedContentPreview(onProgress) {
     return { chatId, entries };
 }
 
+export async function scanDuplicateArchives(onProgress = () => {}) {
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天，停止检查。');
+    const primary = getPrimaryWorldbook();
+    if (!primary) throw Error('当前角色没有绑定主世界书。');
+    const primaryData = await readWorldbookFromServer(primary);
+    const books = [...new Set([primary, ...getActiveWorldbookNames(), ...referencedProfileBooks(primaryData, chatId), extension_settings?.cwb_system_api?.customWorldbook].filter(Boolean))];
+    const plans = [], warnings = [];
+    for (let i = 0; i < books.length; i++) {
+        const bookName = books[i];
+        onProgress(`正在检查《${bookName}》 ${i + 1}/${books.length}…`);
+        const original = bookName === primary ? primaryData : await readWorldbookFromServer(bookName);
+        const next = structuredClone(original), groups = new Map(), actions = [];
+        for (const entry of Object.values(next.entries)) {
+            const keys = getKeys(entry);
+            const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys.includes(marker));
+            if (!type) continue;
+            if (!keys.includes(chatId)) {
+                if (isEnabled(entry) && ['CWB:自动档案', 'CWB:主角档案', 'Amily2角色总集'].includes(type[0])) {
+                    applyEntryPatch(entry, { enabled: false });
+                    actions.push(`停用其他聊天条目：${entry.comment || type[1]}（UID ${entry.uid}）；保留内容`);
+                }
+                continue;
+            }
+            const isProfile = ['CWB:自动档案', 'CWB:主角档案'].includes(type[0]);
+            const name = isProfile ? sanitizeName(parseCustomFormat(entry.content).姓名 || '') : '';
+            if (isProfile && !name) { warnings.push(`《${bookName}》UID ${entry.uid} 姓名无法识别，跳过`); continue; }
+            const id = JSON.stringify([type[0], name]);
+            if (!groups.has(id)) groups.set(id, { marker: type[0], label: name || type[1], entries: [] });
+            groups.get(id).entries.push(entry);
+        }
+        for (const { marker, label, entries } of groups.values()) {
+            if (entries.length < 2) continue;
+            entries.sort((a, b) => Number(a.uid) - Number(b.uid));
+            const target = entries[0];
+            let content;
+            try {
+                if (['CWB:自动档案', 'CWB:主角档案'].includes(marker)) {
+                    content = mergeProfileDelta(entries.slice(0, -1).map(entry => entry.content), entries.at(-1).content);
+                } else if (marker === 'CWB:故事时间线') {
+                    if (entries.some(entry => String(entry.content).trim() && !parseTimelineRecords(entry.content).length)) throw Error('时间线含不可识别内容，未合并');
+                    content = mergeTimelineContent(entries.map(entry => entry.content));
+                } else if (marker === 'Amily2角色总集') {
+                    const names = [...new Set(entries.flatMap(entry => [...String(entry.content).matchAll(/^\[([^:\n]+):/gm)].map(match => match[1].trim())))];
+                    if (!names.length) throw Error('总览名单无法识别');
+                    const end = Math.max(...entries.flatMap(entry => [...String(entry.content).matchAll(/【前(\d+)楼/g)].map(match => Number(match[1]))), 0);
+                    content = `当前聊天角色总览：\n${names.sort().map(name => `[${name}: (详细查看绿灯角色条目)]`).join('\n')}\n{{// 【前${end}楼角色世界书已更新完成】}}`;
+                } else if (marker === 'CWB:更新状态') {
+                    const scoped = { entries: Object.fromEntries(entries.map(entry => [entry.uid, entry])) };
+                    content = JSON.stringify(findSavedUpdateState(scoped, chatId).state);
+                } else if (entries.every(entry => entry.content === target.content)) {
+                    content = target.content;
+                } else {
+                    throw Error('内容存在差异，需人工核对，未自动合并');
+                }
+            } catch (error) { warnings.push(`《${bookName}》${label}：${error.message}`); continue; }
+            const keys = [...new Set(entries.flatMap(getKeys))];
+            applyEntryPatch(target, { content, keys });
+            for (const duplicate of entries.slice(1)) {
+                const key = Object.keys(next.entries).find(key => next.entries[key] === duplicate);
+                if (key !== undefined) delete next.entries[key];
+            }
+            actions.push(`合并 ${label}：${entries.map(entry => `${entry.comment || label}（UID ${entry.uid}）`).join('、')} → 保留 UID ${target.uid}`);
+        }
+        if (actions.length) plans.push({ bookName, original, next, actions });
+    }
+    if (state.chatId.replace(/ imported/g, '') !== chatId) throw Error('检查期间聊天变化，请重新检查。');
+    return { chatId, plans, warnings, bookCount: books.length };
+}
+
+export async function repairDuplicateArchives(preview, onProgress = () => {}) {
+    const assertChat = () => {
+        const context = getContext();
+        const active = context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId;
+        if (!preview || state.chatId.replace(/ imported/g, '') !== preview.chatId || active.replace(/ imported/g, '') !== preview.chatId) throw Error('聊天已变化，停止修复。');
+    };
+    assertChat();
+    // Revalidate every affected book before the first mutation.
+    for (const plan of preview.plans) {
+        const current = await readWorldbookFromServer(plan.bookName);
+        if (JSON.stringify(current) !== JSON.stringify(plan.original)) throw Error(`《${plan.bookName}》在扫描后发生变化，未开始修复；请重新扫描。`);
+    }
+    let repaired = 0;
+    for (const plan of preview.plans) {
+        assertChat();
+        const current = await readWorldbookFromServer(plan.bookName);
+        if (JSON.stringify(current) !== JSON.stringify(plan.original)) throw Error(`《${plan.bookName}》已变化，停止；此前已修复 ${repaired} 项。`);
+        assertChat();
+        await saveWorldInfo(plan.bookName, plan.next, true);
+        const persisted = await readWorldbookFromServer(plan.bookName);
+        if (JSON.stringify(persisted.entries) !== JSON.stringify(plan.next.entries)) throw Error(`《${plan.bookName}》修复后回读不一致；请保留备份并复查。`);
+        repaired += plan.actions.length;
+        onProgress(`已核验《${plan.bookName}》，完成 ${repaired} 项修复`);
+    }
+    state.routeCache = null;
+    return repaired;
+}
+
 const REVIEWABLE_INFO_LINE = /^\[(角色已知信息|角色未知信息)\.(\d+)\]\s*:\s*(.*)$/;
 
 function splitProfileInfoFacts(value) {

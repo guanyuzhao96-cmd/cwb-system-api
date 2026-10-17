@@ -455,6 +455,16 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const archiveSettings = { incremental: true, enabled: true, multiWorldbookRouting: false, worldbookTarget: 'primary' };
     const oldDisabled = await lorebook.getTriggeredOldProfiles(archiveSettings, [{ message: '复用角色' }]);
     assert.ok(oldDisabled.some(content => content.includes('旧关键剧情')), 'disabled archives remain available as incremental evidence');
+    const duplicateScan = await lorebook.scanDuplicateArchives();
+    assert.ok(duplicateScan.plans.some(plan => plan.actions.some(action => action.includes('合并 复用角色') && action.includes(`UID ${profileUid}`))), 'scan reports exact profile names and UIDs');
+    const scanBaseline = structuredClone(disk);
+    disk.entries[profileUid].content += '\n并发修改';
+    await assert.rejects(lorebook.repairDuplicateArchives(duplicateScan), /发生变化/);
+    assert.ok(disk.entries[profileUid + 1], 'stale preview never removes duplicates');
+    disk = scanBaseline; cache = structuredClone(disk);
+    assert.ok(await lorebook.repairDuplicateArchives(duplicateScan) > 0);
+    const repeatedScan = await lorebook.scanDuplicateArchives();
+    assert.ok(!repeatedScan.plans.some(plan => plan.actions.some(action => action.includes('合并 复用角色'))), 'repair and rescan are idempotent');
     const delta = archive('本轮新增剧情');
     await lorebook.saveCharacterDescription(archiveSettings, '复用角色', delta, 40, 59);
     await lorebook.verifyProfileContent(archiveSettings, '复用角色', delta);
