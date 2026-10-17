@@ -565,13 +565,15 @@ export async function saveRegeneratedProfileInfo(review, profile, known, unknown
         throw Error('当前聊天已变化或无法确认，未修改档案。请重新扫描审查队列。');
     }
     if (!profile || !['CWB:自动档案', 'CWB:主角档案'].includes(profile.marker)
-        || !profile.keys?.includes(chatId) || !Array.isArray(known) || !Array.isArray(unknown)
+        || !belongsToCardOrLegacyChat(profile.keys ?? [], currentCardOwnerKey(), chatId)
+        && !isStoryProfile({ key: profile.keys }, profileStoryScope())
+        || !Array.isArray(known) || !Array.isArray(unknown)
         || [...known, ...unknown].some(item => typeof item !== 'string' || !item.trim())) {
         throw Error('重新生成结果或目标档案无效，未修改内容。');
     }
     const current = await scanGeneratedContent('regenerate-profile-info-verify');
     const entry = current.entries.find(item => item.bookName === profile.bookName && item.uid === profile.uid
-        && item.marker === profile.marker && item.keys.includes(chatId));
+        && item.marker === profile.marker);
     if (!entry || entry.content !== profile.content || entry.keys.join('\0') !== profile.keys.join('\0')) {
         throw Error('重新生成期间档案已变化，未修改任何内容。请重新扫描后再试。');
     }
@@ -888,6 +890,10 @@ function profileStoryScope() {
 
 export function currentCardOwnerKey() {
     return cardOwnerKey(getContext(), getPrimaryWorldbook());
+}
+
+export function isCurrentCharacterProfile(entry) {
+    return isStoryProfile(entry, profileStoryScope());
 }
 
 function cardEntries(entries, marker, scope = profileStoryScope()) {
@@ -1232,6 +1238,7 @@ export async function getLastUpdatedFloor(settings) {
 }
 
 export async function manageChatEntries(settings) {
+    const cardKey = currentCardOwnerKey();
     const customTarget = settings.worldbookTarget === 'custom';
     const books = customTarget ? [getPrimaryWorldbook()] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
     if (state.chatId.startsWith('unknown_chat')) return;
@@ -1243,8 +1250,9 @@ export async function manageChatEntries(settings) {
             const keys = getKeys(entry);
             if (isPluginReferenceEntry(entry)) {
                 if (isAlwaysOnReferenceEntry(entry)) {
-                    if (keys.includes(chatId)) {
-                        if (!entry.enabled || entry.constant !== true || entry.selective === true) patches.push({ uid: entry.uid, enabled: true, type: 'constant' });
+                    if (belongsToCardOrLegacyChat(keys, cardKey, chatId)) {
+                        if (!entry.enabled || entry.constant !== true || entry.selective === true)
+                            patches.push({ uid: entry.uid, enabled: true, type: 'constant' });
                     } else if (entry.enabled || entry.constant === true) {
                         patches.push({ uid: entry.uid, enabled: false, type: 'selective' });
                     }
@@ -1257,9 +1265,13 @@ export async function manageChatEntries(settings) {
                 if (entry.enabled) patches.push({ uid: entry.uid, enabled: false });
                 continue;
             }
-            if (customTarget || settings.enabled === false) continue;
-            if (!keys.includes('Amily2角色总集') && !keys.includes(chatId) && !keys.includes(state.chatId)) continue;
-            const shouldEnable = keys.includes(chatId) || keys.includes(state.chatId);
+            const profile = keys.includes('CWB:自动档案') || keys.includes('CWB:主角档案');
+            const roster = keys.includes('Amily2角色总集');
+            if (!profile && !roster) continue;
+            // Keep the archives of this card visible across chat switches. Disable
+            // other cards' archives instead of leaving them globally injected.
+            const shouldEnable = settings.enabled !== false
+                && belongsToCardOrLegacyChat(keys, cardKey, chatId);
             if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
         }
         if (patches.length) await patchEntries(bookName, patches);
