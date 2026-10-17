@@ -126,7 +126,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
     if (!targets.length) throw Error('未选择更新模块。');
     const chatId = state.chatId;
     state.updating = true;
-    const names = [], failures = [], successes = [];
+    const names = [], failures = [], successes = [], skippedProfiles = [];
     try {
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
         const selected = state.messages.slice(start, end + 1);
@@ -195,7 +195,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         assertCurrentChat(chatId);
                         const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
                         assertCurrentChat(chatId);
-                        if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，缺失时先激活目标世界书并扫描生成目录。`);
+                        if (!saved) { skippedProfiles.push(name); continue; }
                         await verifyProfileContent(settings, name, block, isUser);
                         assertCurrentChat(chatId);
                         if (isUser) userUpdated = true; else names.push(saved);
@@ -229,7 +229,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
             assertCurrentChat(chatId);
             await recordChatUpdateRange(start, end, state.messages.length, '三个模块均成功，AI调用1次', 0);
         }
-        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
+        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${skippedProfiles.length ? `；无匹配目录，已跳过：${[...new Set(skippedProfiles)].join('、')}` : ''}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
         setStatus(message);
         if (failures.length) {
             const failedModules = targets.filter(module => failures.some(failure => failure.startsWith(`${MODULE_LABELS[module]}：`)));

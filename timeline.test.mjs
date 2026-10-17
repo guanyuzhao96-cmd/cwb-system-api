@@ -196,6 +196,39 @@ test('unified no-profile update still saves timeline and relationships with exac
 });
 
 
+test('missing profile route skips that role, continues others and completes coverage without error report', async () => {
+    const h = harness();
+    const attempted = [], verified = [], roster = [], reports = [], statuses = [];
+    h.context.getContext = () => ({ chatId: 'chat', characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }], name1: '用户', chat: [{ mes: '新事件' }] });
+    Object.assign(h.context, {
+        $: () => ({ text() {} }), getTargetWorldbook: () => 'main',
+        getTriggeredOldProfiles: async () => [], getTimelineEntries: async () => [],
+        getRelationshipSummary: async () => '', recordChatUpdateRange: async () => {}, notify() {},
+        COMBINED_OUTPUT_PROTOCOL, RELATIONSHIP_PROMPT: '', mergeRelationships,
+        callSystemApi: async () => 'response',
+        parseCombinedParts: () => ({ profiles: { value: ['周韵涵', '有目录角色'] } }),
+        parseCustomFormat: () => ({ 档案类型: '角色' }), characterNameFromBlock: block => block,
+        reconcileProfileExperienceCount: block => block, hasProfileFacts: () => true,
+        createErrorReport: (...args) => reports.push(args),
+    });
+    vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
+    Object.assign(h.context, {
+        characterNameFromBlock: block => block,
+        saveCharacterDescription: async (_, name) => { attempted.push(name); return name === '周韵涵' ? null : name; },
+        verifyProfileContent: async (_, name) => verified.push(name),
+        updateRoster: async (_, names) => roster.push(...names),
+        setStatus: message => statuses.push(message),
+    });
+    const result = await h.context.updateRange({}, 0, 0, { silent: true, modules: ['profiles'] });
+    assert.deepEqual(attempted, ['周韵涵', '有目录角色']);
+    assert.deepEqual(verified, ['有目录角色']);
+    assert.deepEqual(roster, ['有目录角色']);
+    assert.deepEqual(Array.from(result), ['有目录角色']);
+    assert.equal(reports.length, 0);
+    assert.ok(statuses.some(message => message.includes('无匹配目录，已跳过：周韵涵')));
+    assert.equal((await h.context.getModuleProgress()).profiles.completed[0][1], 0);
+});
+
 test('v0.9.8 confirmed 100-floor progress migrates, arbitrary prose markers do not', async () => {
     const h = harness({
         0: { uid: 0, key: ['CWB:更新记录', 'chat', 'CWB:总结楼层:0-99'], content: '三个模块均成功，AI调用1次' },
