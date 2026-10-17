@@ -122,6 +122,80 @@ async function migrateProfileOwnershipToCard(settings, names = null) {
     return changed;
 }
 
+/** Find legacy chat-owned profile entries in every book associated with this card. */
+export async function previewChatBoundProfilesForCardMigration(settings, onProgress = () => {}) {
+    const cardKey = getCardArchiveKey();
+    const primary = getPrimaryWorldbook();
+    if (!primary || !world_names.includes(primary)) throw Error('当前角色卡没有可用的主世界书，无法安全定位档案。');
+    const primaryData = await readWorldbookFromServer(primary);
+    const routeBooks = Object.keys(settings?.worldbookRoutes ?? {}).filter(name => world_names.includes(name));
+    const books = [...new Set([
+        ...await profileArchiveBooks(settings, getTargetWorldbook(settings)),
+        ...referencedProfileBooks(primaryData),
+        ...routeBooks,
+    ].filter(name => name && world_names.includes(name)))];
+    const rows = await mapWithConcurrency(books, 4, async (bookName, index) => {
+        const data = await readWorldbookFromServer(bookName);
+        const entries = Object.values(data.entries).map(entry => ({ ...entry, keys: getKeys(entry), enabled: isEnabled(entry) }));
+        onProgress({ current: index + 1, total: books.length, bookName });
+        return { bookName, entries };
+    });
+    const candidates = [];
+    for (const { bookName, entries } of rows) for (const entry of entries) {
+        const keys = getKeys(entry);
+        const marker = ['CWB:自动档案', 'CWB:主角档案'].find(value => keys.includes(value));
+        if (!marker || keys.includes(cardKey)) continue;
+        // A stable owner for another character card is never reassigned.
+        if (keys.some(key => String(key).startsWith('CWB:角色卡:'))) continue;
+        // These legacy entries have no stable card key; keep only entries that
+        // carry a chat owner key. We intentionally do not filter by the active
+        // chat ID so archives from replaced chats are included as well.
+        if (!keys.some(key => !String(key).startsWith('CWB:'))) continue;
+        candidates.push({
+            bookName,
+            uid: Number(entry.uid),
+            marker,
+            name: profileName(entry) || '未识别姓名',
+            comment: String(entry.comment ?? ''),
+            keys,
+            nextKeys: [marker, cardKey, profileName(entry) || '未识别姓名'],
+        });
+    }
+    candidates.sort((a, b) => a.bookName.localeCompare(b.bookName, 'zh-CN')
+        || a.name.localeCompare(b.name, 'zh-CN') || a.uid - b.uid);
+    return { cardKey, books, candidates };
+}
+
+/** Re-scan and convert every candidate in place, verifying each updated UID. */
+export async function migrateChatBoundProfilesToCard(settings, expectedPreview, onProgress = () => {}) {
+    const current = await previewChatBoundProfilesForCardMigration(settings, update => onProgress({ phase: 'scan', ...update }));
+    const signature = items => JSON.stringify(items.map(item => [item.bookName, item.uid, item.marker, item.name, item.keys]));
+    if (!expectedPreview || expectedPreview.cardKey !== current.cardKey
+        || signature(expectedPreview.candidates) !== signature(current.candidates)) {
+        throw Error('扫描后档案列表发生变化；为避免漏项或错改，请重新扫描后再转换。');
+    }
+    const byBook = new Map();
+    for (const item of current.candidates) {
+        (byBook.get(item.bookName) ?? byBook.set(item.bookName, []).get(item.bookName))
+            .push({ uid: item.uid, keys: item.nextKeys });
+    }
+    let migrated = 0;
+    let completed = 0;
+    for (const [bookName, patches] of byBook) {
+        await patchEntries(bookName, patches);
+        const stored = Object.values((await readWorldbookFromServer(bookName)).entries);
+        for (const patch of patches) {
+            const entry = stored.find(item => Number(item.uid) === Number(patch.uid));
+            if (!entry || JSON.stringify(getKeys(entry)) !== JSON.stringify(patch.keys)) {
+                throw Error(`世界书《${bookName}》UID ${patch.uid} 归属转换回读失败；已完成 ${migrated} 条，请重新扫描核对剩余条目。`);
+            }
+            migrated++;
+            onProgress({ phase: 'write', current: ++completed, total: current.candidates.length, bookName });
+        }
+    }
+    return { migrated, booksScanned: current.books.length, booksChanged: byBook.size, skippedForeignCard: true };
+}
+
 function profileName(entry) {
     return sanitizeName(String(parseCustomFormat(String(entry?.content ?? '')).姓名 ?? '').trim())
         || getKeys(entry).find(key => typeof key === 'string' && !key.startsWith('CWB:') && !/^\d+-\d+$/.test(key))
