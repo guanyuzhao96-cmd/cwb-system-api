@@ -20,6 +20,8 @@ const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(
 const isEnabled = entry => entry?.enabled !== false && entry?.disable !== true;
 const PLUGIN_REFERENCE_KEYS = ['CWB:世界书目录', 'CWB:角色档案目录', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:更新记录', 'CWB:模块进度'];
 const isPluginReferenceEntry = entry => getKeys(entry).some(key => PLUGIN_REFERENCE_KEYS.includes(key));
+const ALWAYS_ON_REFERENCE_KEYS = ['CWB:故事时间线', 'CWB:角色关系汇总'];
+const isAlwaysOnReferenceEntry = entry => getKeys(entry).some(key => ALWAYS_ON_REFERENCE_KEYS.includes(key));
 
 export function getPrimaryWorldbook() {
     const context = getContext();
@@ -259,8 +261,8 @@ async function writeTimeline(content, startFloor, endFloor) {
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
     if (!existing.length && content === undefined) return [];
     if (existing.length === 1 && content === undefined) {
-        if (isEnabled(existing[0])) {
-            applyEntryPatch(existing[0], { enabled: false, type: 'selective' });
+        if (!isEnabled(existing[0]) || existing[0].constant !== true || existing[0].selective === true) {
+            applyEntryPatch(existing[0], { enabled: true, type: 'constant' });
             await saveWorldInfo(bookName, data, true);
         }
         return existing.map(entry => ({ ...entry, keys: getKeys(entry), enabled: isEnabled(entry) }));
@@ -273,7 +275,7 @@ async function writeTimeline(content, startFloor, endFloor) {
         comment: `CWB故事时间线-${chatId}`,
         content: mergeTimelineContent([...existing.map(entry => entry.content), content]),
         keys: ['CWB:故事时间线', chatId, '故事时间线', ...mergeRanges(ranges).map(([start, end]) => `CWB:时间线楼层:${start}-${end}`)],
-        enabled: false, type: 'selective', position: 0, order: 10000, preventRecursion: true,
+        enabled: true, type: 'constant', position: 0, order: 10000, preventRecursion: true,
     });
     const removed = new Set(existing.slice(1));
     for (const key of Object.keys(data.entries)) if (removed.has(data.entries[key])) delete data.entries[key];
@@ -509,7 +511,15 @@ export async function manageChatEntries(settings) {
         for (const entry of entries) {
             const keys = getKeys(entry);
             if (isPluginReferenceEntry(entry)) {
-                if (entry.enabled) patches.push({ uid: entry.uid, enabled: false, type: 'selective' });
+                if (isAlwaysOnReferenceEntry(entry)) {
+                    if (keys.includes(chatId)) {
+                        if (!entry.enabled || entry.constant !== true || entry.selective === true) patches.push({ uid: entry.uid, enabled: true, type: 'constant' });
+                    } else if (entry.enabled || entry.constant === true) {
+                        patches.push({ uid: entry.uid, enabled: false, type: 'selective' });
+                    }
+                } else if (entry.enabled || entry.constant === true) {
+                    patches.push({ uid: entry.uid, enabled: false, type: 'selective' });
+                }
                 continue;
             }
             if (keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度')) {
@@ -586,7 +596,7 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
     const target = existing[0] || createWorldInfoEntry(bookName, data);
     if (!target) throw new Error('创建角色关系条目失败。');
     const ranges = mergeRanges([...existing.flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:关系楼层:')), [startIndex, endIndex]]);
-    applyEntryPatch(target, { comment: `CWB角色关系汇总-${chatId}`, content, keys: ['CWB:角色关系汇总', chatId, '角色关系', ...ranges.map(([start, end]) => `CWB:关系楼层:${start}-${end}`)], enabled: false, type: 'selective', position: 0, order: 9998, preventRecursion: true });
+    applyEntryPatch(target, { comment: `CWB角色关系汇总-${chatId}`, content, keys: ['CWB:角色关系汇总', chatId, '角色关系', ...ranges.map(([start, end]) => `CWB:关系楼层:${start}-${end}`)], enabled: true, type: 'constant', position: 0, order: 9998, preventRecursion: true });
     const duplicates = new Set(existing.slice(1));
     for (const key of Object.keys(data.entries)) if (duplicates.has(data.entries[key])) delete data.entries[key];
     await saveWorldInfo(bookName, data, true);
