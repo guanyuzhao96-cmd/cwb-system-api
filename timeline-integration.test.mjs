@@ -431,9 +431,10 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     // A character profile belongs to the card, not a chat filename or branch.
     failWrite = false;
     const cardProfile = '[姓名]:跨聊天角色\n[角色已知信息.0]:认可与主角保持联系\n[性经历人数]:1\n[剧情.0]:保留在角色卡中的主线剧情';
+    const cardOwnerKey = lorebook.getCardArchiveKey();
     world.world_names.push('角色世界书');
     extraBooks.set('角色世界书', { entries: {
-        1: { uid: 1, comment: '动态-跨聊天角色', key: ['CWB:自动档案', 'first-chat - Branch #3', '跨聊天角色', '1-20'], disable: true, content: '[姓名]:跨聊天角色\n[剧情.0]:旧聊天剧情' },
+        1: { uid: 1, comment: '动态-跨聊天角色', key: ['CWB:自动档案', cardOwnerKey, 'first-chat - Branch #3', '跨聊天角色', '1-20'], disable: true, content: '[姓名]:跨聊天角色\n[剧情.0]:旧聊天剧情' },
         2: { uid: 2, comment: '动态-跨聊天角色', key: ['CWB:自动档案', 'other-chat', '跨聊天角色', '21-40'], disable: false, content: '[姓名]:跨聊天角色\n[剧情.0]:重复条目内容' },
     } });
     contextData.chatMetadata.world_info = '角色世界书';
@@ -447,12 +448,13 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const cardUid = await lorebook.saveCharacterDescription(cardSettings, '跨聊天角色', cardProfile, 0, 19);
     assert.equal(cardUid, '跨聊天角色');
     assert.equal(Object.keys(disk.entries).length + Object.keys(extraBooks.get('角色世界书').entries).length, 4, 'legacy duplicate archives are reused without creating or merging records');
-    const canonical = Object.values(extraBooks.get('角色世界书').entries).find(entry => entry.key.includes(lorebook.getCardArchiveKey()));
+    const canonical = Object.values(extraBooks.get('角色世界书').entries).find(entry => entry.key.includes(lorebook.getCardArchiveKey()) && entry.content.includes('认可与主角保持联系'));
     assert.ok(canonical, `saved archive has a stable character-card owner key: ${JSON.stringify(disk.entries)}`);
-    assert.equal(canonical.key.includes(contextData.chatId), false, 'new profile ownership does not include a chat ID');
+    assert.deepEqual(canonical.key, ['CWB:自动档案', cardOwnerKey, '跨聊天角色'], 'profile keys contain the card identity, not the chat ID or chat-floor range');
     const canonicalUid = canonical.uid;
     const untouchedDuplicate = Object.values(extraBooks.get('角色世界书').entries).find(entry => entry.uid !== canonicalUid);
     assert.ok(untouchedDuplicate.content.includes('旧聊天剧情') || untouchedDuplicate.content.includes('重复条目内容'));
+    assert.deepEqual(extraBooks.get('角色世界书').entries[1].key, ['CWB:自动档案', cardOwnerKey, '跨聊天角色'], 'legacy card profile is re-keyed in place without deleting its saved copy');
     contextData.chatId = 'Test - 2026-10-12@09h12m44s596ms - Branch #31';
     pluginState.chatId = contextData.chatId;
     contextData.chatMetadata.integrity = 'different-chat-integrity';
