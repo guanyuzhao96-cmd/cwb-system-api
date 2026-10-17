@@ -303,6 +303,20 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.ok(middleResult.content.includes('[角色未知信息.0]'), 'segment deletion preserves other profile fields');
     disk = structuredClone(reviewBaseline);
     cache = structuredClone(disk);
+    const batchInfoEntry = disk.entries[reviewedFact.uid];
+    const batchInfoLines = batchInfoEntry.content.split(/\r?\n/);
+    batchInfoLines[reviewedFact.lineIndex] = `${reviewedFact.line}，删除测试B,保留测试C，删除测试D`;
+    batchInfoEntry.content = batchInfoLines.join('\n');
+    cache = structuredClone(disk);
+    const batchReview = await lorebook.getProfileInfoReviewQueue();
+    const batchFacts = batchReview.characters.flatMap(character => character.facts).filter(fact => fact.field === reviewedFact.field);
+    const batchResult = await lorebook.deleteUnretainedProfileFacts(batchReview, [batchFacts[1], batchFacts[3]]);
+    const batchSaved = disk.entries[reviewedFact.uid].content;
+    assert.match(batchSaved, /本轮确认的重要事实，保留测试C/);
+    assert.doesNotMatch(batchSaved, /删除测试B|删除测试D/);
+    assert.equal(batchResult.deleted, 2, 'batch delete removes all and only the unselected facts');
+    disk = structuredClone(reviewBaseline);
+    cache = structuredClone(disk);
 
     const auditQueue = await lorebook.getProfileCountAuditQueue();
     assert.ok(auditQueue.profiles.length > 0, 'manual count audit lists current-chat generated profiles');
@@ -377,8 +391,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.equal(reviewButton.prop('disabled'), false);
     assert.equal($('#cwb-info-review').prop('hidden'), false);
     assert.match($('#cwb-info-review').html(), /角色 1\//);
-    assert.match($('#cwb-info-review').html(), /保留这条/);
-    assert.match($('#cwb-info-review').html(), /删除这条/);
+    assert.match($('#cwb-info-review').html(), /选择保留/);
+    assert.match($('#cwb-info-review').html(), /删除本角色未保留信息/);
 
     assert.equal(typeof deleteButton.handlers.click, 'function', 'cleanup action is available in the workbench');
     deleteButton.handlers.click.call(deleteButton);

@@ -11,7 +11,7 @@ import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrat
 import { testSystemApi } from './api.js';
 import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
-import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, deleteReviewedProfileFact, generateWorldbookDirectories, getGeneratedContentPreview, getProfileCountAuditQueue, getProfileInfoReviewQueue, getProgressRecoveryCandidates, listWorldbooks, routeSummary, saveReviewedProfileCount } from './lorebook.js';
+import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, deleteUnretainedProfileFacts, generateWorldbookDirectories, getGeneratedContentPreview, getProfileCountAuditQueue, getProfileInfoReviewQueue, getProgressRecoveryCandidates, listWorldbooks, routeSummary, saveReviewedProfileCount } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { escapeHtml, notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
@@ -118,18 +118,18 @@ function renderProfileInfoReview() {
     const decided = character.facts.filter(fact => fact.decision).length;
     const allDecided = decided === character.facts.length;
     const factCards = character.facts.map((fact, index) => {
-        const decisionLabel = fact.decision === 'keep' ? '已保留' : fact.decision === 'delete' ? '已删除' : '待审查';
-        const disabled = fact.decision ? 'disabled' : '';
+        const decisionLabel = fact.decision === 'keep' ? '已选择保留' : fact.decision === 'delete' ? '已删除' : '未选择，将删除';
         return `<article class="cwb-review-fact" data-decision="${fact.decision || 'pending'}">
             <div class="cwb-review-fact-head"><b>${escapeHtml(fact.category)} · 第 ${index + 1} 条</b><span>${decisionLabel}</span></div>
             <p>${escapeHtml(fact.value)}</p>
-            ${fact.decision ? '' : `<div class="cwb-review-actions"><button class="menu_button" data-review-action="keep" data-fact-id="${escapeHtml(fact.id)}" ${disabled}>保留这条</button><button class="menu_button cwb-danger" data-review-action="delete" data-fact-id="${escapeHtml(fact.id)}" ${disabled}>删除这条</button></div>`}
+            ${fact.decision === 'delete' ? '' : `<div class="cwb-review-actions"><button class="menu_button" data-review-action="keep" data-fact-id="${escapeHtml(fact.id)}">${fact.decision === 'keep' ? '取消保留' : '选择保留'}</button></div>`}
         </article>`;
     }).join('');
     area.html(`<div class="cwb-review-head"><strong>角色 ${profileInfoReviewIndex + 1}/${characters.length}：${escapeHtml(character.name)}</strong><span>${decided}/${character.facts.length} 条已审查</span></div>
         ${factCards}
+        <button class="menu_button cwb-full-width cwb-danger" data-review-delete-unkept ${character.facts.some(fact => !fact.decision) ? '' : 'disabled'}>删除本角色未保留信息（${character.facts.filter(fact => !fact.decision).length} 条）</button>
         <div class="cwb-review-nav"><button class="menu_button" data-review-nav="previous" ${profileInfoReviewIndex === 0 ? 'disabled' : ''}>上一位角色</button><button class="menu_button" data-review-nav="next" ${!allDecided ? 'disabled' : ''}>下一位角色</button></div>
-        <small class="cwb-help">总进度 ${reviewed}/${profileInfoReview.totalFacts} 条；逗号或分号分隔的内容会拆成独立条目，删除只移除对应片段。</small>`);
+        <small class="cwb-help">总进度 ${reviewed}/${profileInfoReview.totalFacts} 条；只需选择要保留的内容，未选择项会在批量删除时一次移除。</small>`);
 }
 
 function assertActiveProfileReview() {
@@ -284,34 +284,9 @@ function bindUi() {
             const factId = $(this).attr('data-fact-id');
             const character = profileInfoReview.characters[profileInfoReviewIndex];
             const fact = character?.facts.find(item => item.id === factId);
-            if (!fact || fact.decision) throw Error('这条信息已处理或已不存在，请重新扫描。');
+            if (!fact || fact.decision === 'delete') throw Error('这条信息已处理或已不存在，请重新扫描。');
             if (action === 'keep') {
-                fact.decision = 'keep';
-            } else if (action === 'delete') {
-                const confirmed = window.confirm(`确认从世界书《${fact.bookName}》的角色档案中删除这一条${fact.category}？\n\n${fact.value}\n\n只删除这条信息，不会删除整个角色档案。`);
-                if (!confirmed) return;
-                const button = $(this);
-                button.prop('disabled', true).text('正在删除并核验…');
-                const release = acquireOperationLock(state, '删除单条角色信息');
-                try {
-                    const result = await deleteReviewedProfileFact(profileInfoReview, fact);
-                    for (const pending of profileInfoReview.characters.flatMap(item => item.facts)) {
-                        if (pending.bookName !== fact.bookName || pending.uid !== fact.uid || pending.decision) continue;
-                        pending.content = result.content;
-                        if (pending.lineIndex === fact.lineIndex) {
-                            if (result.lineRemoved) continue;
-                            pending.line = result.line;
-                            pending.segmentCount--;
-                            if (pending.segmentIndex > result.segmentIndex) pending.segmentIndex--;
-                            pending.id = `${pending.bookName}:${pending.uid}:${pending.lineIndex}:${pending.segmentIndex}`;
-                        } else if (result.lineRemoved && pending.lineIndex > fact.lineIndex) {
-                            pending.lineIndex--;
-                        }
-                        pending.id = `${pending.bookName}:${pending.uid}:${pending.lineIndex}:${pending.segmentIndex ?? 0}`;
-                    }
-                    fact.decision = 'delete';
-                    profileInfoReviewDeleted++;
-                } finally { release(); }
+                fact.decision = fact.decision === 'keep' ? null : 'keep';
             } else {
                 throw Error('未知的审查操作。');
             }
@@ -319,6 +294,38 @@ function bindUi() {
         } catch (error) {
             notify('error', error.message);
             $('#cwb-status').text(`信息审查未完成：${error.message}`);
+        }
+    });
+    $('#cwb-info-review').on('click', '[data-review-delete-unkept]', async function () {
+        try {
+            assertActiveProfileReview();
+            const character = profileInfoReview.characters[profileInfoReviewIndex];
+            const unkept = character.facts.filter(fact => !fact.decision);
+            if (!unkept.length) return;
+            const details = unkept.map((fact, index) => `${index + 1}. [${fact.category}] ${fact.value}`).join('\n');
+            if (!window.confirm(`确认删除角色“${character.name}”未选择保留的 ${unkept.length} 条信息？\n\n${details}\n\n已选择保留的内容不会删除；只删除以上列出的档案信息。`)) return;
+            const button = $(this);
+            button.prop('disabled', true).text('正在批量删除并核验…');
+            const release = acquireOperationLock(state, '批量删除未保留的角色信息');
+            try {
+                const result = await deleteUnretainedProfileFacts(profileInfoReview, unkept, update => {
+                    const deletedIds = new Set(update.deletedFacts);
+                    const updatedEntries = new Map(update.entries.map(entry => [entry.uid, entry.content]));
+                    for (const item of profileInfoReview.characters.flatMap(entry => entry.facts)) {
+                        if (item.bookName !== update.bookName) continue;
+                        if (updatedEntries.has(item.uid)) item.content = updatedEntries.get(item.uid);
+                        if (deletedIds.has(item.id)) item.decision = 'delete';
+                    }
+                    profileInfoReviewDeleted += update.deletedFacts.length;
+                    $('#cwb-status').text(`已核验删除 ${profileInfoReviewDeleted} 条未保留信息…`);
+                });
+                $('#cwb-status').text(`已删除并核验 ${result.deleted} 条未保留信息。`);
+            } finally { release(); }
+            renderProfileInfoReview();
+        } catch (error) {
+            renderProfileInfoReview();
+            notify('error', error.message);
+            $('#cwb-status').text(`批量删除未完成：${error.message}`);
         }
     });
     $('#cwb-info-review').on('click', '[data-review-nav]', function () {
