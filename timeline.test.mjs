@@ -8,15 +8,18 @@ import vm from 'node:vm';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { mergeRanges, parseTaggedRanges } from './update-tracker.mjs';
+import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } from './timeline-utils.mjs';
+import { acquireOperationLock } from './state.js';
 
 function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     const context = vm.createContext({
         MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
+        parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,
         structuredClone, getRequestHeaders: () => ({}),
         fetch: async () => ({ ok: true, json: async () => structuredClone(data) }),
-        mergeRanges, parseTaggedRanges, state: { chatId: 'chat' },
+        mergeRanges, parseTaggedRanges, state: { chatId: 'chat', operationOwner: null },
         getContext: () => ({ characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] }),
         loadWorldInfo: async () => structuredClone(data),
         saveWorldInfo: async (_, next) => { if (fail) throw Error('save failed'); data = structuredClone(next); saves++; },
@@ -33,7 +36,7 @@ test('legacy entries merge atomically, retain UID, deduplicate and isolate other
     await h.context.getTimelineEntries();
     assert.equal(h.saves(), 1);
     assert.deepEqual(Object.keys(h.data().entries), ['0', '2']);
-    assert.equal(h.data().entries[0].content, '【主线时间线】\n[时间线.0]: 2025-01-01｜事件甲\n[时间线.1]: 2025-02-02｜事件乙；事件丙');
+    assert.equal(h.data().entries[0].content, '【主线时间线】\n[时间线.0]: 2025-01-01｜事件甲\n[时间线.1]: 2025-02-02｜事件乙\n    ↳ 事件丙');
     assert.ok(h.data().entries[0].key.includes('CWB:时间线楼层:41-60'));
     await h.context.saveTimeline({}, '【时间线楼层：21-40】\n（本范围已检查，无新增重要事件）', 20, 39);
     assert.ok(h.data().entries[0].key.includes('CWB:时间线楼层:1-60'));
@@ -94,15 +97,45 @@ test('refresh fills only the gap between disjoint ranges and repeats without API
     assert.equal(calls, 1);
 });
 
-test('timeline parser merges same-day events, omits people columns and normalizes legacy format for deduplication', () => {
+test('timeline parser keeps same-day events separate, omits people columns and normalizes legacy format', () => {
     const h = harness();
     vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
     const parsed = h.context.parseTimelineResponse(JSON.stringify({ 时间线: [
         { 日期: '2026-10-16', 人物: '甲、乙', 事件: '甲揭露秘密' },
         { 日期: '2026-10-16', 人物: '乙', 事件: '乙承担后果' },
     ] }));
-    assert.deepEqual(JSON.parse(JSON.stringify(parsed)), ['2026-10-16｜甲揭露秘密；乙承担后果']);
+    assert.deepEqual(JSON.parse(JSON.stringify(parsed)), ['2026-10-16｜甲揭露秘密', '2026-10-16｜乙承担后果']);
     assert.deepEqual(JSON.parse(JSON.stringify(h.context.uniqueTimelineEntries(parsed, ['[时间线.0]: 2026-10-16｜甲、乙｜甲揭露秘密']))), ['2026-10-16｜乙承担后果']);
+});
+
+test('timeline context stays bounded and same-day events retain separate records', () => {
+    const records = Array.from({ length: 120 }, (_, i) => ({ date: '2026-10-16', event: `关键事件${i}` }));
+    const formatted = formatTimelineRecords(records);
+    assert.equal((formatted.match(/2026-10-16/g) ?? []).length, 1);
+    assert.equal(parseTimelineRecords(formatted).length, 120);
+    const context = compactTimelineContext(formatted, { maxChars: 1200, firstCount: 3, recentCount: 5 });
+    assert.ok(context.length <= 1200);
+    assert.ok(context.includes('关键事件0'));
+    assert.ok(context.includes('关键事件119'));
+    assert.ok(!context.includes('关键事件50'));
+});
+
+test('chat switch during a timeline request prevents cross-chat writes and releases the operation lock', async () => {
+    const h = harness();
+    let active = { chatId: 'chat', chat: [{ mes: '旧聊天事件' }], characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] };
+    h.context.getContext = () => active;
+    h.context.$ = () => ({ text() {} });
+    let finish;
+    h.context.callSystemApi = () => new Promise(resolve => { finish = resolve; });
+    vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
+    const pending = h.context.refreshTimeline({ threshold: 20 });
+    while (!finish) await new Promise(resolve => setTimeout(resolve, 0));
+    await assert.rejects(h.context.updateRelationships({ threshold: 20 }), /正在执行“时间线刷新”/);
+    active = { ...active, chatId: 'other', chat: [{ mes: '新聊天事件' }] };
+    finish('{"时间线":["2026-10-16｜旧聊天事件"]}');
+    await assert.rejects(pending, /切换了聊天/);
+    assert.equal(Object.values(h.data().entries).some(entry => entry.key.includes('CWB:故事时间线')), false);
+    assert.equal(h.context.state.operationOwner, null);
 });
 
 

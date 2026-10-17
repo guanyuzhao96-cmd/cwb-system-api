@@ -5,7 +5,8 @@ import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mj
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
 import { callSystemApi } from './api.js';
-import { state } from './state.js';
+import { state, acquireOperationLock } from './state.js';
+import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } from './timeline-utils.mjs';
 import {
     getLastUpdatedFloor,
     getModuleProgress,
@@ -32,9 +33,18 @@ import { formatRanges, overlappingRanges, missingRanges } from './update-tracker
 
 let autoTimer = null;
 
+function currentChatId() {
+    const context = getContext();
+    return context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId || 'unknown_chat';
+}
+
+function assertCurrentChat(chatId) {
+    if (state.chatId !== chatId || currentChatId() !== chatId) throw new Error('生成期间切换了聊天，本次停止写入；请在目标聊天重新更新。');
+}
+
 export function refreshChatState() {
     const context = getContext();
-    state.chatId = context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || 'unknown_chat';
+    state.chatId = context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId || 'unknown_chat';
     state.messages = (context?.chat ?? []).map((message, index) => ({
         ...message,
         id: index,
@@ -80,23 +90,25 @@ export async function refreshModuleProgress() {
 
 export async function retryMissingModule(settings, module) {
     if (!MODULE_LABELS[module]) throw Error('未知模块。');
-    if (state.updating || state.batchRunning || state.repairing) throw Error('已有更新或补漏任务正在运行。');
+    if (state.updating || state.batchRunning || state.repairing || state.timelineUpdating || state.relationshipUpdating) throw Error('已有更新或补漏任务正在运行。');
+    const release = acquireOperationLock(state, `补漏-${MODULE_LABELS[module]}`);
     state.repairing = true;
     try {
         const progress = await refreshModuleProgress();
+        const chatId = state.chatId;
         const gaps = moduleStatus(progress, module, state.messages.length).missing;
         const size = Math.max(1, Number(settings.threshold) || 20);
         for (const [start, end] of gaps) {
             for (let current = start; current <= end; current += size) {
-                await updateRange(settings, current, Math.min(end, current + size - 1), { modules: [module], silent: true });
+                assertCurrentChat(chatId);
+                await updateRangeUnlocked(settings, current, Math.min(end, current + size - 1), { modules: [module], silent: true });
             }
         }
         if (!gaps.length) setStatus(`${MODULE_LABELS[module]}没有待补范围。`);
-    } finally { state.repairing = false; }
+    } finally { state.repairing = false; release(); }
 }
 
-export async function updateRange(settings, startIndex, endIndex, { silent = false, modules = Object.keys(MODULE_LABELS) } = {}) {
-    if (state.updating || state.timelineUpdating || state.relationshipUpdating) throw new Error('已有更新任务正在运行。');
+async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = false, modules = Object.keys(MODULE_LABELS) } = {}) {
     refreshChatState();
     const start = Math.max(0, Number(startIndex) || 0);
     const end = Math.min(state.messages.length - 1, Number(endIndex));
@@ -112,6 +124,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         const oldProfiles = targets.includes('profiles') ? (await getTriggeredOldProfiles(settings, selected)).map(sanitizeProfileContent).filter(Boolean) : [];
         const oldTimeline = targets.includes('timeline') ? (await getTimelineEntries()).map(entry => entry.content).join('\n') : '';
         const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
+        assertCurrentChat(chatId);
         const messages = [];
         if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
@@ -119,7 +132,7 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
         messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
-        messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线】\n${oldTimeline || '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
+        messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
         setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：本批仅调用 AI 1 次…`);
         let response;
         try { response = await callSystemApi(messages, settings.responseLength); }
@@ -127,11 +140,12 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
             if (state.chatId === chatId) for (const module of targets) await recordModuleResult(module, start, end, error.message);
             throw error;
         }
-        if (state.chatId !== chatId || (getContext()?.chatId && getContext().chatId !== chatId)) throw Error('生成期间切换了聊天，本次未写入，请回到原聊天后重试。');
+        assertCurrentChat(chatId);
         const parts = parseCombinedParts(response);
         $('#cwb-timeline-debug').text(`统一更新：AI 1 次，第 ${start + 1}-${end + 1} 楼\n${response}`);
         for (const module of targets) {
             try {
+                assertCurrentChat(chatId);
                 const part = parts[module];
                 if (part.error) throw Error(part.error);
                 if (module === 'profiles') {
@@ -146,31 +160,41 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
                     }).filter(Boolean);
                     let userUpdated = false;
                     for (const { block, name, isUser } of prepared) {
+                        assertCurrentChat(chatId);
                         const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
+                        assertCurrentChat(chatId);
                         if (!saved) throw Error(`角色 ${name} 未路由到世界书，档案未全部完成`);
                         await verifyProfileContent(settings, name, block, isUser);
+                        assertCurrentChat(chatId);
                         if (isUser) userUpdated = true; else names.push(saved);
                     }
-                    if (names.length) await updateRoster(settings, [...new Set(names)], start, end);
-                    else if (userUpdated && settings.multiWorldbookRouting) await updateMasterDirectory(settings);
+                    if (names.length) { assertCurrentChat(chatId); await updateRoster(settings, [...new Set(names)], start, end); assertCurrentChat(chatId); }
+                    else if (userUpdated && settings.multiWorldbookRouting) { assertCurrentChat(chatId); await updateMasterDirectory(settings); assertCurrentChat(chatId); }
                 } else if (module === 'timeline') {
                     const events = parseTimelineResponse(JSON.stringify(part.value));
-                    const unique = uniqueTimelineEntries(events, oldTimeline.split(/\r?\n/));
-                    await saveTimeline(settings, unique.map((event, index) => `[时间线.${index}]: ${event}`).join('\n'), start, end);
+                    const unique = uniqueTimelineEntries(events, oldTimeline);
+                    assertCurrentChat(chatId);
+                    await saveTimeline(settings, formatTimelineRecords(parseTimelineRecords(unique), { header: '【时间线增量】', empty: '（本范围已检查，无新增重要事件）' }), start, end);
+                    assertCurrentChat(chatId);
                 } else {
                     const content = mergeRelationships(oldRelationships, JSON.stringify(part.value));
+                    assertCurrentChat(chatId);
                     await saveRelationshipSummary(content, start, end);
+                    assertCurrentChat(chatId);
                     $('#cwb-relationship-status').text(content);
                 }
+                assertCurrentChat(chatId);
                 await recordModuleResult(module, start, end);
+                assertCurrentChat(chatId);
                 successes.push(MODULE_LABELS[module]);
             } catch (error) {
                 failures.push(`${MODULE_LABELS[module]}：${error.message}`);
-                try { await recordModuleResult(module, start, end, error.message); }
+                try { if (currentChatId() === chatId && state.chatId === chatId) await recordModuleResult(module, start, end, error.message); }
                 catch (progressError) { failures.push(`进度未确认：${progressError.message}`); }
             }
         }
         if (!failures.length && targets.length === 3) {
+            assertCurrentChat(chatId);
             await recordChatUpdateRange(start, end, state.messages.length, '三个模块均成功，AI调用1次', 0);
         }
         const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
@@ -182,6 +206,12 @@ export async function updateRange(settings, startIndex, endIndex, { silent = fal
         state.updating = false;
         if (state.chatId === chatId) await refreshModuleProgress().catch(error => $('#cwb-progress-error').text(`进度读取失败：${error.message}`));
     }
+}
+
+export async function updateRange(settings, startIndex, endIndex, options = {}) {
+    const release = acquireOperationLock(state, '指定范围更新');
+    try { return await updateRangeUnlocked(settings, startIndex, endIndex, options); }
+    finally { release(); }
 }
 
 export async function updateRecent(settings) {
@@ -230,51 +260,43 @@ function normalizeTimelineLine(line) {
 }
 
 function consolidateTimelineEntries(entries) {
-    const grouped = new Map(), undated = [];
+    const seen = new Set(), unique = [];
     for (const entry of entries) {
         const normalized = normalizeTimelineLine(entry);
-        const match = normalized.match(/^((?:\d{4}-\d{1,2}-\d{1,2})|日期未知)｜(.+)$/);
-        if (!match) { if (normalized) undated.push(normalized); continue; }
-        const [, date, event] = match;
-        const current = grouped.get(date) ?? [];
-        if (!current.includes(event)) current.push(event);
-        grouped.set(date, current);
+        if (normalized && !seen.has(normalized)) { seen.add(normalized); unique.push(normalized); }
     }
-    return [...[...grouped].map(([date, events]) => `${date}｜${events.join('；')}`), ...undated];
+    return unique;
 }
 
 function uniqueTimelineEntries(entries, existingLines) {
-    const known = new Set();
-    for (const line of existingLines) {
-        const normalized = normalizeTimelineLine(line);
-        const match = normalized.match(/^((?:\d{4}-\d{1,2}-\d{1,2})|日期未知)｜(.+)$/);
-        if (match) for (const event of match[2].split(/[；;]/).map(part => part.trim()).filter(Boolean)) known.add(`${match[1]}｜${event}`);
-    }
+    const known = new Set(parseTimelineRecords(existingLines).map(record => `${record.date}｜${record.event}`));
     const fresh = [];
     for (const line of entries) {
         const normalized = normalizeTimelineLine(line);
         const match = normalized.match(/^((?:\d{4}-\d{1,2}-\d{1,2})|日期未知)｜(.+)$/);
         if (!match) { if (normalized) fresh.push(normalized); continue; }
-        for (const event of match[2].split(/[；;]/).map(part => part.trim()).filter(Boolean)) {
-            const key = `${match[1]}｜${event}`;
-            if (!known.has(key)) fresh.push(key);
-            known.add(key);
-        }
+        const key = `${match[1]}｜${match[2]}`;
+        if (!known.has(key)) fresh.push(key);
+        known.add(key);
     }
     return consolidateTimelineEntries(fresh);
 }
 
 export async function refreshTimeline(settings, onProgress = () => {}, endIndex = Number.MAX_SAFE_INTEGER, retryStartIndex = null) {
-    if (state.timelineUpdating || state.updating || state.batchRunning || state.repairing) throw new Error('已有更新任务正在运行。');
+    const release = acquireOperationLock(state, '时间线刷新');
     refreshChatState();
-    if (!state.messages.length) throw new Error('当前聊天为空，无法刷新时间线。');
+    const chatId = state.chatId;
+    const messagesSnapshot = [...state.messages];
+    if (!messagesSnapshot.length) { release(); throw new Error('当前聊天为空，无法刷新时间线。'); }
     const scanStartFloor = 1;
-    const scanEndFloor = Math.min(state.messages.length, Number.isFinite(Number(endIndex)) ? Number(endIndex) + 1 : state.messages.length);
-    if (scanEndFloor < scanStartFloor) throw new Error('时间线更新范围无效。');
+    const scanEndFloor = Math.min(messagesSnapshot.length, Number.isFinite(Number(endIndex)) ? Number(endIndex) + 1 : messagesSnapshot.length);
+    if (scanEndFloor < scanStartFloor) { release(); throw new Error('时间线更新范围无效。'); }
     state.timelineUpdating = true;
     try {
+        assertCurrentChat(chatId);
         const existing = await getTimelineEntries();
-        const total = state.messages.length;
+        assertCurrentChat(chatId);
+        const total = messagesSnapshot.length;
         const covered = new Array(total + 1).fill(false);
         for (const entry of existing) {
             for (const range of timelineRanges(entry)) {
@@ -306,7 +328,8 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
             const gapEnd = floor - 1;
             for (let startFloor = start; startFloor <= gapEnd; startFloor += chunkSize) {
                 const endFloor = Math.min(gapEnd, startFloor + chunkSize - 1);
-                const selected = state.messages.slice(startFloor - 1, endFloor);
+                assertCurrentChat(chatId);
+                const selected = messagesSnapshot.slice(startFloor - 1, endFloor);
                 const range = `${startFloor}-${endFloor}`;
                 onProgress(`正在刷新故事时间线：第 ${range} 楼…`);
                 setStatus(`正在调用系统 API 更新故事时间线（第 ${range} 楼）…`);
@@ -315,17 +338,21 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
                 const response = await callSystemApi([
                     { role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT },
                     { role: 'system', content: TIMELINE_CONCISION_RULES },
-                    { role: 'user', content: `【已有时间线】\n${previous || '无'}\n\n【本次新增聊天：第 ${range} 楼】\n${formatMessages(selected)}\n\n请提取本次新增聊天中的新事件；不要将已有记录当成本次输出。` },
+                    { role: 'user', content: `【已有时间线（节选）】\n${compactTimelineContext(previous)}\n\n【本次新增聊天：第 ${range} 楼】\n${formatMessages(selected)}\n\n请提取本次新增聊天中的新事件；不要将已有记录当成本次输出。` },
                 ], settings.responseLength);
+                assertCurrentChat(chatId);
                 diagnostics.push(`API 原始返回（第 ${range} 楼）：\n${response}`);
                 showDiagnostics();
                 const events = parseTimelineResponse(response);
-                const unique = uniqueTimelineEntries(events, previous.split(/\r?\n/));
-                const content = `【时间线楼层：${range}】\n${unique.length ? unique.map((event, index) => `[时间线.${index}]: ${event}`).join('\n') : '（本范围已检查，无新增重要事件）'}`;
+                const unique = uniqueTimelineEntries(events, previous);
+                const content = `【时间线楼层：${range}】\n${formatTimelineRecords(parseTimelineRecords(unique), { header: '', empty: '（本范围已检查，无新增重要事件）' }).trim()}`;
+                assertCurrentChat(chatId);
                 const savedEntries = await saveTimeline(settings, content, startFloor - 1, endFloor - 1);
+                assertCurrentChat(chatId);
                 diagnostics.push(`保存成功：解析 ${events.length} 条，去重后新增 ${unique.length} 条；UID ${savedEntries?.[0]?.uid ?? '未知'}。`);
                 showDiagnostics();
                 await recordModuleResult('timeline', startFloor - 1, endFloor - 1);
+                assertCurrentChat(chatId);
                 addedEvents += unique.length;
                 previous = `${previous}${previous ? '\n\n' : ''}【楼层${range}】\n${content}`;
                 addedRanges.push(range);
@@ -340,13 +367,14 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
         return result;
     } finally {
         state.timelineUpdating = false;
+        release();
     }
 }
 
 export async function maybeAutoUpdate(settings) {
     clearTimeout(autoTimer);
     autoTimer = setTimeout(async () => {
-        if (!settings.enabled || !settings.autoUpdate || state.updating || state.batchRunning || state.repairing) return;
+        if (!settings.enabled || !settings.autoUpdate || state.operationOwner || state.updating || state.batchRunning || state.repairing) return;
         try {
             refreshChatState();
             const progress = await getModuleProgress();
@@ -364,10 +392,11 @@ export async function maybeAutoUpdate(settings) {
 }
 
 export async function batchUpdate(settings, onProgress) {
-    if (state.batchRunning) { state.batchStopRequested = true; return; }
-    if (state.updating || state.repairing || state.timelineUpdating || state.relationshipUpdating) throw Error('已有更新任务正在运行。');
+    if (state.operationOwner === '批量更新' && state.batchRunning) { state.batchStopRequested = true; return; }
+    const release = acquireOperationLock(state, '批量更新');
     refreshChatState();
-    if (!state.messages.length) throw new Error('当前聊天为空。');
+    if (!state.messages.length) { release(); throw new Error('当前聊天为空。'); }
+    const chatId = state.chatId;
     state.batchRunning = true;
     state.batchStopRequested = false;
     try {
@@ -376,19 +405,29 @@ export async function batchUpdate(settings, onProgress) {
         if (!plan.length) { setStatus('三项均已覆盖全部聊天，无需重复更新，AI 调用 0 次。'); return; }
         for (let index = 0; index < plan.length; index++) {
             if (state.batchStopRequested) break;
+            assertCurrentChat(chatId);
             const batch = plan[index];
             onProgress?.(index + 1, plan.length);
-            await updateRange(settings, batch.start, batch.end, { silent: true, modules: batch.modules });
+            await updateRangeUnlocked(settings, batch.start, batch.end, { silent: true, modules: batch.modules });
         }
         if (!state.batchStopRequested) notify('success', '批量补齐完成，已完成内容没有重复生成。');
     } finally {
         state.batchRunning = false;
         state.batchStopRequested = false;
         onProgress?.(0, 0);
+        release();
     }
 }
 
 export async function onChatChanged(settings) {
+    // Worldbook state is chat-scoped. Let any in-flight save finish its chat check
+    // before refreshing or migrating entries for the newly selected chat.
+    let waited = 0;
+    while (state.operationOwner && waited < 60000) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        waited += 50;
+    }
+    if (state.operationOwner) throw new Error(`等待“${state.operationOwner}”结束超时，聊天状态未刷新。`);
     refreshChatState();
     await manageChatEntries(settings);
     if (!settings.enabled) return;
@@ -399,15 +438,19 @@ export async function onChatChanged(settings) {
 
 
 export async function updateRelationships(settings, startIndex = null, endIndex = null) {
-    if (state.relationshipUpdating || state.updating || state.batchRunning || state.repairing) throw new Error('已有更新任务正在运行。');
+    const release = acquireOperationLock(state, '角色关系更新');
     refreshChatState();
+    const chatId = state.chatId;
+    const messagesSnapshot = [...state.messages];
     const end = Math.min(state.messages.length - 1, endIndex ?? state.messages.length - 1);
     const start = Math.max(0, startIndex ?? end - (Number(settings.scanDepth) || 6) + 1);
-    if (end < start) throw new Error('当前范围没有聊天内容。');
+    if (end < start) { release(); throw new Error('当前范围没有聊天内容。'); }
     state.relationshipUpdating = true;
     try {
+        assertCurrentChat(chatId);
         let content = await getRelationshipSummary();
         const completed = await getRelationshipRanges();
+        assertCurrentChat(chatId);
         // Standalone updates process every unhandled gap, rather than only the last six messages.
         const ranges = startIndex === null ? missingRanges(end + 1, completed) : [[start, end]];
         if (!ranges.length) ranges.push([start, end]); // Explicit retry can recover an earlier empty result.
@@ -415,16 +458,20 @@ export async function updateRelationships(settings, startIndex = null, endIndex 
         const checked = [];
         for (const [rangeStart, rangeEnd] of ranges) {
             for (let chunkStart = rangeStart; chunkStart <= rangeEnd; chunkStart += size) {
+                assertCurrentChat(chatId);
                 const chunkEnd = Math.min(rangeEnd, chunkStart + size - 1);
                 $('#cwb-relationship-status').text(`正在增量更新角色关系：第 ${chunkStart + 1}-${chunkEnd + 1} 楼…`);
                 const response = await callSystemApi([
                     { role: 'system', content: RELATIONSHIP_PROMPT },
-                    { role: 'user', content: `【已有关系】\n${content || '无'}\n\n【新增聊天：第 ${chunkStart + 1}-${chunkEnd + 1} 楼】\n${formatMessages(state.messages.slice(chunkStart, chunkEnd + 1))}` },
+                    { role: 'user', content: `【已有关系】\n${content || '无'}\n\n【新增聊天：第 ${chunkStart + 1}-${chunkEnd + 1} 楼】\n${formatMessages(messagesSnapshot.slice(chunkStart, chunkEnd + 1))}` },
                 ], settings.responseLength);
+                assertCurrentChat(chatId);
                 const merged = mergeRelationships(content, response);
                 // Advance coverage only after successful parsing, persistence, and server readback.
                 await saveRelationshipSummary(merged, chunkStart, chunkEnd);
+                assertCurrentChat(chatId);
                 await recordModuleResult('relationships', chunkStart, chunkEnd);
+                assertCurrentChat(chatId);
                 content = merged;
                 checked.push(`${chunkStart + 1}-${chunkEnd + 1}`);
             }
@@ -434,5 +481,5 @@ export async function updateRelationships(settings, startIndex = null, endIndex 
     } catch (error) {
         $('#cwb-relationship-status').text(`角色关系更新失败：${error.message}`);
         throw error;
-    } finally { state.relationshipUpdating = false; }
+    } finally { state.relationshipUpdating = false; release(); }
 }

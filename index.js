@@ -11,7 +11,7 @@ import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrat
 import { testSystemApi } from './api.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
 import { cleanupProfileFields, convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
-import { MODULE_NAME, state } from './state.js';
+import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
 
@@ -128,10 +128,12 @@ function bindUi() {
     }
     $('#cwb-cleanup-profiles').on('click', function () {
         runButton($(this), '精简中…', async () => {
-            if (state.updating || state.batchRunning || state.timelineUpdating || state.relationshipUpdating || state.repairing) throw Error('请等待当前更新任务结束后再清理。');
-            refreshChatState();
-            const result = await cleanupProfileFields(settings());
-            $('#cwb-status').text(`已精简 ${result.changed} 条当前聊天档案；未识别格式跳过 ${result.skipped} 条。本操作不调用 AI。`);
+            const release = acquireOperationLock(state, '角色档案精简');
+            try {
+                refreshChatState();
+                const result = await cleanupProfileFields(settings());
+                $('#cwb-status').text(`已精简 ${result.changed} 条当前聊天档案；未识别格式跳过 ${result.skipped} 条。本操作不调用 AI。`);
+            } finally { release(); }
         });
     });
     $('#cwb-test-api').on('click', function () {
@@ -166,7 +168,11 @@ function bindUi() {
     });
     $('#cwb-open-viewer').on('click', () => openViewer(settings()));
     $('#cwb-convert-format').on('click', function () {
-        runButton($(this), '转换中…', () => convertLegacyEntries(settings()));
+        runButton($(this), '转换中…', async () => {
+            const release = acquireOperationLock(state, '旧格式转换');
+            try { return await convertLegacyEntries(settings()); }
+            finally { release(); }
+        });
     });
     $('#cwb-reset-prompts').on('click', () => {
         const value = settings();
@@ -191,17 +197,20 @@ function bindUi() {
     });
     $('#cwb-generate-directories').on('click', function () {
         runButton($(this), '生成中…', async () => {
-            saveFromUi();
-            $('#cwb-route-status').text('正在读取当前激活的世界书…');
-            const result = await generateWorldbookDirectories(message => $('#cwb-route-status').text(message));
-            const lines = [`已扫描激活世界书：${result.activeBooks.join('、')}`];
-            if (result.generated.length) lines.push(`已生成目录：${result.generated.map(item => `${item.bookName}（${item.count}名）`).join('；')}`);
-            if (result.skippedBooks.length) lines.push(`没有识别到角色条目，未生成目录：${result.skippedBooks.join('、')}`);
-            if (result.duplicates.length) lines.push('重复角色（未写入目录，请手动处理）：', ...result.duplicates);
-            $('#cwb-route-status').text(lines.join('\n'));
-            if (result.duplicates.length) notify('warning', `目录已扫描，发现 ${result.duplicates.length} 个重复角色，请查看详情。`);
-            else if (!result.generated.length) notify('warning', '激活的世界书中没有识别到角色条目。');
-            else notify('success', `已在 ${result.generated.length} 本激活世界书中生成目录。`);
+            const release = acquireOperationLock(state, '世界书目录生成');
+            try {
+                saveFromUi();
+                $('#cwb-route-status').text('正在读取当前激活的世界书…');
+                const result = await generateWorldbookDirectories(message => $('#cwb-route-status').text(message));
+                const lines = [`已扫描激活世界书：${result.activeBooks.join('、')}`];
+                if (result.generated.length) lines.push(`已生成目录：${result.generated.map(item => `${item.bookName}（${item.count}名）`).join('；')}`);
+                if (result.skippedBooks.length) lines.push(`没有识别到角色条目，未生成目录：${result.skippedBooks.join('、')}`);
+                if (result.duplicates.length) lines.push('重复角色（未写入目录，请手动处理）：', ...result.duplicates);
+                $('#cwb-route-status').text(lines.join('\n'));
+                if (result.duplicates.length) notify('warning', `目录已扫描，发现 ${result.duplicates.length} 个重复角色，请查看详情。`);
+                else if (!result.generated.length) notify('warning', '激活的世界书中没有识别到角色条目。');
+                else notify('success', `已在 ${result.generated.length} 本激活世界书中生成目录。`);
+            } finally { release(); }
         });
     });
 }

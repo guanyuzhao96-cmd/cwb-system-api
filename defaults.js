@@ -32,7 +32,7 @@ export function migrateBuiltinProfilePrompt(value, kind) {
     return kind === 'fullPrompt' ? cwbCompleteDefaultSettings.cwb_char_card_prompt : cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt;
 }
 
-export const TIMELINE_PROMPT_RULE_MARKER = '【CWB时间线格式规则 v0.10.9】';
+export const TIMELINE_PROMPT_RULE_MARKER = '【CWB时间线格式规则 v0.11.0】';
 export const TIMELINE_CONCISION_RULES = `时间线内容硬性要求：只记录当前主线及其因果链直接相关的关键变化、重要决定及后果、冲突结果、秘密揭露或重要关系转折。先判断剧情归属；不同且无因果关联的故事线不要揉在一起，也不要写入当前主线，无法确认强相关时省略。同一天仅将属于同一故事线的关键进展合并为一条，不得仅因日期相同就合并无关事件。每条事件正文尽量写到40—56个汉字，保留必要因果、关键行为和结果，不要为追求简短删掉剧情关键信息。日常、对话过程、情绪、步骤、重复背景及枝节仍省略。人物姓名使用聊天或已有档案中可确认的完整姓名，不用简称、缩写、只写姓或首字代称；不得猜造姓名，无法确认全名时删去称呼并清楚表述事件，若因此无法辨明关键事实则省略该事件。任务及任务进度、任务提示/面板，以及任何系统消息、系统提示、系统状态/数值、系统奖励、功能或操作信息一律不得进入时间线；即使这些内容出现在聊天中或推动任务进度，也忽略。输出字段仅为“日期”和“事件”，不得单独列出出场角色，必要人名可写在事件正文中。同一天的日期只出现一次，格式为“日期｜事件”；无符合条件的剧情进展时输出空数组。`;
 export function ensureTimelinePromptRules(prompt) {
     const text = String(prompt ?? '').trim()
