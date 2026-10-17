@@ -45,6 +45,19 @@
 .cwb-section-body { padding:0 0 16px; min-width:0; }
 .cwb-subsection { padding-top:12px; margin-top:12px; border-top:1px solid var(--cwb-line); min-width:0; }
 .cwb-section-body > .cwb-subsection:first-child { padding-top:0; margin-top:0; border-top:0; }
+/* Manual known/unknown information review. */
+.cwb-info-review { display:grid; gap:9px; margin-top:10px; }
+.cwb-review-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.cwb-review-head strong { font-size:14px; }
+.cwb-review-fact { border:1px solid var(--cwb-line); border-radius:10px; padding:11px; min-width:0; }
+.cwb-review-fact[data-decision="keep"] { border-color:var(--cwb-accent); }
+.cwb-review-fact[data-decision="delete"] { opacity:.62; }
+.cwb-review-fact-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:11px; opacity:.75; }
+.cwb-review-fact p { margin:7px 0 10px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; }
+.cwb-review-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.cwb-review-actions > .menu_button { width:100%; min-height:40px; }
+.cwb-review-nav { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.cwb-review-summary { padding:12px; border:1px solid var(--cwb-line); border-radius:10px; }
 .cwb-subsection > h3 { margin:0 0 9px; font-size:13px; line-height:1.4; font-weight:650; }
 .cwb-batch-note { margin-top:-3px; margin-bottom:15px; }
 .cwb-section-tools, .cwb-detail-heading { display:flex; justify-content:space-between; gap:10px; align-items:center; }
