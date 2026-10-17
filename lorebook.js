@@ -64,6 +64,64 @@ function hasLegacyChatOwner(keys, chatId) {
         && String(key).replace(/ imported/g, '').replace(/\s+-\s+Branch #\d+$/i, '') === normalized);
 }
 
+async function migrateProfileOwnershipToCard(settings, names = null) {
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!chatId || chatId.startsWith('unknown_chat')) return 0;
+    const cardKey = getCardArchiveKey();
+    const allowedNames = names ? new Set(names.map(name => sanitizeName(name)).filter(Boolean)) : null;
+    const routedBooks = allowedNames ? await Promise.all([...allowedNames].map(name => routeWorldbook(settings, name))) : [];
+    const books = [...new Set([
+        ...await profileArchiveBooks(settings, getTargetWorldbook(settings)),
+        ...routedBooks,
+    ].filter(name => name && world_names.includes(name)))];
+    const rows = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName) }));
+    const candidatesByName = new Map();
+    for (const { bookName, entries } of rows) for (const entry of entries) {
+        const keys = getKeys(entry);
+        const marker = ['CWB:自动档案', 'CWB:主角档案'].find(value => keys.includes(value));
+        if (!marker) continue;
+        const hasForeignCardOwner = keys.some(key => String(key).startsWith('CWB:角色卡:') && key !== cardKey);
+        if (hasForeignCardOwner) continue;
+        const name = sanitizeName(profileName(entry));
+        if (!name || (allowedNames && !allowedNames.has(name))) continue;
+        const cardOwned = keys.includes(cardKey);
+        const currentChatOwned = hasLegacyChatOwner(keys, chatId);
+        const explicitlyMatchedRole = allowedNames?.has(name) ?? false;
+        if (!cardOwned && !currentChatOwned && !explicitlyMatchedRole) continue;
+        if (!candidatesByName.has(name)) candidatesByName.set(name, []);
+        candidatesByName.get(name).push({ bookName, entry, marker, name, cardOwned });
+    }
+    // Keep one canonical profile per character card. Existing duplicate records
+    // remain untouched as recoverable copies; no information is merged or deleted.
+    const canonicalEntries = [...candidatesByName.values()].map(candidates => candidates.sort((a, b) =>
+        Number(b.cardOwned) - Number(a.cardOwned)
+        || Number(b.entry.enabled) - Number(a.entry.enabled)
+        || Number(a.entry.uid) - Number(b.entry.uid))[0]);
+    const patchesByBook = new Map();
+    for (const { bookName, entry, marker, name } of canonicalEntries) {
+        const canonicalKeys = [marker, cardKey, name];
+        if (JSON.stringify(getKeys(entry)) === JSON.stringify(canonicalKeys)) continue;
+        (patchesByBook.get(bookName) ?? patchesByBook.set(bookName, []).get(bookName))
+            .push({ uid: entry.uid, keys: canonicalKeys });
+    }
+    let changed = 0;
+    for (const [bookName, patches] of patchesByBook) {
+        // Chat IDs and floor ranges describe a conversation, so they must not
+        // be keys on a card-owned profile. Update the existing UID in place.
+        if (!patches.length) continue;
+        await patchEntries(bookName, patches);
+        const persisted = await getEntries(bookName);
+        for (const patch of patches) {
+            const stored = persisted.find(entry => Number(entry.uid) === Number(patch.uid));
+            if (!stored || JSON.stringify(getKeys(stored)) !== JSON.stringify(patch.keys)) {
+                throw Error(`世界书《${bookName}》中的角色档案归属键回读核验失败；原条目 UID ${patch.uid} 未确认修改。`);
+            }
+        }
+        changed += patches.length;
+    }
+    return changed;
+}
+
 function profileName(entry) {
     return sanitizeName(String(parseCustomFormat(String(entry?.content ?? '')).姓名 ?? '').trim())
         || getKeys(entry).find(key => typeof key === 'string' && !key.startsWith('CWB:') && !/^\d+-\d+$/.test(key))
@@ -653,17 +711,17 @@ export async function deleteGeneratedContent(preview, onProgress) {
 export async function saveCharacterDescription(settings, characterName, content, startFloor, endFloor) {
     const safeName = sanitizeName(characterName);
     const marker = 'CWB:自动档案';
+    await migrateProfileOwnershipToCard(settings, [safeName]);
     const { cardKey, preferredBook, candidates } = await findCardProfile(settings, safeName, marker);
     const existing = candidates[0];
     const bookName = existing?.bookName || preferredBook;
     if (!bookName) return null;
-    const floorRange = `${startFloor + 1}-${endFloor + 1}`;
     const entries = await getEntries(bookName);
     const current = existing && entries.find(entry => Number(entry.uid) === Number(existing.uid));
     const entryData = {
         comment: `动态-${safeName}`,
         content,
-        keys: [marker, cardKey, safeName, floorRange],
+        keys: [marker, cardKey, safeName],
         enabled: true,
         type: 'selective',
         scanDepth: Number(settings.scanDepth) || 6,
@@ -684,13 +742,13 @@ export async function saveUserDescription(settings, userName, content, startFloo
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存主角档案。');
     const safeName = sanitizeName(userName || '主角');
-    const floorRange = `${startFloor + 1}-${endFloor + 1}`;
+    await migrateProfileOwnershipToCard(settings, [safeName]);
     const { cardKey, candidates } = await findCardProfile(settings, safeName, 'CWB:主角档案', { protagonist: true });
     const existing = candidates[0];
     const entryData = {
         comment: `动态-${safeName}`,
         content,
-        keys: ['CWB:主角档案', cardKey, safeName, floorRange],
+        keys: ['CWB:主角档案', cardKey, safeName],
         enabled: true,
         type: 'constant',
         position: 0,
@@ -919,8 +977,9 @@ async function updateRosterForBook(bookName, processedNames, startFloor, endFloo
 }
 
 export async function getTriggeredOldProfiles(settings, messages) {
+    await migrateProfileOwnershipToCard(settings);
+    await migrateProfileOwnershipToCard(settings, [getContext()?.name1 || '主角']);
     if (!settings.incremental) return [];
-    const chatId = state.chatId.replace(/ imported/g, '');
     const cardKey = getCardArchiveKey();
     const haystack = messages.map(message => `${message.name ?? ''}\n${message.message ?? ''}`).join('\n').toLowerCase();
     const preferredBook = getTargetWorldbook(settings);
@@ -930,14 +989,24 @@ export async function getTriggeredOldProfiles(settings, messages) {
     if (masterBook) {
         const masterEntries = await getEntries(masterBook);
         const userProfile = masterEntries.find(entry => getKeys(entry).includes('CWB:主角档案')
-            && (getKeys(entry).includes(cardKey) || !getKeys(entry).some(key => String(key).startsWith('CWB:角色卡:')) && getKeys(entry).includes(chatId)));
+            && getKeys(entry).includes(cardKey));
         if (userProfile) profiles.push(userProfile.content);
     }
-    const entriesByBook = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName) }));
+    let entriesByBook = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName) }));
+    const mentionedLegacyNames = [...new Set(entriesByBook.flatMap(({ entries }) => entries
+        .filter(entry => getKeys(entry).includes('CWB:自动档案')
+            && !getKeys(entry).some(key => String(key).startsWith('CWB:角色卡:'))
+            && Boolean(profileName(entry))
+            && haystack.includes(profileName(entry).toLowerCase()))
+        .map(profileName)))];
+    if (mentionedLegacyNames.length) {
+        await migrateProfileOwnershipToCard(settings, mentionedLegacyNames);
+        entriesByBook = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName) }));
+    }
     const candidates = entriesByBook.flatMap(({ bookName, entries }) => entries.filter(entry => {
         const keys = getKeys(entry);
         if (!keys.includes('CWB:自动档案') || keys.includes('Amily2角色总集') || keys.includes('CWB:故事时间线')) return false;
-        if (keys.some(key => String(key).startsWith('CWB:角色卡:')) && !keys.includes(cardKey)) return false;
+        if (!keys.includes(cardKey)) return false;
         const name = profileName(entry).toLowerCase();
         return Boolean(name) && haystack.includes(name);
     }).map(entry => ({ ...entry, bookName, cardOwned: getKeys(entry).includes(cardKey) })));
