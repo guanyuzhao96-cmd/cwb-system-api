@@ -656,7 +656,7 @@ export async function saveReviewedProfileCount(review, profile, nextCount) {
     const currentEntry = current.entries.find(entry => entry.bookName === profile.bookName
         && entry.uid === profile.uid
         && entry.marker === profile.marker
-        && entry.keys.includes(chatId));
+        );
     if (!currentEntry || currentEntry.content !== profile.content || currentEntry.keys.join('\0') !== profile.keys.join('\0')) {
         throw Error('审查期间档案已变化，未修改任何内容。请重新扫描后再核对。');
     }
@@ -697,7 +697,7 @@ export async function deleteReviewedProfileFact(review, fact) {
     const currentEntry = current.entries.find(entry => entry.bookName === fact.bookName
         && entry.uid === fact.uid
         && entry.marker === fact.marker
-        && entry.keys.includes(chatId));
+        );
     if (!currentEntry || currentEntry.content !== fact.content || currentEntry.keys.join('\0') !== fact.keys.join('\0')) {
         throw Error('审查期间档案已变化，未删除任何信息。请重新开始审查。');
     }
@@ -750,7 +750,7 @@ export async function deleteUnretainedProfileFacts(review, facts, onBookDeleted)
     const plansByBook = new Map();
     for (const fact of facts) {
         const currentEntry = current.entries.find(entry => entry.bookName === fact.bookName
-            && entry.uid === fact.uid && entry.marker === fact.marker && entry.keys.includes(chatId));
+            && entry.uid === fact.uid && entry.marker === fact.marker);
         if (!currentEntry || currentEntry.content !== fact.content || currentEntry.keys.join('\0') !== fact.keys.join('\0')) {
             throw Error(`角色“${fact.name}”档案已变化；未执行批量删除，请重新扫描。`);
         }
