@@ -459,6 +459,81 @@ export async function deleteReviewedProfileFact(review, fact) {
         lineRemoved, segmentIndex: fact.segmentIndex ?? 0, uid: fact.uid, keys: fact.keys };
 }
 
+export async function deleteUnretainedProfileFacts(review, facts, onBookDeleted) {
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!review || review.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
+        throw Error('当前聊天已变化或无法确认，未删除信息。请重新开始审查。');
+    }
+    if (!Array.isArray(facts) || !facts.length || facts.some(fact => !fact
+        || !['CWB:自动档案', 'CWB:主角档案'].includes(fact.marker)
+        || !REVIEWABLE_INFO_LINE.test(fact.line ?? ''))) {
+        throw Error('待删除信息校验失败；没有执行删除。请重新扫描。');
+    }
+    const current = await scanGeneratedContent('review-batch-verify');
+    const plansByBook = new Map();
+    for (const fact of facts) {
+        const currentEntry = current.entries.find(entry => entry.bookName === fact.bookName
+            && entry.uid === fact.uid && entry.marker === fact.marker && entry.keys.includes(chatId));
+        if (!currentEntry || currentEntry.content !== fact.content || currentEntry.keys.join('\0') !== fact.keys.join('\0')) {
+            throw Error(`角色“${fact.name}”档案已变化；未执行批量删除，请重新扫描。`);
+        }
+        if (!plansByBook.has(fact.bookName)) plansByBook.set(fact.bookName, { data: current.snapshots.get(fact.bookName), entries: new Map() });
+        const bookPlan = plansByBook.get(fact.bookName);
+        if (!bookPlan.entries.has(fact.uid)) bookPlan.entries.set(fact.uid, { facts: [], content: fact.content });
+        const entryPlan = bookPlan.entries.get(fact.uid);
+        if (entryPlan.content !== fact.content) throw Error('同一档案的审查快照不一致；未执行批量删除。');
+        entryPlan.facts.push(fact);
+    }
+
+    // Build and validate every changed entry before writing any worldbook.
+    for (const [bookName, bookPlan] of plansByBook) {
+        if (!bookPlan.data?.entries) throw Error(`世界书《${bookName}》读取失败；未执行批量删除。`);
+        for (const [uid, entryPlan] of bookPlan.entries) {
+            const target = bookPlan.data.entries[uid] ?? Object.values(bookPlan.data.entries).find(entry => Number(entry.uid) === Number(uid));
+            if (!target || String(target.content ?? '') !== entryPlan.content) throw Error('档案条目已变化；未执行批量删除。');
+            const newline = entryPlan.content.includes('\r\n') ? '\r\n' : '\n';
+            const lines = entryPlan.content.split(/\r?\n/);
+            const byLine = new Map();
+            for (const fact of entryPlan.facts) {
+                if (lines[fact.lineIndex] !== fact.line) throw Error('待删除信息位置已变化；未执行批量删除。请重新扫描。');
+                const lineMatch = lines[fact.lineIndex].match(REVIEWABLE_INFO_LINE);
+                const segments = lineMatch ? splitProfileInfoFacts(lineMatch[3]) : [];
+                const segment = segments[fact.segmentIndex ?? 0];
+                if (!segment || segment.value !== fact.value) throw Error('待删除信息片段已变化；未执行批量删除。请重新扫描。');
+                if (!byLine.has(fact.lineIndex)) byLine.set(fact.lineIndex, { lineMatch, indexes: new Set() });
+                const linePlan = byLine.get(fact.lineIndex);
+                if (linePlan.indexes.has(fact.segmentIndex ?? 0)) throw Error('待删除列表中存在重复信息；未执行批量删除。');
+                linePlan.indexes.add(fact.segmentIndex ?? 0);
+            }
+            for (const [lineIndex, linePlan] of [...byLine.entries()].sort((a, b) => b[0] - a[0])) {
+                const sourceLine = lines[lineIndex];
+                const prefix = sourceLine.slice(0, sourceLine.length - linePlan.lineMatch[3].length);
+                const segments = splitProfileInfoFacts(linePlan.lineMatch[3]);
+                const retained = segments.filter((_, index) => !linePlan.indexes.has(index));
+                if (!retained.length) lines.splice(lineIndex, 1);
+                else lines[lineIndex] = `${prefix}${retained.map(segment => segment.value).join('，')}`;
+            }
+            entryPlan.nextContent = lines.join(newline);
+        }
+    }
+
+    for (const [bookName, bookPlan] of plansByBook) {
+        for (const [uid, entryPlan] of bookPlan.entries) {
+            const target = bookPlan.data.entries[uid] ?? Object.values(bookPlan.data.entries).find(entry => Number(entry.uid) === Number(uid));
+            target.content = entryPlan.nextContent;
+        }
+        await saveWorldInfo(bookName, bookPlan.data, true);
+        const persisted = await readWorldbookFromServer(bookName);
+        const entries = [...bookPlan.entries].map(([uid, entryPlan]) => {
+            const stored = persisted.entries?.[uid] ?? Object.values(persisted.entries ?? {}).find(entry => Number(entry.uid) === Number(uid));
+            if (!stored || stored.content !== entryPlan.nextContent) throw Error(`世界书《${bookName}》回读核验失败；请刷新后检查已处理项。`);
+            return { uid, content: entryPlan.nextContent };
+        });
+        onBookDeleted?.({ bookName, deletedFacts: bookPlan.entries.size ? [...bookPlan.entries.values()].flatMap(item => item.facts.map(fact => fact.id)) : [], entries });
+    }
+    return { deleted: facts.length, books: plansByBook.size };
+}
+
 export async function deleteGeneratedContent(preview, onProgress) {
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!preview || preview.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
