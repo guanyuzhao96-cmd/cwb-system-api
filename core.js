@@ -5,6 +5,7 @@ import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mj
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
 import { callSystemApi } from './api.js';
+import { createErrorReport } from './error-report.js';
 import { state, acquireOperationLock } from './state.js';
 import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } from './timeline-utils.mjs';
 import {
@@ -141,12 +142,35 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
         messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
-        setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：本批仅调用 AI 1 次…`);
+        const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
+        setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：AI 请求中，输入约 ${requestChars} 字符…`);
         let response;
+        const requestStartedAt = Date.now();
         try { response = await callSystemApi(messages, settings.responseLength); }
         catch (error) {
-            if (state.chatId === chatId) for (const module of targets) await recordModuleResult(module, start, end, error.message);
-            throw error;
+            const progressErrors = [];
+            if (state.chatId === chatId) {
+                for (const module of targets) {
+                    try { await recordModuleResult(module, start, end, error.message); }
+                    catch (progressError) { progressErrors.push(`${MODULE_LABELS[module]}失败进度未保存：${progressError.message}`); }
+                }
+            }
+            const message = `第 ${start + 1}-${end + 1} 楼 AI 请求失败（输入约 ${requestChars} 字符）：${error.message}${progressErrors.length ? `；${progressErrors.join('；')}` : ''}`;
+            setStatus(message);
+            const reportedError = new Error(message, { cause: error });
+            reportedError.cwbDiagnostics = {
+                stage: 'SillyTavern generateRaw AI request',
+                modules: targets.map(module => MODULE_LABELS[module]),
+                startFloor: start + 1,
+                endFloor: end + 1,
+                batchFloors: end - start + 1,
+                totalChatFloors: state.messages.length,
+                requestCharacters: requestChars,
+                requestDurationMs: Date.now() - requestStartedAt,
+            };
+            createErrorReport(reportedError, reportedError.cwbDiagnostics);
+            reportedError.cwbReportGenerated = true;
+            throw reportedError;
         }
         assertCurrentChat(chatId);
         const parts = parseCombinedParts(response);

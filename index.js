@@ -9,6 +9,7 @@ import {
 } from '/scripts/extensions.js';
 import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt, ensureProfilePromptRules, ensureTimelinePromptRules } from './defaults.js';
 import { testSystemApi } from './api.js';
+import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
 import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, getProgressRecoveryCandidates, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
@@ -101,6 +102,10 @@ async function runButton(button, label, action) {
         console.error('[CWB]', error);
         notify('error', error.message);
         $('#cwb-status').text(`错误：${error.message}`);
+        if (!error.cwbReportGenerated) {
+            createErrorReport(error, error.cwbDiagnostics || { stage: `UI action: ${label}` });
+            error.cwbReportGenerated = true;
+        }
         if (button.attr('id') === 'cwb-generate-directories') $('#cwb-route-status').text(`目录生成失败：${error.message}`);
     } finally { button.prop('disabled', false).html(original); }
 }
@@ -200,6 +205,9 @@ function bindUi() {
     $('#cwb-test-api').on('click', function () {
         runButton($(this), '测试中…', async () => notify('success', await testSystemApi()));
     });
+    $('#cwb-download-error-report').on('click', function () {
+        if (!downloadLatestErrorReport()) notify('warning', '当前没有可下载的错误报告。');
+    });
     $('#cwb-manual-update').on('click', function () {
         runButton($(this), '更新中…', () => updateRecent(settings()));
     });
@@ -224,7 +232,14 @@ function bindUi() {
             await batchUpdate(settings(), (current, total) => {
                 button.text(current ? `点击停止（${current}/${total}）` : '批量补齐未完成内容');
             });
-        } catch (error) { notify('error', `批量更新失败：${error.message}`); }
+        } catch (error) {
+            notify('error', `批量更新失败：${error.message}`);
+            if (!error.cwbReportGenerated) {
+                createErrorReport(error, error.cwbDiagnostics || { stage: 'Batch update' });
+                error.cwbReportGenerated = true;
+            }
+            $('#cwb-status').text(`批量更新失败：${error.message}。诊断报告已生成，可点击下载。`);
+        }
         finally { button.html(original); }
     });
     $('#cwb-open-viewer').on('click', () => openViewer(settings()));

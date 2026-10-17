@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 test('settings button -> real API wrapper -> incremental prompt -> server readback, three rounds', { skip: !vm.SourceTextModule && 'Requires --experimental-vm-modules' }, async () => {
     const nodes = new Map(), requests = [], modules = new Map(), worldbookReads = [];
-    let invalidCombined = false;
+    let invalidCombined = false, failApiRequest = false;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
     const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
@@ -43,6 +43,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         eventSource: { on() {} }, event_types: {}, saveSettingsDebounced() {}, getRequestHeaders: () => ({}),
         generateRaw: async options => {
             requests.push(options);
+            if (failApiRequest) throw new TypeError('Load failed');
             if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
                 if (invalidCombined) return '[--档案无变化--]';
                 relationRound++;
@@ -175,6 +176,27 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.timeline.failed)), [[12, 15]]);
     assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.relationships.failed)), [[12, 15]]);
     assert.ok($('#cwb-progress-timeline').text().includes('连续成功至第 12 楼'));
+
+    // A 30-floor request remains one AI call and exposes a downloadable,
+    // content-free diagnostic report when the system API transport fails.
+    const previousChat = contextData.chat;
+    const progressBeforeLoadFailure = structuredClone(disk);
+    contextData.chat = Array.from({ length: 30 }, (_, i) => ({ mes: `第${i + 1}楼剧情` }));
+    const callsBeforeLoadFailure = requests.length;
+    failApiRequest = true;
+    await assert.rejects(
+        modules.get(resolve(root, 'core.js')).namespace.updateRange({ ...batchSettings, threshold: 30 }, 0, 29, { silent: true, modules: ['profiles'] }),
+        /AI 请求失败.*输入约.*酒馆系统 API 请求失败：Load failed/,
+    );
+    failApiRequest = false;
+    assert.equal(requests.length - callsBeforeLoadFailure, 1, '30 floors still use exactly one AI call');
+    assert.ok($('#cwb-status').text().includes('AI 请求失败'));
+    assert.ok($('#cwb-status').text().includes('输入约'));
+    assert.equal(document.getElementById('cwb-download-error-report').hidden, false, 'failed updates expose a downloadable diagnostic report');
+    contextData.chat = previousChat;
+    disk = progressBeforeLoadFailure;
+    cache = structuredClone(disk);
+
 
     invalidCombined = false;
     const beforeRepair = requests.length;

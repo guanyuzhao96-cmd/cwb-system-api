@@ -1,6 +1,7 @@
 /* Scoped to the extension; reuse the current SillyTavern theme. */
 .cwb-panel { --cwb-line: var(--SmartThemeBorderColor, rgba(150,150,150,.22)); --cwb-surface: var(--black20a, rgba(110,110,110,.08)); --cwb-accent: var(--SmartThemeQuoteColor, #87bda8); width:100%; min-width:0; font-size:14px; line-height:1.5; }
 .cwb-panel, .cwb-panel *, .cwb-modal, .cwb-modal * { box-sizing:border-box; }
+.cwb-panel [hidden] { display:none !important; }
 .cwb-panel .inline-drawer-content { padding:12px; }
 .cwb-panel h2 { margin:2px 0 0; font-size:22px; line-height:1.3; font-weight:650; text-align:left; }
 .cwb-dashboard-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; }
