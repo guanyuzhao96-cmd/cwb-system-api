@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 test('settings button -> real API wrapper -> incremental prompt -> server readback, three rounds', { skip: !vm.SourceTextModule && 'Requires --experimental-vm-modules' }, async () => {
     const nodes = new Map(), requests = [], modules = new Map(), worldbookReads = [];
-    let invalidCombined = false, failApiRequest = false;
+    let invalidCombined = false, failApiRequest = false, dropWriteResponse = false;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
     const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
@@ -76,7 +76,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const world = {
         selected_world_info: [], world_info: {}, world_names: ['主世界书'],
         loadWorldInfo: async () => structuredClone(cache),
-        saveWorldInfo: async (_, data) => { cache = structuredClone(data); if (!failWrite) disk = structuredClone(data); },
+        saveWorldInfo: async (_, data) => { cache = structuredClone(data); if (!failWrite) disk = structuredClone(data); if (dropWriteResponse) { dropWriteResponse = false; throw new TypeError('Load failed'); } },
         createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid }; },
     };
     const root = dirname(fileURLToPath(import.meta.url));
@@ -454,7 +454,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     cache = structuredClone(disk);
     const archiveSettings = { incremental: true, enabled: true, multiWorldbookRouting: false, worldbookTarget: 'primary' };
     const oldDisabled = await lorebook.getTriggeredOldProfiles(archiveSettings, [{ message: '复用角色' }]);
-    assert.ok(oldDisabled.some(content => content.includes('旧关键剧情')), 'disabled archives remain available as incremental evidence');
+    assert.ok(!oldDisabled.some(content => content.includes('旧关键剧情')), 'ordinary incremental evidence lookup is restored to the pre-0.13.2 behavior');
     const duplicateScan = await lorebook.scanDuplicateArchives();
     assert.ok(duplicateScan.plans.some(plan => plan.actions.some(action => action.includes('合并 复用角色') && action.includes(`UID ${profileUid}`))), 'scan reports exact profile names and UIDs');
     const scanBaseline = structuredClone(disk);
@@ -463,39 +463,85 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.ok(disk.entries[profileUid + 1], 'stale preview never removes duplicates');
     disk = scanBaseline; cache = structuredClone(disk);
     assert.ok(await lorebook.repairDuplicateArchives(duplicateScan) > 0);
+    assert.ok(disk.entries[profileUid].content.includes('旧关键剧情'));
+    assert.ok(disk.entries[profileUid].content.includes('重复档案中的独有剧情'));
+    assert.ok(disk.entries[profileUid].content.includes('[性经历人数]:3'));
     const repeatedScan = await lorebook.scanDuplicateArchives();
     assert.ok(!repeatedScan.plans.some(plan => plan.actions.some(action => action.includes('合并 复用角色'))), 'repair and rescan are idempotent');
     const delta = archive('本轮新增剧情');
     await lorebook.saveCharacterDescription(archiveSettings, '复用角色', delta, 40, 59);
     await lorebook.verifyProfileContent(archiveSettings, '复用角色', delta);
-    assert.equal(disk.entries[profileUid + 1], undefined, 'same-chat duplicate is consolidated atomically');
-    assert.ok(disk.entries[profileUid].content.includes('旧关键剧情'));
-    assert.ok(disk.entries[profileUid].content.includes('重复档案中的独有剧情'));
+    assert.equal(disk.entries[profileUid + 1], undefined, 'only the explicitly confirmed repair consolidated the duplicate');
     assert.ok(disk.entries[profileUid].content.includes('本轮新增剧情'));
-    assert.ok(disk.entries[profileUid].content.includes('[性经历人数]:3'));
     assert.ok(!disk.entries[profileUid].content.includes('其他分支剧情'));
     await lorebook.saveCharacterDescription(archiveSettings, '复用角色', delta, 40, 59);
     assert.equal(disk.entries[profileUid].content.match(/本轮新增剧情/g).length, 1, 'repeated updates are idempotent');
     await lorebook.manageChatEntries(archiveSettings);
-    assert.equal(disk.entries[profileUid + 2].disable, true, 'foreign branch profile cannot inject into current chat');
+    assert.equal(disk.entries[profileUid + 2].disable, false, '0.13.2 automatic foreign-profile deactivation has been removed');
     assert.ok(disk.entries[profileUid + 2].content.includes('其他分支剧情'), 'foreign branch data is preserved');
     assert.equal(disk.entries[profileUid + 3].disable, false, 'manual entries retain their activation state');
     disk.entries[profileUid + 4] = { uid: profileUid + 4, key: ['Amily2角色总集', 'integration-chat', '角色总览', '1-40'], disable: true, content: '[旧角色甲: (详细查看绿灯角色条目)]\n【前40楼角色世界书已更新完成】' };
+    disk.entries[profileUid + 6] = { uid: profileUid + 6, key: ['Amily2角色总集', 'integration-chat', '角色总览', '41-50'], disable: false, content: '[重复总览角色: (详细查看绿灯角色条目)]\n【前50楼角色世界书已更新完成】' };
     disk.entries[profileUid + 5] = { uid: profileUid + 5, key: ['Amily2角色总集', 'sibling-branch', '角色总览', '1-160'], disable: false, constant: true, content: '[其他分支角色: (详细查看绿灯角色条目)]\n【前160楼角色世界书已更新完成】' };
     const siblingRoster = disk.entries[profileUid + 5].content;
     cache = structuredClone(disk);
     await lorebook.updateRoster(archiveSettings, ['复用角色'], 40, 59);
     const currentRosters = Object.values(disk.entries).filter(entry => entry.key.includes('Amily2角色总集') && entry.key.includes('integration-chat'));
-    assert.equal(currentRosters.length, 1, 'same-chat duplicate rosters consolidate');
-    assert.ok(currentRosters[0].content.includes('旧角色甲'));
-    assert.ok(currentRosters[0].content.includes('复用角色'));
+    assert.equal(currentRosters.length, 2, 'ordinary roster update no longer automatically deletes duplicate records');
+    assert.ok(disk.entries[profileUid + 4].content.includes('旧角色甲'));
+    assert.ok(currentRosters.some(entry => entry.content.includes('复用角色')));
     assert.ok(!currentRosters[0].content.includes('其他分支角色'));
     await lorebook.manageChatEntries({ ...archiveSettings, worldbookTarget: 'custom', customWorldbook: '主世界书' });
-    assert.equal(disk.entries[profileUid + 5].disable, true, 'foreign branch roster is disabled even for custom target');
+    assert.equal(disk.entries[profileUid + 5].disable, false, 'custom-target activation behavior is restored to pre-0.13.2');
     assert.equal(disk.entries[profileUid + 5].content, siblingRoster, 'foreign branch roster content is preserved');
     assert.equal(currentRosters[0].disable, false, 'current roster stays active');
     disk = archiveBaseline;
     cache = structuredClone(disk);
+    const chronologicalBaseline = structuredClone(disk);
+    const originalChatId = contextData.chatId;
+    const currentStory = 'integration-chat - Branch #32', olderStory = 'integration-chat - Branch #25', laterStory = 'integration-chat - Branch #31';
+    contextData.chatId = currentStory;
+    modules.get(resolve(root, 'state.js')).namespace.state.chatId = currentStory;
+    const storyProfile = plot => `[姓名]:合并角色\n[剧情.0]:${plot}`;
+    disk = { entries: {
+        0: { uid: 0, key: ['CWB:自动档案', olderStory, '合并角色', '121-150'], content: storyProfile('2025-09-08｜较晚事件'), disable: true },
+        1: { uid: 1, key: ['CWB:自动档案', laterStory, '合并角色', '141-160'], content: storyProfile('2025-09-01｜最早事件'), disable: true },
+        2: { uid: 2, key: ['CWB:自动档案', currentStory, '合并角色', '1-20'], content: storyProfile('2025-09-05｜中间事件'), disable: false },
+        3: { uid: 3, key: ['Amily2角色总集', olderStory], content: '[旧角色: (详细查看绿灯角色条目)]\n【前150楼角色世界书已更新完成】', disable: true },
+        4: { uid: 4, key: ['Amily2角色总集', currentStory], content: '[新角色: (详细查看绿灯角色条目)]\n【前20楼角色世界书已更新完成】', disable: false },
+        5: { uid: 5, key: ['CWB:故事时间线', olderStory, 'CWB:时间线楼层:121-150'], content: '[时间线.0]:2025-9-8｜较晚时间线', disable: true },
+        6: { uid: 6, key: ['CWB:故事时间线', currentStory, 'CWB:时间线楼层:1-20'], content: '[时间线.0]:2025-9-1｜最早时间线', disable: false },
+        7: { uid: 7, key: ['CWB:更新状态', olderStory], content: JSON.stringify({ modules: { profiles: { completed: [[0, 159]] } } }), disable: true },
+        8: { uid: 8, key: ['CWB:自动档案', 'integration-chat - Branch #99', '合并角色'], content: storyProfile('2025-01-01｜未选分支'), disable: true },
+        9: { uid: 9, key: ['合并角色'], content: '手工设定', disable: false },
+    } };
+    cache = structuredClone(disk);
+    const relatedSources = await lorebook.getRelatedArchiveChats();
+    assert.ok(relatedSources.some(source => source.chatId === olderStory));
+    const storyPreview = await lorebook.scanDuplicateArchives(() => {}, [olderStory, laterStory]);
+    assert.ok(storyPreview.plans[0].actions.some(action => action.startsWith('迁入')));
+    dropWriteResponse = true;
+    await lorebook.repairDuplicateArchives(storyPreview);
+    const combinedPlot = disk.entries[2].content;
+    assert.ok(combinedPlot.indexOf('最早事件') < combinedPlot.indexOf('中间事件'));
+    assert.ok(combinedPlot.indexOf('中间事件') < combinedPlot.indexOf('较晚事件'));
+    assert.equal(disk.entries[0], undefined);
+    assert.equal(disk.entries[1], undefined);
+    assert.ok(disk.entries[4].content.includes('旧角色') && disk.entries[4].content.includes('新角色'));
+    assert.equal(disk.entries[3], undefined);
+    assert.ok(disk.entries[6].content.indexOf('最早时间线') < disk.entries[6].content.indexOf('较晚时间线'));
+    assert.ok(!disk.entries[6].key.includes('CWB:时间线楼层:121-150'), 'source message indices must not become target coverage');
+    assert.equal(disk.entries[7], undefined, 'old progress record is archived rather than kept as a separate active record');
+    const archivedProgress = JSON.parse(Object.values(disk.entries).find(entry => entry.key.includes('CWB:更新状态') && entry.key.includes(currentStory)).content);
+    assert.equal(archivedProgress.mergedSourceHistory[0].sourceChatId, olderStory);
+    assert.ok(!archivedProgress.modules.profiles?.completed?.some(range => range[1] === 159), 'source floors are historical only');
+    assert.ok(disk.entries[8].content.includes('未选分支'));
+    assert.equal(disk.entries[8].disable, true, 'unselected branch activation remains unchanged');
+    assert.equal(disk.entries[9].content, '手工设定');
+    assert.ok(!combinedPlot.includes('未选分支'));
+    contextData.chatId = originalChatId;
+    modules.get(resolve(root, 'state.js')).namespace.state.chatId = originalChatId;
+    disk = chronologicalBaseline; cache = structuredClone(disk);
     failWrite = true;
     contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
     // Force a visibly different response, so readback must detect failed persistence.

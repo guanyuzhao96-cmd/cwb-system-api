@@ -11,6 +11,7 @@ export const PROFILE_RULES = `角色与主角档案只允许“档案类型”�
 增量更新时只输出本轮有新增或实质变化的字段；旧档案中符合新规则的有效信息继续保留，事实变化时改正，重复信息合并。复核旧“已知信息”时，若内容只是事件经过，应根据可见证据提炼其背后的认知、态度、动机或关系结论；无法可靠提炼时删除，不得照抄成事件。角色没有任何新增或实质变化时用[--档案无变化--]。即使其他提示词要求保留更多字段，也必须遵守本规则。`;
 
 const lists = new Set(['角色已知信息', '角色未知信息', '性经历人员', '额外补充', '剧情']);
+// Explicit manual archive repair only. Ordinary generation uses pre-0.13.2 save behavior.
 export function mergeProfileDelta(previousContents, incomingContent) {
     const incoming = parseCustomFormat(incomingContent);
     const previous = previousContents.map(content => parseCustomFormat(content));
@@ -22,6 +23,13 @@ export function mergeProfileDelta(previousContents, incomingContent) {
             return Array.isArray(value) ? value : value && typeof value === 'object' ? Object.values(value) : value === undefined ? [] : [value];
         }).map(value => String(value ?? '').trim()).filter(Boolean);
         if (values.length) output[field] = [...new Set(values)];
+    }
+    if (output.剧情) {
+        const dateKey = value => {
+            const match = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?/);
+            return match ? `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')} ${String(match[4] || '0').padStart(2, '0')}:${match[5] || '00'}` : '\uffff';
+        };
+        output.剧情.sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
     }
     if (output.角色未知信息) output.角色未知信息 = output.角色未知信息.filter(value => !output.角色已知信息?.includes(value));
     const counts = [...previous, incoming].map(profile => profile.性经历人数).filter(value => /^\d+$/.test(String(value ?? ''))).map(Number);

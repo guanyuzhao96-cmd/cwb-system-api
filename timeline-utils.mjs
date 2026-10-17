@@ -25,7 +25,7 @@ export function parseTimelineRecords(contents) {
 
         const fields = line.split('｜').map(field => field.trim());
         const dateMatch = fields[0]?.match(DATE_PATTERN);
-        const date = dateMatch?.[1] || (fields[0] === '日期未知' ? '日期未知' : null);
+        const date = dateMatch ? dateMatch[1].split('-').map((part, index) => index ? part.padStart(2, '0') : part).join('-') : (fields[0] === '日期未知' ? '日期未知' : null);
         if (!date || fields.length < 2) {
             if (line) add('日期未知', line, false);
             currentDate = date;
