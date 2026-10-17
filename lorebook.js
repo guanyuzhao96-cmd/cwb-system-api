@@ -1468,31 +1468,41 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
 }
 
 
-export async function cleanupProfileFields(settings) {
+export async function cleanupProfileFields(settings, { transformContent = null, onProgress = null } = {}) {
     const chatId = state.chatId.replace(/ imported/g, '');
     const primary = getPrimaryWorldbook();
     const cardKey = getCardArchiveKey();
     const books = await profileArchiveBooks(settings, getTargetWorldbook(settings));
     const targets = [...new Set([...books, primary].filter(Boolean))];
-    let changed = 0, skipped = 0;
+    let skipped = 0;
+    const candidates = [];
     for (const bookName of targets) {
         const entries = await getEntries(bookName);
-        const patches = [];
         for (const entry of entries) {
             const keys = getKeys(entry);
             if ((!keys.includes(chatId) && !keys.includes(cardKey)) || (!keys.includes('CWB:自动档案') && !keys.includes('CWB:主角档案'))) continue;
             const content = sanitizeProfileContent(entry.content);
             if (content === null) { skipped++; continue; }
-            if (content !== entry.content) patches.push({ uid: entry.uid, content });
+            candidates.push({ bookName, uid: entry.uid, original: entry.content, content });
         }
-        if (patches.length) {
-            await patchEntries(bookName, patches);
-            const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
-            if (!response.ok) throw Error('精简档案保存后回读失败。');
-            const stored = await response.json();
-            for (const patch of patches) if (stored?.entries?.[patch.uid]?.content !== patch.content) throw Error('精简档案回读不一致，无法确认清理成功。');
-            changed += patches.length;
+    }
+    let changed = 0;
+    for (let index = 0; index < candidates.length; index++) {
+        const candidate = candidates[index];
+        onProgress?.({ current: index + 1, total: candidates.length, name: profileName({ content: candidate.content }) });
+        let content = candidate.content;
+        if (transformContent) {
+            const transformed = await transformContent(content, { current: index + 1, total: candidates.length, name: profileName({ content }) });
+            if (transformed !== null && transformed !== undefined) content = sanitizeProfileContent(transformed) ?? content;
         }
+        if (content === candidate.original) continue;
+        const patches = [{ uid: candidate.uid, content }];
+        await patchEntries(candidate.bookName, patches);
+        const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: candidate.bookName }), cache: 'no-cache' });
+        if (!response.ok) throw Error(`《${candidate.bookName}》精简档案保存后回读失败。`);
+        const stored = await response.json();
+        if (stored?.entries?.[candidate.uid]?.content !== content) throw Error(`《${candidate.bookName}》UID ${candidate.uid} 精简档案回读不一致；停止后续处理。`);
+        changed++;
     }
     return { changed, skipped };
 }
