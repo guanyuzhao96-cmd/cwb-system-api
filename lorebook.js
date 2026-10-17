@@ -1,5 +1,5 @@
 import { parseTimelineRecords, formatTimelineRecords } from './timeline-utils.mjs';
-import { sanitizeProfileContent } from './profile-utils.mjs';
+import { sanitizeProfileContent, mergeProfileDelta } from './profile-utils.mjs';
 import { applyModuleResult, intersectRanges, mergeModuleProgress, MODULE_LABELS } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
 import { extension_settings, getContext } from '/scripts/extensions.js';
@@ -660,12 +660,6 @@ export async function saveCharacterDescription(settings, characterName, content,
     const chatId = state.chatId.replace(/ imported/g, '');
     const safeName = sanitizeName(characterName);
     const floorRange = `${startFloor + 1}-${endFloor + 1}`;
-    const entries = await getEntries(bookName);
-    const existing = entries.find(entry => isEnabled(entry)
-        && getKeys(entry).includes('CWB:自动档案')
-        && getKeys(entry).includes(chatId)
-        && getKeys(entry).includes(safeName)
-        && !getKeys(entry).includes('Amily2角色总集'));
     const entryData = {
         comment: `动态-${safeName}`,
         content,
@@ -677,11 +671,7 @@ export async function saveCharacterDescription(settings, characterName, content,
         position: 4,
         role: 0,
     };
-    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
-    else {
-        const depths = entries.filter(entry => getKeys(entry).includes(chatId)).map(entry => Number(entry.depth)).filter(Number.isFinite);
-        await createEntries(bookName, [{ ...entryData, depth: Math.max(7000, ...depths) + 1 }]);
-    }
+    await upsertProfileArchive(bookName, entryData, 'CWB:自动档案', chatId, safeName, settings.incremental !== false);
     return safeName;
 }
 
@@ -691,8 +681,6 @@ export async function saveUserDescription(settings, userName, content, startFloo
     const chatId = state.chatId.replace(/ imported/g, '');
     const safeName = sanitizeName(userName || '主角');
     const floorRange = `${startFloor + 1}-${endFloor + 1}`;
-    const entries = await getEntries(bookName);
-    const existing = entries.find(entry => getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
     const entryData = {
         comment: `动态-${safeName}`,
         content,
@@ -703,9 +691,49 @@ export async function saveUserDescription(settings, userName, content, startFloo
         order: 10001,
         preventRecursion: true,
     };
-    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
-    else await createEntries(bookName, [entryData]);
+    await upsertProfileArchive(bookName, entryData, 'CWB:主角档案', chatId, safeName, settings.incremental !== false);
     return safeName;
+}
+
+function matchesProfileArchive(entry, marker, chatId, name) {
+    const keys = getKeys(entry);
+    return keys.includes(marker) && keys.includes(chatId) && !keys.includes('Amily2角色总集')
+        && (marker === 'CWB:主角档案' || keys.includes(name) || sanitizeName(parseCustomFormat(entry.content).姓名 || '') === name);
+}
+
+async function upsertProfileArchive(bookName, patch, marker, chatId, name, incremental) {
+    const data = await readWorldbookFromServer(bookName);
+    const matches = Object.values(data.entries).filter(entry => matchesProfileArchive(entry, marker, chatId, name))
+        .sort((a, b) => Number(a.uid) - Number(b.uid));
+    const target = matches[0] || createWorldInfoEntry(bookName, data);
+    if (!target) throw Error('无法创建角色档案条目。');
+    // A disabled archive is still the same archive. Never infer ownership from
+    // its title alone, and never absorb a different branch's content.
+    const content = incremental || matches.length > 1
+        ? mergeProfileDelta(matches.map(entry => entry.content), patch.content) : patch.content;
+    const ranges = [...new Set([...matches.flatMap(getKeys), ...patch.keys].filter(key => /^\d+-\d+$/.test(String(key))))];
+    const keys = [...patch.keys.filter(key => !/^\d+-\d+$/.test(String(key))), ...ranges];
+    applyEntryPatch(target, { ...patch, content, keys });
+    for (const entry of Object.values(data.entries)) {
+        if (getKeys(entry).includes(marker) && !getKeys(entry).includes(chatId)) applyEntryPatch(entry, { enabled: false });
+    }
+    if (!matches.length) {
+        const depths = Object.values(data.entries).filter(entry => getKeys(entry).includes(chatId)).map(entry => Number(entry.depth)).filter(Number.isFinite);
+        target.depth = Math.max(7000, ...depths) + 1;
+    }
+    for (const duplicate of matches.slice(1)) {
+        const key = Object.keys(data.entries).find(key => data.entries[key] === duplicate);
+        if (key !== undefined) delete data.entries[key];
+    }
+    const context = getContext();
+    const activeChatId = String(context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId).replace(/ imported/g, '');
+    if (state.chatId.replace(/ imported/g, '') !== chatId || activeChatId !== chatId) throw Error('保存前已切换聊天，未写入角色档案。');
+    await saveWorldInfo(bookName, data, true);
+    const persisted = await readWorldbookFromServer(bookName);
+    const stored = Object.values(persisted.entries).filter(entry => matchesProfileArchive(entry, marker, chatId, name));
+    if (stored.length !== 1 || Number(stored[0].uid) !== Number(target.uid) || stored[0].content !== content) {
+        throw Error(`角色 ${name} 增量合并后服务端回读不一致，未确认完成。`);
+    }
 }
 
 function timelineKeys(entry) {
@@ -880,21 +908,21 @@ async function updateRosterForBook(bookName, processedNames, startFloor, endFloo
     const context = getContext();
     const chatId = state.chatId.replace(/ imported/g, '');
     const comment = `Amily2角色总集-${chatId}-角色总览`;
-    const entries = await getEntries(bookName);
-    const existing = entries.find(entry => entry.comment === comment
-        || (getKeys(entry).includes('Amily2角色总集') && getKeys(entry).includes(chatId)));
+    const worldbook = await readWorldbookFromServer(bookName);
+    const matches = Object.values(worldbook.entries).filter(entry => getKeys(entry).includes('Amily2角色总集') && getKeys(entry).includes(chatId))
+        .sort((a, b) => Number(a.uid) - Number(b.uid));
     const names = new Set();
     let oldStart = 1;
     let oldEnd = 0;
-    if (existing) {
+    for (const existing of matches) {
         for (const line of String(existing.content ?? '').split('\n')) {
             const match = line.match(/^\[([^:]+):/);
             if (match) names.add(match[1].trim());
         }
         const completed = String(existing.content ?? '').match(/【前(\d+)楼角色世界书已更新完成】/);
-        if (completed) oldEnd = Number(completed[1]);
+        if (completed) oldEnd = Math.max(oldEnd, Number(completed[1]));
         const range = getKeys(existing).find(key => /^\d+-\d+$/.test(key));
-        if (range) oldStart = Number(range.split('-')[0]);
+        if (range) oldStart = Math.min(oldStart, Number(range.split('-')[0]));
     }
     processedNames.forEach(name => names.add(String(name).trim()));
     const newStart = Math.min(oldStart, startFloor + 1);
@@ -913,8 +941,22 @@ async function updateRosterForBook(bookName, processedNames, startFloor, endFloo
         order: 9999,
         preventRecursion: true,
     };
-    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...data }]);
-    else await createEntries(bookName, [data]);
+    const target = matches[0] || createWorldInfoEntry(bookName, worldbook);
+    if (!target) throw Error('无法创建角色总览条目。');
+    applyEntryPatch(target, data);
+    for (const entry of Object.values(worldbook.entries)) {
+        if (getKeys(entry).includes('Amily2角色总集') && !getKeys(entry).includes(chatId)) applyEntryPatch(entry, { enabled: false });
+    }
+    for (const duplicate of matches.slice(1)) {
+        const key = Object.keys(worldbook.entries).find(key => worldbook.entries[key] === duplicate);
+        if (key !== undefined) delete worldbook.entries[key];
+    }
+    const activeChat = getContext()?.chatId || getContext()?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId;
+    if (state.chatId.replace(/ imported/g, '') !== chatId || activeChat.replace(/ imported/g, '') !== chatId) throw Error('保存前已切换聊天，未写入角色总览。');
+    await saveWorldInfo(bookName, worldbook, true);
+    const persisted = await readWorldbookFromServer(bookName);
+    const stored = Object.values(persisted.entries).filter(entry => getKeys(entry).includes('Amily2角色总集') && getKeys(entry).includes(chatId));
+    if (stored.length !== 1 || stored[0].content !== content || Number(stored[0].uid) !== Number(target.uid)) throw Error('角色总览合并后服务端回读不一致，未确认完成。');
 }
 
 export async function getTriggeredOldProfiles(settings, messages) {
@@ -926,12 +968,12 @@ export async function getTriggeredOldProfiles(settings, messages) {
     const masterBook = getPrimaryWorldbook();
     if (masterBook) {
         const masterEntries = await getEntries(masterBook);
-        const userProfile = masterEntries.find(entry => entry.enabled && getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
+        const userProfile = masterEntries.find(entry => getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
         if (userProfile) profiles.push(userProfile.content);
     }
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
-        profiles.push(...entries.filter(entry => entry.enabled
+        profiles.push(...entries.filter(entry => getKeys(entry).includes('CWB:自动档案')
             && getKeys(entry).includes(chatId)
             && !getKeys(entry).includes('Amily2角色总集')
             && !getKeys(entry).includes('CWB:故事时间线')
@@ -961,7 +1003,7 @@ export async function getLastUpdatedFloor(settings) {
 
 export async function manageChatEntries(settings) {
     const customTarget = settings.worldbookTarget === 'custom';
-    const books = customTarget ? [getPrimaryWorldbook()] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const books = customTarget ? [...new Set([getPrimaryWorldbook(), getTargetWorldbook(settings)])] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
     if (state.chatId.startsWith('unknown_chat')) return;
     const chatId = state.chatId.replace(/ imported/g, '');
     for (const bookName of books.filter(Boolean)) {
@@ -983,6 +1025,12 @@ export async function manageChatEntries(settings) {
             }
             if (keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度')) {
                 if (entry.enabled) patches.push({ uid: entry.uid, enabled: false });
+                continue;
+            }
+            if (keys.includes('CWB:自动档案') || keys.includes('CWB:主角档案') || keys.includes('Amily2角色总集')) {
+                if (settings.enabled === false) continue;
+                const shouldEnable = keys.includes(chatId);
+                if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
                 continue;
             }
             if (customTarget || settings.enabled === false) continue;
@@ -1167,7 +1215,8 @@ export async function verifyProfileContent(settings, name, content, isUser = fal
     if (!response.ok) throw Error(`角色 ${name} 保存后回读失败。`);
     const data = await response.json();
     const chatId = state.chatId.replace(/ imported/g, '');
-    if (!Object.values(data?.entries ?? {}).some(entry => getKeys(entry).includes(chatId) && getKeys(entry).includes(isUser ? 'CWB:主角档案' : 'CWB:自动档案') && entry.content === content)) throw Error(`角色 ${name} 服务端未确认保存。`);
+    const matches = Object.values(data?.entries ?? {}).filter(entry => matchesProfileArchive(entry, isUser ? 'CWB:主角档案' : 'CWB:自动档案', chatId, sanitizeName(name)));
+    if (matches.length !== 1 || !(matches[0].content === content || mergeProfileDelta([matches[0].content], content) === matches[0].content)) throw Error(`角色 ${name} 服务端未确认保存。`);
 }
 
 

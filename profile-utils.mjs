@@ -11,6 +11,23 @@ export const PROFILE_RULES = `角色与主角档案只允许“档案类型”�
 增量更新时只输出本轮有新增或实质变化的字段；旧档案中符合新规则的有效信息继续保留，事实变化时改正，重复信息合并。复核旧“已知信息”时，若内容只是事件经过，应根据可见证据提炼其背后的认知、态度、动机或关系结论；无法可靠提炼时删除，不得照抄成事件。角色没有任何新增或实质变化时用[--档案无变化--]。即使其他提示词要求保留更多字段，也必须遵守本规则。`;
 
 const lists = new Set(['角色已知信息', '角色未知信息', '性经历人员', '额外补充', '剧情']);
+export function mergeProfileDelta(previousContents, incomingContent) {
+    const incoming = parseCustomFormat(incomingContent);
+    const previous = previousContents.map(content => parseCustomFormat(content));
+    if (!incoming.姓名 || previous.some(profile => !profile.姓名)) throw Error('旧角色档案格式无法安全增量合并，请先转换旧格式；原档案已保留。');
+    const output = { ...Object.assign({}, ...previous, incoming), 档案类型: incoming.档案类型 || previous[0]?.档案类型 || '角色', 姓名: incoming.姓名 || previous[0]?.姓名 };
+    for (const field of lists) {
+        const values = [...previous, incoming].flatMap(profile => {
+            const value = profile[field];
+            return Array.isArray(value) ? value : value && typeof value === 'object' ? Object.values(value) : value === undefined ? [] : [value];
+        }).map(value => String(value ?? '').trim()).filter(Boolean);
+        if (values.length) output[field] = [...new Set(values)];
+    }
+    if (output.角色未知信息) output.角色未知信息 = output.角色未知信息.filter(value => !output.角色已知信息?.includes(value));
+    const counts = [...previous, incoming].map(profile => profile.性经历人数).filter(value => /^\d+$/.test(String(value ?? ''))).map(Number);
+    if (counts.length) output.性经历人数 = String(Math.max(...counts));
+    return buildCustomFormat(output);
+}
 const scalars = new Set(['性经历人数']);
 const stat = '(?:好感(?:度|值)?|信任(?:度|值)|依赖(?:度|值)|服从(?:度|值)|忠诚(?:度|值)|堕落(?:度|值)|亲密(?:度|值)|欲望(?:度|值)|经验值|经验点|金币数|累计次数|性经历人数|与主角次数)';
 const statPattern = new RegExp(stat);

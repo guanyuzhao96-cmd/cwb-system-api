@@ -1,6 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeProfileContent, reconcileProfileExperienceCount, hasProfileFacts, PROFILE_RULES } from './profile-utils.mjs';
+import { sanitizeProfileContent, reconcileProfileExperienceCount, hasProfileFacts, PROFILE_RULES, mergeProfileDelta } from './profile-utils.mjs';
+
+test('incremental profile merge retains old fields, deduplicates plots and never sums duplicate totals', () => {
+    const old = '[姓名]:角色甲\n[剧情.0]:旧剧情\n[角色未知信息.0]:关键秘密\n[性经历人数]:3\n[手工补充]:保留';
+    const delta = '[姓名]:角色甲\n[剧情.0]:新剧情\n[角色已知信息.0]:关键秘密\n[性经历人数]:1';
+    const merged = mergeProfileDelta([old, old], delta);
+    assert.match(merged, /旧剧情/);
+    assert.match(merged, /新剧情/);
+    assert.match(merged, /\[性经历人数\]:3/);
+    assert.match(merged, /\[手工补充\]:保留/);
+    assert.doesNotMatch(merged, /\[角色未知信息\.\d+\]:关键秘密/);
+    assert.equal(mergeProfileDelta([merged], delta), merged);
+    assert.throws(() => mergeProfileDelta(['不可识别的旧档案'], delta), /原档案已保留/);
+});
 
 test('profile sanitizer preserves the requested factual fields and removes unrelated data', () => {
     const source = `[--角色档案开始--]
