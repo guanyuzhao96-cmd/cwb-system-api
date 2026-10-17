@@ -1,23 +1,30 @@
 import { PROFILE_RULES } from './profile-utils.mjs';
 
-export const PROFILE_PROMPT_RULE_MARKER = '【CWB角色档案强相关筛选规则 v0.10.4】';
+export const PROFILE_PROMPT_RULE_MARKER = '【CWB角色档案整理规则 v0.11.6】';
 export function ensureProfilePromptRules(prompt) {
-    const text = String(prompt ?? '').trim();
-    return text.includes(PROFILE_PROMPT_RULE_MARKER) ? text : `${text}\n\n${PROFILE_PROMPT_RULE_MARKER}\n${PROFILE_RULES}`;
+    const text = String(prompt ?? '').trim()
+        .replace(/\n*【CWB角色档案(?:强相关筛选|整理)规则 v[^】]+】[\s\S]*?(?:即使其他提示词要求保留更多字段，也必须遵守本规则。|$)/g, '')
+        .trim();
+    return `${text}\n\n${PROFILE_PROMPT_RULE_MARKER}\n${PROFILE_RULES}`;
 }
 
-const PROFILE_FORMAT = `只输出档案数据，不解释、不用Markdown代码块。每个角色独立输出：
+const PROFILE_FORMAT = `只输出档案数据，不解释、不用Markdown代码块。每个角色独立输出，可按实际信息省略空字段：
 [--角色档案开始--]
 [档案类型]:角色或主角
 [姓名]:实际姓名
-[剧情.0]:日期｜关键事件及结果（角色亲历、获知或直接承受后果；强力影响主线或后续走向）
+[角色已知信息.0]:角色亲自经历或明确获知的重要事实
+[角色未知信息.0]:已由剧情确认、但角色尚未获知的重要事实
+[性经历人员.0]:明确确认的成年对象姓名
+[性经历人数]:明确确认的成年对象去重人数
+[额外补充.0]:影响后续理解或扮演、且未被其他字段覆盖的信息
+[剧情.0]:日期｜关键事件、必要因果及结果（不超过64个汉字）
 [--角色档案结束--]
-上面是唯一允许的档案字段；无符合强相关标准的新剧情则输出[--档案无变化--]。主角与其他角色使用相同格式。`;
+字段按角色逐人记录，不得把不同角色的信息混在一起。无新增或实质变化时输出[--档案无变化--]。主角与其他角色使用相同格式。`;
 
 export const cwbCompleteDefaultSettings = {
     cwb_break_armor_prompt: '你是动态世界书整理器。只整理给定聊天中已发生的事实，不续写、不推测，不让角色知道其尚未获知的秘密。',
-    cwb_char_card_prompt: ensureProfilePromptRules(`从给定聊天整理角色与主角的个人关键剧情档案，不输出其他资料。\n${PROFILE_FORMAT}`),
-    cwb_incremental_char_card_prompt: ensureProfilePromptRules(`融合旧档案与新对话，只为有强相关个人关键剧情新增或实质变化的角色输出档案；重新筛选旧剧情，删除关联弱、无后续影响或过于琐碎的记录，合并重复。\n${PROFILE_FORMAT}`),
+    cwb_char_card_prompt: ensureProfilePromptRules(`从给定聊天整理角色与主角的个人档案：记录角色知道的重要事实、尚未知晓的重要事实、已确认的成年性经历对象与人数、必要补充和个人关键剧情。只根据聊天和旧档案中的明确事实整理，不推测。\n${PROFILE_FORMAT}`),
+    cwb_incremental_char_card_prompt: ensureProfilePromptRules(`融合旧档案与新对话，更新角色已知/未知信息、成年性经历对象及去重人数、必要补充和个人关键剧情。重新核对旧档案，纠正已变化的信息、删除重复或失实内容；剧情只保留对角色本人和后续走向有强影响的事件。\n${PROFILE_FORMAT}`),
 };
 
 // Replace only exact fingerprints of the previous built-in prompts; preserve custom prompts.
@@ -28,7 +35,14 @@ function fingerprint(value) {
 }
 export function migrateBuiltinProfilePrompt(value, kind) {
     const old = { fullPrompt: '2506:3257958421', incrementalPrompt: '3477:1662916541' };
-    if (typeof value !== 'string' || fingerprint(value) !== old[kind]) return value;
+    if (typeof value !== 'string') return value;
+    const oldBuiltinPreamble = kind === 'fullPrompt'
+        ? '从给定聊天整理角色与主角的个人关键剧情档案，不输出其他资料。'
+        : '融合旧档案与新对话，只为有强相关个人关键剧情新增或实质变化的角色输出档案；重新筛选旧剧情，删除关联弱、无后续影响或过于琐碎的记录，合并重复。';
+    const isPreviousBuiltin = value.startsWith(oldBuiltinPreamble)
+        && value.includes('上面是唯一允许的档案字段；')
+        && /【CWB角色档案强相关筛选规则 v[^】]+】/.test(value);
+    if (fingerprint(value) !== old[kind] && !isPreviousBuiltin) return value;
     return kind === 'fullPrompt' ? cwbCompleteDefaultSettings.cwb_char_card_prompt : cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt;
 }
 

@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cwbCompleteDefaultSettings, ensureProfilePromptRules, PROFILE_PROMPT_RULE_MARKER, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, ensureTimelinePromptRules, TIMELINE_PROMPT_RULE_MARKER } from './defaults.js';
+import { cwbCompleteDefaultSettings, ensureProfilePromptRules, migrateBuiltinProfilePrompt, PROFILE_PROMPT_RULE_MARKER, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, ensureTimelinePromptRules, TIMELINE_PROMPT_RULE_MARKER } from './defaults.js';
 
-test('full and incremental defaults explicitly request only strongly plot-relevant personal events', () => {
+test('full and incremental defaults request the expanded profile fields and detailed key events', () => {
     for (const prompt of [cwbCompleteDefaultSettings.cwb_char_card_prompt, cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt]) {
         assert.ok(prompt.includes(PROFILE_PROMPT_RULE_MARKER));
-        assert.match(prompt, /只允许“档案类型”“姓名”和“剧情\.N”字段/);
+        assert.match(prompt, /角色已知信息\.N.*角色未知信息\.N.*性经历人员\.N.*性经历人数.*额外补充\.N.*剧情\.N/s);
         assert.match(prompt, /强力推动或改变主线/);
+        assert.match(prompt, /64个汉字/);
     }
 });
 
@@ -16,6 +17,21 @@ test('saved custom prompts retain their text and receive the current mandatory p
     assert.ok(updated.startsWith(old));
     assert.ok(updated.includes('强力推动或改变主线'));
     assert.equal(ensureProfilePromptRules(updated), updated);
+});
+
+test('old mandatory profile rules are replaced instead of stacked on saved prompts', () => {
+    const old = '自定义提示词：整理角色信息\n\n【CWB角色档案强相关筛选规则 v0.10.4】\n旧规则只允许姓名和剧情。即使其他提示词要求保留更多字段，也必须遵守本规则。\n用户追加的补充要求。';
+    const updated = ensureProfilePromptRules(old);
+    assert.ok(updated.startsWith('自定义提示词：整理角色信息'));
+    assert.ok(updated.includes('用户追加的补充要求。'));
+    assert.doesNotMatch(updated, /旧规则只允许姓名和剧情/);
+    assert.equal((updated.match(/【CWB角色档案/g) ?? []).length, 1);
+    assert.match(updated, /角色未知信息/);
+});
+
+test('previous built-in profile prompts upgrade to the expanded defaults', () => {
+    const old = '从给定聊天整理角色与主角的个人关键剧情档案，不输出其他资料。\n[--角色档案开始--]\n[档案类型]:角色或主角\n[姓名]:实际姓名\n[剧情.0]:关键剧情\n[--角色档案结束--]\n上面是唯一允许的档案字段；无符合强相关标准的新剧情则输出[--档案无变化--]。主角与其他角色使用相同格式。\n\n【CWB角色档案强相关筛选规则 v0.10.4】\n旧规则正文。';
+    assert.equal(migrateBuiltinProfilePrompt(old, 'fullPrompt'), cwbCompleteDefaultSettings.cwb_char_card_prompt);
 });
 
 test('saved timeline prompts replace old rules with longer events and exclude task/system content', () => {
