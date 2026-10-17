@@ -154,12 +154,10 @@ function bindUi() {
                 notify('info', '当前聊天没有可清理的插件生成条目。');
                 return;
             }
-            const grouped = new Map();
-            for (const entry of preview.entries) {
-                const key = `${entry.bookName}｜${entry.label}`;
-                grouped.set(key, (grouped.get(key) ?? 0) + 1);
-            }
-            const details = [...grouped].map(([key, count]) => `${key}：${count} 条`).join('\n');
+            const details = preview.entries.map(entry => {
+                const name = entry.comment || `${entry.label}（UID ${entry.uid}）`;
+                return `《${entry.bookName}》｜${name}｜${entry.label}｜UID ${entry.uid}`;
+            }).join('\n');
             const message = `即将删除当前聊天的 ${preview.entries.length} 条插件生成内容：\n\n${details}\n\n仅删除条目键中明确标记为当前聊天的数据。原始/手工条目、全局目录、其他聊天数据和插件设置不会删除。此操作不可撤销。\n\n确认删除？`;
             if (!window.confirm(message)) return;
             button.text('正在删除并核验…');
