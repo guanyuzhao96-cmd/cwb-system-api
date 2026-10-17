@@ -1,26 +1,66 @@
 import { parseCustomFormat, buildCustomFormat } from './utils.js';
 
-export const PROFILE_RULES = `角色与主角档案只允许“档案类型”“姓名”“角色已知信息.N”“角色未知信息.N”“性经历人员.N”“性经历人数”“额外补充.N”和“剧情.N”字段，其他字段一律删除，不记录状态、目标、物品、能力、关系、好感或无关数值。
-“角色已知信息”不是事件流水账，而是从重要事件中提炼出的、对后续扮演有用的结论：角色当前确知的关键事实，以及剧情通过明确言行反映出的重要态度、意愿、动机、偏好、顾虑或关系判断。先问“这件事说明了她/他什么”，再写结论；不要重复记录谁在何时做了什么，也不要把剧情条目改写后再抄一遍。例如，若多次明确、自愿地与主角私下亲密且刻意避开他人，应记录“她愿意与主角发展隐秘的亲密关系，并倾向于维持隐秘”，而不是复述每次发生的地点和动作。只有单次或含义不明确的行为，不得夸大为稳定偏好、长期动机或确定人格特征；证据不足时省略或只保留有证据支持的有限结论。
-“角色已知信息”与“角色未知信息”都必须与主线剧情强相关，并会实质影响角色的重要选择、核心关系、重大冲突、关键秘密或后续走向。已知信息只记录该角色亲自经历、亲自获知、已被明确告知，或由其明确行为充分证实的重要事实/结论；不得把叙述者知道、但角色未接触的信息混入。未知信息只记录剧情明确确认且对后续扮演和主线发展重要、但该角色尚未获知的事实、关系或秘密；不得凭空推断角色不知道什么。角色获知后，应从未知移到已知，避免两边重复。普通日常、一般对话、临时情绪、无后续影响的细节、单纯被提及的信息，即使真实也不记录。
-“性经历人员”只记录剧情明确确认已发生性行为的成年对象姓名；仅在对象明确为18岁以上时记录，未成年或年龄不明一律省略。不得依据暧昧、恋爱、亲吻或推测补全经历，不写露骨过程。全量整理时，“性经历人数”按当前全部已确认成年对象去重计数；增量更新时，最终人数必须等于旧档案人数加上本轮剧情中新确认且此前未记录的成年对象数，不得把名单长度当总人数，也不得将旧人数清零。对象名单可能只列出本轮新增对象；合并档案时保留旧名单并去重。没有新增对象时沿用旧人数。不明时省略，只有明确确认没有经历时才写0，不把次数当人数。
-“额外补充”只记录会影响后续理解或角色塑造、且其他字段未覆盖的重要事实；必须与剧情强相关，不得记录普通生活细节或重复已知、未知、剧情内容。
-个人关键剧情必须同时满足：角色亲自参与、亲自获知或直接承受后果；并且事件强力推动或改变主线、重大冲突、关键秘密、角色核心目标或后续走向。只保留重大决定及其结果、关键冲突转折、重要秘密揭露、目标达成/失败及其持续影响等事件。仅被提及、与主线联系弱、无后续影响的事件不得记录。
-角色档案严禁记录任何任务或系统相关内容，包括任务目标/进度/提示、系统消息/提示/面板/状态/数值/奖励、签到、积分、功能说明、操作过程及界面文本；即使角色亲自经历、内容会影响数值或在剧情中出现，也不得写入任何字段。发现这类内容时整条删除，不要改写后保留。
-日常互动、普通对话、行动步骤、情绪变化、重复背景、枝节、未执行的计划和一般生活细节全部省略；不要把同一事件拆成多条，也不要复制全局时间线。剧情条目格式为“日期｜关键行为、必要因果及结果”，每条不超过64个汉字。相较旧版可保留约两倍篇幅，优先写清角色做了什么、为何重要及造成什么结果；不要删掉关键因果，也不要为凑字数扩写。
-增量更新时只输出本轮有新增或实质变化的字段；旧档案中符合新规则的有效信息继续保留，事实变化时改正，重复信息合并。复核旧“已知信息”时，若内容只是事件经过，应根据可见证据提炼其背后的认知、态度、动机或关系结论；无法可靠提炼时删除，不得照抄成事件。角色没有任何新增或实质变化时用[--档案无变化--]。即使其他提示词要求保留更多字段，也必须遵守本规则。`;
+export const PROFILE_RULES = `【总纲｜固定字段与栏位边界】
+只允许依次使用“档案类型、姓名、角色已知信息.N、角色未知信息.N、性经历人员.N、性经历人数、额外补充.N、剧情.N”。大标题/字段顺序固定；任何事实只放在唯一最匹配的栏，禁止串栏、跨角色混写或新增字段。档案只记录与角色本人及强相关剧情有关的信息。
+
+【角色已知信息｜记角色从事件中形成的结论】
+记录角色已确知的关键事实，以及从明确言行充分体现的态度、意愿、动机或关系判断；先判断“事件说明了她/他什么”，不复述事件经过。例如多次主动避开他人并与主角秘密亲密，可归纳为“她愿意与主角维持隐秘亲密关系”，而不是罗列地点和过程。一次含义不明的行为不得夸大为稳定偏好。只保留会影响重要选择、核心关系、重大冲突、关键秘密或后续走向的结论。
+
+【角色未知信息｜记角色尚不知道的重要事实】
+只记剧情明确确认、对主线或角色选择有实质影响、且当前角色尚未获知的秘密/事实；不得猜测未知，也不得重复已知内容。角色获知后，从未知迁至已知，不得并存。已知与未知条目中的逗号分隔独立信息拆为不同编号。
+
+【性经历人员与人数｜按不同成年对象累计】
+仅记录剧情明确确认发生过性行为且明确年满18岁的对象；未成年、年龄不明、仅暧昧/恋爱/亲吻或推测者一律不记，不写露骨过程。人员格式“姓名｜简要关系/经历状态”，同一对象始终只占一条，多次经历或关系变化并入原条。全量整理按不同成年对象去重计数；增量时最终人数=旧档案人数+本轮新确认且旧名单中不存在的成年对象人数。旧人数是累计基数，不能按当前名单长度重置；旧对象重复出现、别名/简称或关系状态更新都不增加人数。示例：旧档案4人，本轮新增1名不同对象，结果必须为5人。
+
+【额外补充｜只放其他栏无法表达的稳定事实】
+仅记录对后续理解/扮演持续重要，且已知、未知、人员、剧情栏均未覆盖的事实。不得重复事件、放普通生活或临时情绪，不确定时省略。
+
+【剧情｜逐条记录完整且重要的事件】
+必须检查本次范围所有楼层，记录每个角色直接参与、亲自获知或承受后果的所有强相关重要事件；不得只选最近一两件，不得漏掉配角发起但实质影响该角色的剧情，不设条数上限。格式“日期｜关键行为/遭遇 + 必要因果 + 结果/持续影响”，按时间升序；一条一个完整事件，重复叙述合并，不同事件分开。每条最多128字，不能为了简短删关键行为、转折、因果或后果。剧情写发生了什么，不要改写成已知结论。普通日常、闲聊、无后续影响的情绪和枝节省略。
+
+【全栏禁入｜任务、系统与界面】
+任务目标/进度/提示、系统消息/面板/状态/数值/奖励、签到、积分、功能说明、操作过程和界面文本，任何情况下都不得写入角色档案任何栏目；发现时整条排除，不得换说法保留。
+
+【增量更新｜完整基线，不覆盖丢失】
+本插件会用模型输出替换角色档案。先按准确姓名读取旧档案，再对照新剧情：旧档案中仍有效的所有栏目和剧情必须保留；本轮未提到不等于失效。仅凭新证据修订、删除被推翻的信息。结合旧档案和本轮证据后，输出完整最终档案快照，不得只输出变化片段；人数按上面的旧人数基数累加。只有确实没有任何变化时输出[--档案无变化--]。
+
+【输出自检】
+输出前逐项核对：大标题及字段顺序正确；每条内容归栏正确、角色姓名一致；已知是结论而非事件流水；逗号拆分的事实各有独立编号；性经历人员一人一条、人数按旧基数累计；重要剧情无遗漏且按时间排列；所有有效旧内容保留；无任务/系统/界面信息。只输出档案数据，不解释、不用Markdown代码块。即使其他提示词要求不同格式，也必须遵守本规则。`;
 
 const lists = new Set(['角色已知信息', '角色未知信息', '性经历人员', '额外补充', '剧情']);
 const scalars = new Set(['性经历人数']);
 const stat = '(?:好感(?:度|值)?|信任(?:度|值)|依赖(?:度|值)|服从(?:度|值)|忠诚(?:度|值)|堕落(?:度|值)|亲密(?:度|值)|欲望(?:度|值)|经验值|经验点|金币数|累计次数|性经历人数|与主角次数)';
 const statPattern = new RegExp(stat);
 const excludedContentPattern = /任务|系统|面板|状态栏|签到|抽奖|积分|奖励|兑换|提示框|功能说明|操作界面|界面文本|普通日常|日常生活|闲聊|喝咖啡/;
-function conciseValue(value) {
-    return String(value ?? '').split(/\r?\n/).flatMap(line => line.split(/[；;。]/)).map(part => {
+function personIdentity(value) {
+    return String(value ?? '').split(/[｜|]/, 1)[0].normalize('NFKC').replace(/\s+/g, '').toLocaleLowerCase();
+}
+
+function mergePeople(values) {
+    const byIdentity = new Map();
+    for (const raw of values ?? []) {
+        const person = String(raw ?? '').trim();
+        const identity = personIdentity(person);
+        if (!identity) continue;
+        const [name, ...details] = person.split(/[｜|]/);
+        const record = byIdentity.get(identity) ?? { name: name.trim(), details: [] };
+        for (const detail of details.flatMap(item => item.split(/[；;]/)).map(item => item.trim()).filter(Boolean)) {
+            if (!record.details.includes(detail)) record.details.push(detail);
+        }
+        byIdentity.set(identity, record);
+    }
+    return [...byIdentity.values()].map(({ name, details }) => `${name}${details.length ? `｜${details.join('；')}` : ''}`);
+}
+
+function conciseValues(value, { splitFacts = false, preserveAsOne = false } = {}) {
+    return String(value ?? '').split(/\r?\n/).flatMap(line => {
+        const parts = preserveAsOne ? [line] : line.split(/[；;。]/);
+        return splitFacts ? parts.flatMap(part => part.split(/[，,]/)) : parts;
+    }).map(part => {
         // Remove a trailing score clause while retaining the factual event before it.
         const cleaned = part.replace(new RegExp(`[,，]\\s*${stat}[^,，;；。]*`, 'g'), '').trim();
         return excludedContentPattern.test(cleaned) || (statPattern.test(cleaned) && /\d/.test(cleaned)) ? '' : cleaned;
-    }).filter(Boolean).join('；');
+    }).filter(Boolean);
 }
 
 // Return null for unrecognisable legacy prose so cleanup cannot silently erase it.
@@ -33,8 +73,11 @@ export function sanitizeProfileContent(content) {
     for (const key of lists) {
         const original = parsed[key];
         const items = Array.isArray(original) ? original : original && typeof original === 'object' ? Object.values(original) : original === undefined ? [] : [original];
-        const values = [...new Set(items.filter(item => typeof item !== 'object').map(conciseValue).filter(Boolean))];
-        if (values.length) clean[key] = values;
+        const splitFacts = ['角色已知信息', '角色未知信息', '额外补充'].includes(key);
+        const preserveAsOne = ['性经历人员', '剧情'].includes(key);
+        const values = items.filter(item => typeof item !== 'object').flatMap(item => conciseValues(item, { splitFacts, preserveAsOne }));
+        const uniqueValues = key === '性经历人员' ? mergePeople(values) : [...new Set(values)];
+        if (uniqueValues.length) clean[key] = uniqueValues;
     }
     for (const key of scalars) {
         const value = String(parsed[key] ?? '').trim();
@@ -47,7 +90,7 @@ export function sanitizeProfileContent(content) {
 
 function uniquePeople(value) {
     const items = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
-    return [...new Set(items.map(item => String(item ?? '').trim()).filter(Boolean))];
+    return mergePeople(items);
 }
 
 function validCount(value) {
@@ -77,8 +120,8 @@ export function reconcileProfileExperienceCount(content, previousProfiles = []) 
 
     const previousPeople = uniquePeople(previous['性经历人员']);
     const previousCount = validCount(previous['性经历人数']) ?? previousPeople.length;
-    const previousSet = new Set(previousPeople);
-    const newPeople = currentPeople.filter(person => !previousSet.has(person));
+    const previousSet = new Set(previousPeople.map(personIdentity));
+    const newPeople = currentPeople.filter(person => !previousSet.has(personIdentity(person)));
     const mergedPeople = uniquePeople([...previousPeople, ...currentPeople]);
     if (mergedPeople.length) current['性经历人员'] = mergedPeople;
     current['性经历人数'] = String(previousCount + newPeople.length);
