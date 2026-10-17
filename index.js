@@ -15,7 +15,7 @@ import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, delet
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { escapeHtml, notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
-import { scanDuplicateArchives, repairDuplicateArchives } from './lorebook.js';
+import { scanDuplicateArchives, repairDuplicateArchives, getRelatedArchiveChats } from './lorebook.js';
 
 const defaults = {
     enabled: false,
@@ -225,6 +225,28 @@ async function runButton(button, label, action) {
 }
 
 function bindUi() {
+    $('#cwb-scan-story-branches').on('click', function () {
+        runButton($(this), '读取同剧情分支…', async () => {
+            const release = acquireOperationLock(state, '同剧情分支合并预览');
+            try {
+                refreshChatState();
+                duplicateArchivePreview = null;
+                $('#cwb-repair-duplicates').prop('hidden', true);
+                $('#cwb-backup-duplicates').prop('hidden', true);
+                const sources = await getRelatedArchiveChats();
+                if (!sources.length) throw Error('未找到同一原始聊天名称下的旧分支存档。');
+                const answer = window.prompt(`将所选旧分支的角色档案、角色总览与时间线合入当前聊天，个人剧情按日期排序。请只选择确属同一剧情延续的分支。\n\n${sources.map((source, index) => `${index + 1}. ${source.chatId}（${source.count}条）`).join('\n')}\n\n输入编号，用逗号分隔；旧进度楼层不直接套用到当前聊天：`, '');
+                if (answer === null) return;
+                const selected = [...new Set(answer.split(/[,，\s]+/).filter(Boolean).map(value => Number(value) - 1))];
+                if (!selected.length || selected.some(index => !Number.isInteger(index) || !sources[index])) throw Error('来源编号无效，请重新选择。');
+                const preview = await scanDuplicateArchives(message => $('#cwb-status').text(message), selected.map(index => sources[index].chatId));
+                duplicateArchivePreview = preview;
+                $('#cwb-duplicate-report').prop('hidden', false).text([`目标：${preview.chatId}`, `已选来源：${preview.sourceChatIds.join('、')}`, '仅所选来源合入当前聊天；剧情按日期排序，同日期稳定保留先后。', ...preview.plans.flatMap(plan => [`《${plan.bookName}》`, ...plan.actions]), ...preview.warnings].join('\n'));
+                $('#cwb-backup-duplicates').prop('hidden', !preview.plans.length);
+                $('#cwb-repair-duplicates').prop('hidden', !preview.plans.length).prop('disabled', true);
+            } finally { release(); }
+        });
+    });
     $('#cwb-scan-duplicates').on('click', function () {
         runButton($(this), '正在检查重复存档…', async () => {
             const release = acquireOperationLock(state, '重复存档检查');
@@ -232,6 +254,7 @@ function bindUi() {
                 refreshChatState();
                 duplicateArchivePreview = null;
                 $('#cwb-repair-duplicates').prop('hidden', true);
+                $('#cwb-backup-duplicates').prop('hidden', true);
                 const preview = await scanDuplicateArchives(message => $('#cwb-status').text(message));
                 duplicateArchivePreview = preview;
                 const lines = [`已检查 ${preview.bookCount} 本相关世界书；仅合并当前聊天内的重复项，不跨分支合并。`,
@@ -241,28 +264,40 @@ function bindUi() {
                 if (!preview.plans.length) lines.push('没有发现可自动修复的问题。');
                 $('#cwb-duplicate-report').prop('hidden', false).text(lines.join('\n'));
                 $('#cwb-repair-duplicates').prop('hidden', !preview.plans.length);
+                $('#cwb-repair-duplicates').prop('disabled', true);
+                $('#cwb-backup-duplicates').prop('hidden', !preview.plans.length);
             } finally { release(); }
         });
     });
-    $('#cwb-repair-duplicates').on('click', function () {
-        runButton($(this), '正在修复并核验…', async () => {
+    $('#cwb-backup-duplicates').on('click', function () {
+        runButton($(this), '准备备份…', async () => {
             const preview = duplicateArchivePreview;
             if (!preview?.plans.length) throw Error('请先检查重复存档。');
-            if (!window.confirm(`确认执行报告列出的 ${preview.plans.reduce((sum, plan) => sum + plan.actions.length, 0)} 项修复？\n同聊天重复条目会合并后移除冗余条目；其他分支只停用，手工条目不改动。修复前将下载受影响世界书的完整备份。`)) return;
-            const release = acquireOperationLock(state, '重复存档修复');
-            try {
                 const backup = { backupType: 'CWB重复存档修复前备份', generatedAt: new Date().toISOString(), books: preview.plans.map(plan => ({ name: plan.bookName, data: plan.original })) };
                 const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
                 const link = document.createElement('a');
                 link.href = url; link.download = `cwb-archive-backup-${Date.now()}.json`;
                 document.body.append(link); link.click(); link.remove();
                 setTimeout(() => URL.revokeObjectURL(url), 1000);
+                preview.backupRequested = true;
+                $('#cwb-repair-duplicates').prop('disabled', false);
+                $('#cwb-status').text('备份下载已请求，尚未修改任何存档。保存好备份并返回后，请点击“执行合并并核验”。');
+        });
+    });
+    $('#cwb-repair-duplicates').on('click', function () {
+        runButton($(this), '正在修复并核验…', async () => {
+            const preview = duplicateArchivePreview;
+            if (!preview?.plans.length || !preview.backupRequested) throw Error('请先扫描并下载备份。');
+            if (!window.confirm(`确认已保存备份，并执行报告列出的 ${preview.plans.reduce((sum, plan) => sum + plan.actions.length, 0)} 项操作？\n${preview.sourceChatIds?.length ? `所选来源 ${preview.sourceChatIds.join('、')} 将合入当前聊天；合并成功后移除冗余档案。` : '仅合并当前聊天内重复项，其他分支不修改。'}\n未选来源和手工条目不改动。`)) return;
+            const release = acquireOperationLock(state, '重复存档修复');
+            try {
                 const count = await repairDuplicateArchives(preview, message => $('#cwb-status').text(message));
-                $('#cwb-duplicate-report').text(`已完成并回读核验 ${count} 项修复。冗余条目已合并移除，修复前数据保存在下载的备份中；可重新扫描复查。`);
+                $('#cwb-duplicate-report').text(`已完成并回读核验 ${count} 项操作：迁入 ${preview.stats?.migrated || 0} 条，合并/归档后移除旧条目 ${preview.stats?.removed || 0} 条。未选来源和手工条目未修改。个人剧情按日期排序；旧分支进度仅作为历史，不冒充当前楼层完成范围。修复前数据保存在下载的备份中。${preview.warnings.length ? `\n以下内容未自动合并：\n${preview.warnings.join('\n')}` : ''}`);
                 notify('success', `已完成 ${count} 项修复，合并移除的条目可从下载备份找回。`);
             } finally {
                 duplicateArchivePreview = null;
                 $('#cwb-repair-duplicates').prop('hidden', true);
+                $('#cwb-backup-duplicates').prop('hidden', true);
                 release();
             }
         });
