@@ -8,12 +8,18 @@ export async function callSystemApi(messages, responseLength = null) {
     if (!Array.isArray(messages) || !messages.length) throw new Error('提示词为空。');
     const systemMessages = messages.filter(message => message.role === 'system').map(message => message.content);
     const promptMessages = messages.filter(message => message.role !== 'system');
-    const result = await generateRaw({
-        prompt: promptMessages,
-        systemPrompt: systemMessages.join('\n\n'),
-        responseLength: Number(responseLength) > 0 ? Number(responseLength) : null,
-        trimNames: false,
-    });
+    let result;
+    try {
+        result = await generateRaw({
+            prompt: promptMessages,
+            systemPrompt: systemMessages.join('\n\n'),
+            responseLength: Number(responseLength) > 0 ? Number(responseLength) : null,
+            trimNames: false,
+        });
+    } catch (error) {
+        console.error('[CWB] SillyTavern generateRaw request failed', error);
+        throw new Error(`酒馆系统 API 请求失败：${error?.message || String(error)}`, { cause: error });
+    }
     if (!String(result ?? '').trim()) throw new Error('系统 API 未返回有效内容。');
     return String(result).trim();
 }
