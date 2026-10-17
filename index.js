@@ -10,7 +10,7 @@ import {
 import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt, ensureProfilePromptRules, ensureTimelinePromptRules } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
-import { cleanupProfileFields, convertLegacyEntries, generateWorldbookDirectories, listWorldbooks, routeSummary } from './lorebook.js';
+import { cleanupProfileFields, convertLegacyEntries, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
@@ -135,6 +135,43 @@ function bindUi() {
                 $('#cwb-status').text(`已精简 ${result.changed} 条当前聊天档案；未识别格式跳过 ${result.skipped} 条。本操作不调用 AI。`);
             } finally { release(); }
         });
+    });
+    $('#cwb-delete-generated').on('click', async function () {
+        const button = $(this);
+        const original = button.html();
+        button.prop('disabled', true).text('正在核对当前聊天条目…');
+        let release;
+        try {
+            release = acquireOperationLock(state, '删除当前聊天生成条目');
+            refreshChatState();
+            const preview = await getGeneratedContentPreview();
+            if (!preview.entries.length) {
+                $('#cwb-status').text('当前聊天没有可清理的插件生成条目。');
+                notify('info', '当前聊天没有可清理的插件生成条目。');
+                return;
+            }
+            const grouped = new Map();
+            for (const entry of preview.entries) {
+                const key = `${entry.bookName}｜${entry.label}`;
+                grouped.set(key, (grouped.get(key) ?? 0) + 1);
+            }
+            const details = [...grouped].map(([key, count]) => `${key}：${count} 条`).join('\n');
+            const message = `即将删除当前聊天的 ${preview.entries.length} 条插件生成内容：\n\n${details}\n\n仅删除条目键中明确标记为当前聊天的数据。原始/手工条目、全局目录、其他聊天数据和插件设置不会删除。此操作不可撤销。\n\n确认删除？`;
+            if (!window.confirm(message)) return;
+            button.text('正在删除并核验…');
+            const result = await deleteGeneratedContent(preview);
+            const summary = Object.entries(result.byType).map(([type, count]) => `${type} ${count} 条`).join('、') || '无';
+            $('#cwb-status').text(`已删除当前聊天的 ${result.deleted} 条生成内容：${summary}。`);
+            await refreshModuleProgress().catch(error => $('#cwb-progress-error').text(`进度读取失败：${error.message}`));
+            notify('success', `已安全清理 ${result.deleted} 条当前聊天生成内容。`);
+        } catch (error) {
+            console.error('[CWB] 清理生成条目失败', error);
+            $('#cwb-status').text(`删除未完成：${error.message}`);
+            notify('error', `删除未完成：${error.message}`);
+        } finally {
+            release?.();
+            button.prop('disabled', false).html(original);
+        }
     });
     $('#cwb-test-api').on('click', function () {
         runButton($(this), '测试中…', async () => notify('success', await testSystemApi()));

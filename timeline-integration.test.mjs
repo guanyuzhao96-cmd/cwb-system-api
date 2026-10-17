@@ -29,7 +29,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     }
     const documentNodes = new Map();
     const document = { getElementById: id => { if (!documentNodes.has(id)) documentNodes.set(id, { open: false, scrollIntoView() { this.scrolled = true; } }); return documentNodes.get(id); } };
-    const context = vm.createContext({ document, console, structuredClone, setTimeout, clearTimeout, $, window: { jQuery: f => initialized = f },
+    let lastConfirmation = '';
+    const context = vm.createContext({ document, console, structuredClone, setTimeout, clearTimeout, $, window: {
+        jQuery: f => initialized = f,
+        confirm: message => { lastConfirmation = message; return true; },
+    },
         fetch: async () => ({ ok: true, json: async () => structuredClone(disk) }),
     });
     const script = {
@@ -151,10 +155,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '新一批剧情' })));
     invalidCombined = true;
     const beforeInvalid = requests.length;
-    const savedBeforeInvalid = Object.values(disk.entries).filter(e => !e.key.includes('CWB:模块进度')).map(e => JSON.stringify(e)).join('');
+    const savedBeforeInvalid = Object.values(disk.entries).filter(e => !e.key.includes('CWB:更新状态')).map(e => JSON.stringify(e)).join('');
     await assert.rejects(modules.get(resolve(root, 'core.js')).namespace.batchUpdate(batchSettings), /关系|时间线/);
     assert.equal(requests.length - beforeInvalid, 1, 'invalid reply does not trigger hidden retries');
-    assert.equal(Object.values(disk.entries).filter(e => !e.key.includes('CWB:模块进度')).map(e => JSON.stringify(e)).join(''), savedBeforeInvalid, 'invalid content sections must not overwrite existing content');
+    assert.equal(Object.values(disk.entries).filter(e => !e.key.includes('CWB:更新状态')).map(e => JSON.stringify(e)).join(''), savedBeforeInvalid, 'invalid content sections must not overwrite existing content');
+    assert.equal(Object.values(disk.entries).filter(e => e.key.includes('CWB:更新状态')).length, 1, 'module progress and whole-chat tracking share one hidden state entry');
     const ledgerAfterFailure = await modules.get(resolve(root, 'lorebook.js')).namespace.getModuleProgress();
     assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.profiles.failed)), []);
     assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.timeline.failed)), [[12, 15]]);
@@ -182,6 +187,70 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     modules.get(resolve(root, 'core.js')).namespace.maybeAutoUpdate({ ...batchSettings, enabled: true, autoUpdate: true });
     await new Promise(resolve => setTimeout(resolve, 1350));
     assert.equal(requests.length - beforeAuto, 1, 'automatic threshold update uses one combined call and skips completed floors');
+    // Legacy whole-chat tracking and module progress should converge into one
+    // chat-scoped record without losing disjoint module or duplicate ranges.
+    const beforeMigration = structuredClone(disk);
+    const migrationUid = Math.max(-1, ...Object.keys(disk.entries).map(Number)) + 1;
+    disk.entries[migrationUid] = { uid: migrationUid, key: ['CWB:更新记录', 'migration-chat', 'CWB:总结楼层:0-7', 'CWB:追踪起点:0', 'CWB:重复总结楼层:3-4'], content: '最近一次：旧版更新' };
+    disk.entries[migrationUid + 1] = { uid: migrationUid + 1, key: ['CWB:模块进度', 'migration-chat'], content: JSON.stringify({ version: 1, modules: {
+            profiles: { completed: [[0, 4]], failed: [] },
+            timeline: { completed: [[0, 2]], failed: [] },
+            relationships: { completed: [[0, 1]], failed: [] },
+        } }) };
+    cache = structuredClone(disk);
+    modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'migration-chat';
+    await modules.get(resolve(root, 'lorebook.js')).namespace.recordModuleResult('relationships', 2, 3);
+    const migrated = Object.values(disk.entries).filter(e => e.key.includes('CWB:更新状态') && e.key.includes('migration-chat'));
+    assert.equal(migrated.length, 1);
+    assert.equal(Object.values(disk.entries).some(e => e.key.includes('CWB:更新记录') || e.key.includes('CWB:模块进度')), false);
+    const migratedState = JSON.parse(migrated[0].content);
+    assert.deepEqual(migratedState.modules.profiles.completed, [[0, 4]]);
+    assert.deepEqual(migratedState.modules.timeline.completed, [[0, 2]]);
+    assert.deepEqual(migratedState.modules.relationships.completed, [[0, 3]]);
+    assert.deepEqual(migratedState.tracking.completed, [[0, 7]]);
+    assert.deepEqual(migratedState.tracking.duplicates, [[3, 4]]);
+    disk = beforeMigration;
+    cache = structuredClone(disk);
+    modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-chat';
+    const beforeDelete = structuredClone(disk);
+    const deleteUid = Math.max(-1, ...Object.keys(disk.entries).map(Number)) + 1;
+    disk.entries[deleteUid] = { uid: deleteUid, key: ['手工条目', 'integration-chat'], comment: '手写资料', content: '必须保留' };
+    disk.entries[deleteUid + 1] = { uid: deleteUid + 1, key: ['CWB:自动档案', 'other-chat', '角色甲', '1-3'], comment: '动态-角色甲', content: '其他聊天资料' };
+    disk.entries[deleteUid + 2] = { uid: deleteUid + 2, key: ['CWB:世界书目录'], comment: '全局目录', content: '全局目录必须保留' };
+    disk.entries[deleteUid + 3] = { uid: deleteUid + 3, key: ['CWB:自动档案', 'integration-chat', '角色乙', '1-3'], comment: '动态-角色乙', content: '当前聊天生成档案' };
+    cache = structuredClone(disk);
+    const lorebook = modules.get(resolve(root, 'lorebook.js')).namespace;
+    const preview = await lorebook.getGeneratedContentPreview();
+    assert.ok(preview.entries.some(e => e.marker === 'CWB:自动档案'));
+    assert.ok(preview.entries.some(e => e.marker === 'CWB:故事时间线'));
+    assert.ok(preview.entries.some(e => e.marker === 'CWB:更新状态'));
+    assert.equal(preview.entries.some(e => e.uid === deleteUid), false, 'manual entries are excluded from the deletion preview');
+    assert.equal(preview.entries.some(e => e.uid === deleteUid + 1), false, 'entries from other chats are excluded from the deletion preview');
+    assert.equal(preview.entries.some(e => e.uid === deleteUid + 2), false, 'global directory entries are excluded from the deletion preview');
+    const changedTarget = preview.entries[0];
+    disk.entries[changedTarget.uid].content += '\n预览后手动修改';
+    await assert.rejects(lorebook.deleteGeneratedContent(preview), /发生变化/);
+    assert.ok(Object.values(disk.entries).some(e => e.key.includes('CWB:故事时间线')), 'stale preview aborts before deleting any entries');
+    cache = structuredClone(disk);
+    const deleteButton = $('#cwb-delete-generated');
+    assert.equal(typeof deleteButton.handlers.click, 'function', 'cleanup action is available in the workbench');
+    deleteButton.handlers.click.call(deleteButton);
+    for (let i = 0; i < 100 && deleteButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
+    assert.equal(deleteButton.prop('disabled'), false);
+    assert.match(lastConfirmation, /原始\/手工条目/);
+    assert.match(lastConfirmation, /其他聊天数据/);
+    const deletedUids = preview.entries.map(entry => entry.uid);
+    assert.ok(deletedUids.length > 0);
+    assert.equal(deletedUids.some(uid => disk.entries[uid]), false, 'all previewed generated entries are removed');
+    assert.equal(Object.values(disk.entries).some(e => e.key.includes('integration-chat') && [
+        'CWB:自动档案', 'CWB:主角档案', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:角色档案目录',
+        'CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度', 'Amily2角色总集',
+    ].some(marker => e.key[0] === marker)), false, 'all plugin-generated entries for the selected chat are deleted');
+    assert.equal(disk.entries[deleteUid].content, '必须保留');
+    assert.equal(disk.entries[deleteUid + 1].content, '其他聊天资料');
+    assert.equal(disk.entries[deleteUid + 2].content, '全局目录必须保留');
+    disk = beforeDelete;
+    cache = structuredClone(disk);
     failWrite = true;
     contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
     // Force a visibly different response, so readback must detect failed persistence.

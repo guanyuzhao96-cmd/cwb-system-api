@@ -25,17 +25,27 @@
 #cwb-plugin-modal .cwb-panel .cwb-secondary-actions > .menu_button,
 #cwb-plugin-modal .cwb-panel .cwb-full-width { width:100%; }
 .cwb-panel .menu_button:disabled { opacity:.55; cursor:wait; }
+.cwb-panel .menu_button.cwb-danger { border-color:var(--SmartThemeEmColor, #b65f5f); color:var(--SmartThemeEmColor, #c87474); }
 .cwb-panel .cwb-primary { grid-column:1/-1; min-height:48px; background:var(--cwb-accent); color:#15231d; border:1px solid var(--cwb-accent); font-weight:650; text-shadow:none; }
-.cwb-auto-bar { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px solid var(--cwb-line); border-radius:10px; padding:4px 10px; }
+.cwb-auto-bar { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px solid var(--cwb-line); border-radius:10px; padding:6px 10px; }
+.cwb-auto-bar .cwb-option > span { display:flex; flex-direction:column; gap:1px; }
+.cwb-auto-bar .cwb-option b { font-size:13px; font-weight:600; }
+.cwb-auto-bar .cwb-option small { font-size:10px; opacity:.58; line-height:1.35; }
 .cwb-threshold-label { display:flex; align-items:center; gap:7px; font-size:12px; margin:0; }
 .cwb-panel .cwb-threshold-label input { width:60px; min-height:36px; padding:4px; margin:0; text-align:center; border-radius:6px; }
+.cwb-threshold-label > span { opacity:.65; white-space:nowrap; }
 .cwb-section { border-top:1px solid var(--cwb-line); margin:0; background:transparent; }
-.cwb-section > summary { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; column-gap:12px; row-gap:2px; position:relative; padding:17px 20px 17px 0; font-weight:600; cursor:pointer; list-style:none; min-height:54px; }
+.cwb-section > summary { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; column-gap:12px; row-gap:2px; position:relative; padding:15px 24px 15px 0; font-weight:600; cursor:pointer; list-style:none; min-height:58px; }
 .cwb-section > summary::-webkit-details-marker { display:none; }
 .cwb-section > summary::after { content:'+'; position:absolute; right:1px; font-size:18px; font-weight:400; opacity:.55; }
 .cwb-section[open] > summary::after { content:'−'; }
-.cwb-section > summary > span { font-size:11px; font-weight:400; opacity:.5; }
+.cwb-section > summary > span { font-size:11px; font-weight:400; opacity:.55; }
+.cwb-section > summary > .cwb-section-title { font-size:14px; font-weight:650; color:inherit; opacity:1; }
 .cwb-section-body { padding:0 0 16px; min-width:0; }
+.cwb-subsection { padding-top:12px; margin-top:12px; border-top:1px solid var(--cwb-line); min-width:0; }
+.cwb-section-body > .cwb-subsection:first-child { padding-top:0; margin-top:0; border-top:0; }
+.cwb-subsection > h3 { margin:0 0 9px; font-size:13px; line-height:1.4; font-weight:650; }
+.cwb-batch-note { margin-top:-3px; margin-bottom:15px; }
 .cwb-section-tools, .cwb-detail-heading { display:flex; justify-content:space-between; gap:10px; align-items:center; }
 .cwb-detail-heading b { font-size:13px; }
 .cwb-detail-heading .menu_button { min-height:40px; font-size:12px; padding:7px 10px; }
@@ -105,7 +115,7 @@
     .cwb-progress-overview { gap:6px; }
     .cwb-progress-tile > strong { font-size:24px; }
     .cwb-panel .cwb-progress-tile { padding:10px 8px; }
-    .cwb-section > summary > span { flex-basis:100%; }
+    .cwb-section > summary > span:not(.cwb-section-title) { flex-basis:100%; }
     .cwb-secondary-actions, .cwb-grid { grid-template-columns:minmax(0,1fr); }
 }
 @media(prefers-reduced-motion:no-preference) {

@@ -6,7 +6,7 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.11.2</span><h2>更新工作台</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.11.5</span><h2>聊天世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
@@ -16,96 +16,97 @@
                 <button type="button" class="cwb-progress-tile" data-cwb-progress="timeline" aria-label="查看时间线进度与补漏"><span>时间线</span><strong id="cwb-through-timeline">—</strong><small id="cwb-gap-timeline">待读取</small></button>
                 <button type="button" class="cwb-progress-tile" data-cwb-progress="relationships" aria-label="查看角色关系进度与补漏"><span>角色关系</span><strong id="cwb-through-relationships">—</strong><small id="cwb-gap-relationships">待读取</small></button>
             </section>
-            <p class="cwb-caption">数字表示连续完成的楼层；中间有缺口时不会跳过。</p>
+            <p class="cwb-caption">进度按当前聊天统计；点击任一项目可查看缺漏并补更。</p>
             <div class="cwb-primary-actions">
-                <button id="cwb-batch-update" class="menu_button cwb-primary"><i class="fa-solid fa-layer-group" aria-hidden="true"></i> 补齐未完成内容</button>
-                <button id="cwb-manual-update" class="menu_button"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 更新最近</button>
+                <button id="cwb-batch-update" class="menu_button cwb-primary"><i class="fa-solid fa-layer-group" aria-hidden="true"></i> 补齐缺漏</button>
+                <button id="cwb-manual-update" class="menu_button"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 更新最近楼层</button>
                 <button id="cwb-open-viewer" class="menu_button"><i class="fa-solid fa-address-card" aria-hidden="true"></i> 查看档案</button>
             </div>
             <div class="cwb-auto-bar">
-                <label class="cwb-option"><input id="cwb-auto-update" type="checkbox"> 自动更新</label>
-                <label class="cwb-threshold-label" for="cwb-threshold">每 <input id="cwb-threshold" class="text_pole" type="number" min="1" value="20" inputmode="numeric" aria-label="自动更新阈值"> 楼</label>
+                <label class="cwb-option"><input id="cwb-auto-update" type="checkbox"><span><b>自动更新</b><small>达到楼层数后检查并补齐</small></span></label>
+                <label class="cwb-threshold-label" for="cwb-threshold"><input id="cwb-threshold" class="text_pole" type="number" min="1" value="20" inputmode="numeric" aria-label="自动更新阈值"><span>楼 / 次</span></label>
             </div>
-            <p class="cwb-caption">每批 1 次 AI，三项同步更新，已完成内容自动跳过。</p>
+            <p class="cwb-caption cwb-batch-note">补漏会跳过已完成楼层；指定范围可用于重做。</p>
 
             <details class="cwb-section" id="cwb-progress-details">
-                <summary>防漏进度<span>查看缺口与单项补更</span></summary>
+                <summary><span class="cwb-section-title">进度与补更</span><span>缺漏详情、单项补更、指定楼层</span></summary>
                 <div class="cwb-section-body">
-                    <div class="cwb-section-tools"><p class="cwb-help">刷新进度不调用 AI。</p><button id="cwb-check-progress" class="menu_button">刷新</button></div>
+                    <div class="cwb-section-tools"><p class="cwb-help">刷新进度不调用 AI。</p><button id="cwb-check-progress" class="menu_button">刷新进度</button></div>
                     <div id="cwb-progress-error" role="status"></div>
                     <div class="cwb-progress-detail" id="cwb-detail-profiles"><div class="cwb-detail-heading"><b>角色档案</b><button id="cwb-retry-profiles" class="menu_button">补漏此项</button></div><pre id="cwb-progress-profiles" class="cwb-route-status">进度待读取</pre></div>
                     <div class="cwb-progress-detail" id="cwb-detail-timeline"><div class="cwb-detail-heading"><b>时间线</b><button id="cwb-retry-timeline" class="menu_button">补漏此项</button></div><pre id="cwb-progress-timeline" class="cwb-route-status">进度待读取</pre></div>
                     <div class="cwb-progress-detail" id="cwb-detail-relationships"><div class="cwb-detail-heading"><b>角色关系</b><button id="cwb-retry-relationships" class="menu_button">补漏此项</button></div><pre id="cwb-progress-relationships" class="cwb-route-status">进度待读取</pre></div>
-                    <p class="cwb-help">格式或保存失败会保留缺口。旧记录无法核实的范围显示“未确认”，可指定楼层补更。</p>
-                </div>
-            </details>
-
-            <details class="cwb-section">
-                <summary>指定楼层更新<span>选择范围或重做单项</span></summary>
-                <div class="cwb-section-body cwb-range">
-                    <label for="cwb-range-module" class="cwb-section-label">更新内容</label>
-                    <select id="cwb-range-module" class="text_pole"><option value="all">全部三项</option><option value="profiles">仅角色与主角档案</option><option value="timeline">仅时间线</option><option value="relationships">仅角色关系</option></select>
-                    <div class="cwb-floor-row">
-                        <label>起始楼层<input id="cwb-start-floor" class="text_pole" type="number" min="1" inputmode="numeric" placeholder="1"></label>
-                        <span aria-hidden="true">至</span>
-                        <label>结束楼层<input id="cwb-end-floor" class="text_pole" type="number" min="1" inputmode="numeric" placeholder="100"></label>
+                    <p class="cwb-help">格式或保存失败会保留缺口；无法核实的旧记录会显示“未确认”。</p>
+                    <div class="cwb-subsection cwb-range">
+                        <h3>指定楼层</h3>
+                        <label for="cwb-range-module" class="cwb-section-label">更新内容</label>
+                        <select id="cwb-range-module" class="text_pole"><option value="all">全部三项</option><option value="profiles">仅角色与主角档案</option><option value="timeline">仅时间线</option><option value="relationships">仅角色关系</option></select>
+                        <div class="cwb-floor-row">
+                            <label>起始楼层<input id="cwb-start-floor" class="text_pole" type="number" min="1" inputmode="numeric" placeholder="1"></label>
+                            <span aria-hidden="true">至</span>
+                            <label>结束楼层<input id="cwb-end-floor" class="text_pole" type="number" min="1" inputmode="numeric" placeholder="100"></label>
+                        </div>
+                        <button id="cwb-range-update" class="menu_button cwb-full-width">更新选定范围</button>
+                        <p class="cwb-help">从 1 楼开始计数，包含起止楼层；此操作允许重做已完成内容。</p>
                     </div>
-                    <button id="cwb-range-update" class="menu_button cwb-full-width">更新选定范围</button>
-                    <p class="cwb-help">从 1 楼开始计数，包含起止楼层。此操作允许重做已完成内容。</p>
                 </div>
             </details>
 
             <details class="cwb-section">
-                <summary>单项工具与结果<span>时间线、关系和原始回复</span></summary>
+                <summary><span class="cwb-section-title">档案维护</span><span>清理、删除与单项更新</span></summary>
                 <div class="cwb-section-body">
-                    <button id="cwb-cleanup-profiles" class="menu_button cwb-full-width">精简已有角色档案（不调用 AI）</button>
-                    <p class="cwb-help">只保留姓名和个人关键剧情，删除状态、信息边界、目标、物品、能力及关系等其他字段。只处理当前聊天由本插件生成的角色及主角档案。</p>
-                    <div class="cwb-secondary-actions"><button id="cwb-refresh-timeline" class="menu_button">单独更新时间线</button><button id="cwb-update-relationships" class="menu_button">单独更新关系</button></div>
-                    <details class="cwb-log"><summary>角色关系汇总</summary><pre id="cwb-relationship-status" class="cwb-route-status">尚未读取</pre></details>
-                    <details class="cwb-log"><summary>本次 AI 回复与保存详情</summary><pre id="cwb-timeline-debug" class="cwb-route-status">尚未调用 AI</pre></details>
+                    <div class="cwb-subsection">
+                        <h3>整理生成内容</h3>
+                        <button id="cwb-cleanup-profiles" class="menu_button cwb-full-width">精简已有角色档案</button>
+                        <p class="cwb-help">不调用 AI；仅保留姓名和个人关键剧情，只处理当前聊天由本插件生成的角色及主角档案。</p>
+                        <button id="cwb-delete-generated" class="menu_button cwb-full-width cwb-danger">删除本聊天生成的世界书数据</button>
+                        <p class="cwb-help">删除前会列出条目分类并二次确认。仅删除当前聊天中带插件标记的档案、时间线、关系、档案目录、更新进度和角色总览；原始及手工条目、全局目录、其他聊天数据和插件设置都会保留。</p>
+                    </div>
+                    <div class="cwb-subsection">
+                        <h3>单项更新</h3>
+                        <div class="cwb-secondary-actions"><button id="cwb-refresh-timeline" class="menu_button">单独更新时间线</button><button id="cwb-update-relationships" class="menu_button">单独更新关系</button></div>
+                        <details class="cwb-log"><summary>角色关系汇总</summary><pre id="cwb-relationship-status" class="cwb-route-status">尚未读取</pre></details>
+                        <details class="cwb-log"><summary>AI 回复与保存记录</summary><pre id="cwb-timeline-debug" class="cwb-route-status">尚未调用 AI</pre></details>
+                    </div>
                 </div>
             </details>
+
             <details class="cwb-section">
-                <summary>更新设置<span>范围、写入目标与 API</span></summary>
+                <summary><span class="cwb-section-title">世界书设置</span><span>写入位置、目录和高级选项</span></summary>
                 <div class="cwb-section-body">
-                    <div class="cwb-grid">
-                        
+                    <div class="cwb-subsection">
+                        <h3>更新选项</h3>
+                        <div class="cwb-grid">
                         <label>最近更新层数<input id="cwb-scan-depth" class="text_pole" type="number" min="1" value="6"></label>
                         <label>最大回复 Token<input id="cwb-response-length" class="text_pole" type="number" min="0" value="0"></label>
+                        </div>
+                        <label class="cwb-option"><input id="cwb-incremental" type="checkbox"> 增量融合旧档案</label>
+                        <label class="cwb-option"><input id="cwb-multi-routing" type="checkbox"> 按目录分配到故事线世界书</label>
+                        <div class="cwb-grid cwb-target-grid">
+                            <label>写入目标
+                                <select id="cwb-worldbook-target" class="text_pole">
+                                    <option value="primary">角色主世界书</option>
+                                    <option value="custom">指定世界书</option>
+                                </select>
+                            </label>
+                            <label id="cwb-custom-worldbook-wrap">指定世界书<select id="cwb-custom-worldbook" class="text_pole"></select></label>
+                        </div>
+                        <div class="cwb-secondary-actions">
+                            <button id="cwb-test-api" class="menu_button"><i class="fa-solid fa-plug"></i> 测试系统 API</button>
+                            <button id="cwb-convert-format" class="menu_button"><i class="fa-solid fa-clock-rotate-left"></i> 转换旧版档案</button>
+                        </div>
                     </div>
-                    <label class="cwb-option"><input id="cwb-incremental" type="checkbox"> 增量融合旧档案</label>
-                    <label class="cwb-option"><input id="cwb-multi-routing" type="checkbox"> 按目录分配到故事线世界书</label>
-                    <div class="cwb-grid cwb-target-grid">
-                        <label>写入目标
-                            <select id="cwb-worldbook-target" class="text_pole">
-                                <option value="primary">角色主世界书</option>
-                                <option value="custom">指定世界书</option>
-                            </select>
-                        </label>
-                        <label id="cwb-custom-worldbook-wrap">指定世界书<select id="cwb-custom-worldbook" class="text_pole"></select></label>
+                    <div class="cwb-subsection">
+                        <h3>目录管理</h3>
+                        <p class="cwb-help">扫描已激活世界书中的角色标题和关键词，生成目录；重复角色会列出并跳过。</p>
+                        <div class="cwb-secondary-actions">
+                            <button id="cwb-generate-directories" class="menu_button">扫描并生成目录</button>
+                            <button id="cwb-scan-routes" class="menu_button">查看已有目录</button>
+                        </div>
+                        <pre id="cwb-route-status" class="cwb-route-status" aria-live="polite">尚未扫描</pre>
                     </div>
-                    <div class="cwb-secondary-actions">
-                        <button id="cwb-test-api" class="menu_button"><i class="fa-solid fa-plug"></i> 测试系统 API</button>
-                        <button id="cwb-convert-format" class="menu_button"><i class="fa-solid fa-clock-rotate-left"></i> 转换旧版档案</button>
-                    </div>
-                </div>
-            </details>
-
-            <details class="cwb-section">
-                <summary>目录管理<span>扫描与世界书归属</span></summary>
-                <div class="cwb-section-body">
-                    <p class="cwb-help">扫描已激活世界书的角色标题和关键词，生成目录；重复角色会列出并跳过。</p>
-                    <div class="cwb-secondary-actions">
-                        <button id="cwb-generate-directories" class="menu_button">扫描并生成目录</button>
-                        <button id="cwb-scan-routes" class="menu_button">查看已有目录</button>
-                    </div>
-                    <pre id="cwb-route-status" class="cwb-route-status" aria-live="polite">尚未扫描</pre>
-                </div>
-            </details>
-
-            <details class="cwb-section">
-                <summary>提示词编辑<span>修改后自动保存</span></summary>
-                <div class="cwb-section-body">
+                    <div class="cwb-subsection">
+                        <h3>提示词</h3>
                     <p class="cwb-help">修改后自动保存，下次更新档案时生效。</p>
                     <details class="cwb-prompt-editor"><summary>前置提示词</summary><label class="cwb-sr-only" for="cwb-break-prompt">前置提示词</label><textarea id="cwb-break-prompt" rows="3" class="text_pole textarea_compact"></textarea></details>
                     <details class="cwb-prompt-editor"><summary>全量生成</summary><label class="cwb-sr-only" for="cwb-full-prompt">全量生成</label><textarea id="cwb-full-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></details>
@@ -114,6 +115,7 @@
                     <div class="cwb-prompt-actions">
                         <span class="cwb-help">内置提示词 v0.10.9</span>
                         <button id="cwb-reset-prompts" class="menu_button">恢复默认</button>
+                    </div>
                     </div>
                 </div>
             </details>
