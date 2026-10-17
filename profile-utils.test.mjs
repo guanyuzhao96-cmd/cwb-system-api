@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeProfileContent, reconcileProfileExperienceCount, replaceProfilePlot, hasProfileFacts, PROFILE_RULES } from './profile-utils.mjs';
+import { sanitizeProfileContent, reconcileProfileExperienceCount, replaceProfilePlot, hasProfileFacts, PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES } from './profile-utils.mjs';
 
 test('profile sanitizer preserves the requested factual fields and removes unrelated data', () => {
     const source = `[--角色档案开始--]
@@ -130,4 +130,12 @@ test('plot compaction changes only the plot field and rejects unsafe output', ()
     assert.match(compacted, /导致甲与丙决裂/);
     assert.throws(() => replaceProfilePlot(source, ['x'.repeat(129)]), /超过128字/);
     assert.throws(() => replaceProfilePlot(source, 'not a list'), /字符串列表/);
+});
+
+test('plot compaction prompt deduplicates one event without merging unrelated same-day events', () => {
+    assert.match(PROFILE_PLOT_COMPACTION_PROMPT, /一个事件只保留一条描述/);
+    assert.match(PROFILE_PLOT_COMPACTION_PROMPT, /不同事件必须分开/);
+    assert.match(PROFILE_PLOT_COMPACTION_PROMPT, /不同故事线.*不得拼成一条/);
+    assert.match(PROFILE_PLOT_COMPACTION_PROMPT, /删除日常安排、普通闲聊/);
+    assert.match(PROFILE_PLOT_COMPACTION_PROMPT, /建议不超过80字/);
 });
