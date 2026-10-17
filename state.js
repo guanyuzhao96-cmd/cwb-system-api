@@ -9,6 +9,7 @@ export const state = {
     batchStopRequested: false,
     operationOwner: null,
     routeCache: null,
+    profileArchiveRegistry: null,
 };
 
 export function acquireOperationLock(targetState, owner) {

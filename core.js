@@ -571,6 +571,7 @@ export async function batchUpdate(settings, onProgress) {
 }
 
 export async function onChatChanged(settings) {
+    state.profileArchiveRegistry = null;
     // Worldbook state is chat-scoped. Let any in-flight save finish its chat check
     // before refreshing or migrating entries for the newly selected chat.
     let waited = 0;

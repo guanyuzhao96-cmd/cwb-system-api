@@ -106,6 +106,7 @@ export async function generateWorldbookDirectories(onProgress = () => {}) {
         generated.push({ bookName: plan.bookName, count: names.length });
     }
     state.routeCache = null;
+    state.profileArchiveRegistry = null;
     return {
         activeBooks: targetBooks,
         generated,
@@ -328,7 +329,9 @@ export async function scanDuplicateArchives(onProgress = () => {}, sourceChatIds
                         warnings.push(`《${bookName}》UID ${entry.uid} 来源档案姓名不可识别，保留原条目`); continue;
                     }
                     keys = [...new Set(keys.filter(key => !sourceChatIds.includes(key) && !/^CWB:聊天身份:/.test(key)
+                        && !/^CWB:档案身份:/.test(key)
                         && !/^(?:CWB:(?:时间线|关系|总结)楼层:)?\d+-\d+$/.test(String(key))).concat(chatId))];
+                    if (['CWB:自动档案', 'CWB:主角档案'].includes(type[0])) keys.push(profileStoryScope().key);
                     const normalizedContent = ['CWB:自动档案', 'CWB:主角档案'].includes(type[0]) ? mergeProfileDelta([], entry.content)
                         : type[0] === 'CWB:故事时间线' ? mergeTimelineContent([entry.content]) : entry.content;
                     applyEntryPatch(entry, { keys, content: normalizedContent, enabled: true });
@@ -472,6 +475,7 @@ export async function repairDuplicateArchives(preview, onProgress = () => {}) {
         onProgress(`已核验《${plan.bookName}》，完成 ${repaired} 项修复`);
     }
     state.routeCache = null;
+    state.profileArchiveRegistry = null;
     return repaired;
 }
 
@@ -864,61 +868,101 @@ export async function deleteGeneratedContent(preview, onProgress) {
         deleted += toDelete.length;
     }
     state.routeCache = null;
+    state.profileArchiveRegistry = null;
     return { deleted, byType };
 }
 
-export async function saveCharacterDescription(settings, characterName, content, startFloor, endFloor) {
-    const bookName = await routeWorldbook(settings, characterName);
-    if (!bookName) return null;
+function profileStoryScope() {
     const chatId = state.chatId.replace(/ imported/g, '');
-    const safeName = sanitizeName(characterName);
-    const floorRange = `${startFloor + 1}-${endFloor + 1}`;
-    const entries = await getEntries(bookName);
-    const existing = entries.find(entry => isEnabled(entry)
-        && getKeys(entry).includes('CWB:自动档案')
-        && getKeys(entry).includes(chatId)
-        && getKeys(entry).includes(safeName)
-        && !getKeys(entry).includes('Amily2角色总集'));
-    const entryData = {
-        comment: `动态-${safeName}`,
-        content,
-        keys: ['CWB:自动档案', chatId, safeName, floorRange],
-        enabled: true,
-        type: 'selective',
-        scanDepth: Number(settings.scanDepth) || 6,
-        order: 100,
-        position: 4,
-        role: 0,
-    };
-    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
-    else {
-        const depths = entries.filter(entry => getKeys(entry).includes(chatId)).map(entry => Number(entry.depth)).filter(Number.isFinite);
-        await createEntries(bookName, [{ ...entryData, depth: Math.max(7000, ...depths) + 1 }]);
+    if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认剧情身份，停止保存角色档案。');
+    const root = chatId.replace(/\s*-\s*Branch #\d+$/i, '').trim();
+    const primary = getPrimaryWorldbook();
+    if (!primary) throw Error('角色卡未绑定主世界书。');
+    const integrity = String(getContext()?.chatMetadata?.integrity || '').trim();
+    const lineage = integrity ? `integrity:${integrity}` : `filename:${root}`;
+    return { chatId, root, primary, key: `CWB:档案身份:${encodeURIComponent(`${primary}\0${lineage}`)}` };
+}
+
+function normalizedProfileName(value) {
+    return sanitizeName(String(value ?? '').trim().replace(/^["'“‘]+|["'”’]+$/g, ''));
+}
+
+function isStoryProfile(entry, scope) {
+    const keys = getKeys(entry);
+    if (!keys.includes('CWB:自动档案') && !keys.includes('CWB:主角档案')) return false;
+    const ownerKeys = keys.filter(key => String(key).startsWith('CWB:档案身份:'));
+    if (ownerKeys.length) return ownerKeys.includes(scope.key);
+    const name = normalizedProfileName(parseCustomFormat(entry.content).姓名 || '');
+    return keys.some(key => typeof key === 'string' && key !== name
+        && key.replace(/ imported/g, '').replace(/\s*-\s*Branch #\d+$/i, '').trim() === scope.root);
+}
+
+async function storyProfileRegistry(settings) {
+    const scope = profileStoryScope();
+    if (state.profileArchiveRegistry?.key === scope.key) return state.profileArchiveRegistry;
+    const books = [...new Set([scope.primary, getTargetWorldbook(settings), ...(settings.multiWorldbookRouting ? listWorldbooks() : getActiveWorldbookNames())].filter(Boolean))];
+    const rows = await mapWithConcurrency(books, 4, async bookName => {
+        const data = await readWorldbookFromServer(bookName);
+        return Object.values(data.entries).filter(entry => isStoryProfile(entry, scope)).map(entry => ({ ...entry, bookName }));
+    });
+    state.profileArchiveRegistry = { key: scope.key, entries: rows.flat() };
+    return state.profileArchiveRegistry;
+}
+
+function profileCandidates(registry, scope, name, marker) {
+    return registry.entries.filter(entry => getKeys(entry).includes(marker)
+        && (marker === 'CWB:主角档案' || normalizedProfileName(parseCustomFormat(entry.content).姓名 || '') === name || getKeys(entry).includes(name)))
+        .sort((a, b) => Number(getKeys(b).includes(scope.key)) - Number(getKeys(a).includes(scope.key))
+            || Number(getKeys(b).includes(scope.chatId)) - Number(getKeys(a).includes(scope.chatId)) || Number(b.uid) - Number(a.uid));
+}
+
+async function persistSingleProfile(settings, rawName, content, startFloor, endFloor, isUser) {
+    const scope = profileStoryScope();
+    const marker = isUser ? 'CWB:主角档案' : 'CWB:自动档案';
+    const name = normalizedProfileName(rawName || (isUser ? '主角' : ''));
+    if (!name) throw Error('角色姓名无效，未新建档案。');
+    const registry = await storyProfileRegistry(settings);
+    const candidates = profileCandidates(registry, scope, name, marker);
+    const located = candidates[0];
+    const bookName = located?.bookName || (isUser ? scope.primary : await routeWorldbook(settings, rawName));
+    if (!bookName) return null;
+    const data = await readWorldbookFromServer(bookName);
+    let target = located ? Object.values(data.entries).find(entry => Number(entry.uid) === Number(located.uid) && isStoryProfile(entry, scope) && getKeys(entry).includes(marker)) : null;
+    if (located && !target) { state.profileArchiveRegistry = null; throw Error(`角色“${name}”原档案位置已变化，停止新建，请重试。`); }
+    // Recheck the destination immediately before creating, including disabled
+    // archives. No duplicate consolidation or cross-branch deactivation here.
+    target ||= profileCandidates({ entries: Object.values(data.entries).filter(entry => isStoryProfile(entry, scope)) }, scope, name, marker)[0];
+    const created = !target;
+    target ||= createWorldInfoEntry(bookName, data);
+    if (!target) throw Error('无法创建角色档案。');
+    applyEntryPatch(target, {
+        comment: `动态-${name}`, content, keys: [marker, scope.chatId, name, scope.key, `${startFloor + 1}-${endFloor + 1}`],
+        enabled: true, type: isUser ? 'constant' : 'selective', position: isUser ? 0 : 4,
+        order: isUser ? 10001 : 100, scanDepth: Number(settings.scanDepth) || 6,
+        ...(isUser ? { preventRecursion: true } : { role: 0 }),
+    });
+    if (created && !isUser) {
+        const depths = Object.values(data.entries).map(entry => Number(entry.depth)).filter(Number.isFinite);
+        target.depth = Math.max(7000, ...depths) + 1;
     }
-    return safeName;
+    const active = getContext()?.chatId || getContext()?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId;
+    if (active.replace(/ imported/g, '') !== scope.chatId || state.chatId.replace(/ imported/g, '') !== scope.chatId) throw Error('保存前切换了聊天，未写入档案。');
+    await saveWorldInfo(bookName, data, true);
+    const storedBook = await readWorldbookFromServer(bookName);
+    const stored = Object.values(storedBook.entries).find(entry => Number(entry.uid) === Number(target.uid));
+    if (!stored || stored.content !== content || !getKeys(stored).includes(scope.key)) throw Error(`角色“${name}”更新后回读不一致，未确认保存。`);
+    registry.entries = registry.entries.filter(entry => entry.bookName !== bookName || Number(entry.uid) !== Number(target.uid));
+    registry.entries.push({ ...stored, bookName });
+    if (candidates.length > 1) notify('warning', `角色“${name}”有 ${candidates.length} 份旧档案，本次只更新《${bookName}》UID ${target.uid}，未新建或删除其他份；请用手动合并处理旧重复项。`);
+    return name;
+}
+
+export async function saveCharacterDescription(settings, characterName, content, startFloor, endFloor) {
+    return persistSingleProfile(settings, characterName, content, startFloor, endFloor, false);
 }
 
 export async function saveUserDescription(settings, userName, content, startFloor, endFloor) {
-    const bookName = getPrimaryWorldbook();
-    if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存主角档案。');
-    const chatId = state.chatId.replace(/ imported/g, '');
-    const safeName = sanitizeName(userName || '主角');
-    const floorRange = `${startFloor + 1}-${endFloor + 1}`;
-    const entries = await getEntries(bookName);
-    const existing = entries.find(entry => getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
-    const entryData = {
-        comment: `动态-${safeName}`,
-        content,
-        keys: ['CWB:主角档案', chatId, safeName, floorRange],
-        enabled: true,
-        type: 'constant',
-        position: 0,
-        order: 10001,
-        preventRecursion: true,
-    };
-    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
-    else await createEntries(bookName, [entryData]);
-    return safeName;
+    return persistSingleProfile(settings, userName, content, startFloor, endFloor, true);
 }
 
 function timelineKeys(entry) {
@@ -1131,26 +1175,22 @@ async function updateRosterForBook(bookName, processedNames, startFloor, endFloo
 }
 
 export async function getTriggeredOldProfiles(settings, messages) {
+    state.profileArchiveRegistry = null;
     if (!settings.incremental) return [];
-    const chatId = state.chatId.replace(/ imported/g, '');
     const haystack = messages.map(message => `${message.name ?? ''}\n${message.message ?? ''}`).join('\n').toLowerCase();
-    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const scope = profileStoryScope();
+    const registry = await storyProfileRegistry(settings);
     const profiles = [];
-    const masterBook = getPrimaryWorldbook();
-    if (masterBook) {
-        const masterEntries = await getEntries(masterBook);
-        const userProfile = masterEntries.find(entry => entry.enabled && getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
-        if (userProfile) profiles.push(userProfile.content);
-    }
-    for (const bookName of books.filter(Boolean)) {
-        const entries = await getEntries(bookName);
-        profiles.push(...entries.filter(entry => entry.enabled
-            && getKeys(entry).includes(chatId)
-            && !getKeys(entry).includes('Amily2角色总集')
-            && !getKeys(entry).includes('CWB:故事时间线')
-            && !getKeys(entry).includes('CWB:主角档案')
-            && getKeys(entry).filter(key => !['CWB:自动档案', chatId].includes(key)).some(key => haystack.includes(String(key).toLowerCase())))
-            .map(entry => entry.content));
+    const seen = new Set();
+    for (const entry of registry.entries) {
+        const marker = getKeys(entry).includes('CWB:主角档案') ? 'CWB:主角档案' : 'CWB:自动档案';
+        const name = normalizedProfileName(parseCustomFormat(entry.content).姓名 || '');
+        if (!name || marker !== 'CWB:主角档案' && !haystack.includes(name.toLowerCase())) continue;
+        const id = `${marker}:${name}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const canonical = profileCandidates(registry, scope, name, marker)[0];
+        if (canonical) profiles.push(canonical.content);
     }
     return profiles;
 }
@@ -1374,13 +1414,15 @@ export async function recordModuleResult(module, start, end, error = null) {
 }
 
 export async function verifyProfileContent(settings, name, content, isUser = false) {
-    const bookName = isUser ? getPrimaryWorldbook() : await routeWorldbook(settings, name);
-    if (!bookName) throw Error(`角色 ${name} 未找到目录归属，未标记档案完成。`);
+    const scope = profileStoryScope();
+    const registry = await storyProfileRegistry(settings);
+    const located = profileCandidates(registry, scope, normalizedProfileName(name), isUser ? 'CWB:主角档案' : 'CWB:自动档案')[0];
+    const bookName = located?.bookName;
+    if (!bookName) throw Error(`角色 ${name} 未找到已保存的唯一档案位置，未标记完成。`);
     const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
     if (!response.ok) throw Error(`角色 ${name} 保存后回读失败。`);
     const data = await response.json();
-    const chatId = state.chatId.replace(/ imported/g, '');
-    if (!Object.values(data?.entries ?? {}).some(entry => getKeys(entry).includes(chatId) && getKeys(entry).includes(isUser ? 'CWB:主角档案' : 'CWB:自动档案') && entry.content === content)) throw Error(`角色 ${name} 服务端未确认保存。`);
+    if (!Object.values(data?.entries ?? {}).some(entry => Number(entry.uid) === Number(located.uid) && isStoryProfile(entry, scope) && entry.content === content)) throw Error(`角色 ${name} 服务端未确认保存。`);
 }
 
 
