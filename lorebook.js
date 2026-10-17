@@ -332,6 +332,54 @@ export async function getProfileInfoReviewQueue(onProgress) {
     return { chatId, characters, totalFacts: characters.reduce((sum, character) => sum + character.facts.length, 0) };
 }
 
+export async function saveRegeneratedProfileInfo(review, profile, known, unknown) {
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!review || review.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
+        throw Error('当前聊天已变化或无法确认，未修改档案。请重新扫描审查队列。');
+    }
+    if (!profile || !['CWB:自动档案', 'CWB:主角档案'].includes(profile.marker)
+        || !profile.keys?.includes(chatId) || !Array.isArray(known) || !Array.isArray(unknown)
+        || [...known, ...unknown].some(item => typeof item !== 'string' || !item.trim())) {
+        throw Error('重新生成结果或目标档案无效，未修改内容。');
+    }
+    const current = await scanGeneratedContent('regenerate-profile-info-verify');
+    const entry = current.entries.find(item => item.bookName === profile.bookName && item.uid === profile.uid
+        && item.marker === profile.marker && item.keys.includes(chatId));
+    if (!entry || entry.content !== profile.content || entry.keys.join('\0') !== profile.keys.join('\0')) {
+        throw Error('重新生成期间档案已变化，未修改任何内容。请重新扫描后再试。');
+    }
+    const data = current.snapshots.get(profile.bookName);
+    const target = data?.entries?.[profile.uid] ?? Object.values(data?.entries ?? {}).find(item => Number(item.uid) === Number(profile.uid));
+    if (!target) throw Error('目标档案条目已不存在，未修改内容。');
+    const original = String(target.content ?? '');
+    const newline = original.includes('\r\n') ? '\r\n' : '\n';
+    const lines = original.split(/\r?\n/);
+    const infoLine = /^\[(角色已知信息|角色未知信息)\.\d+\]\s*:/;
+    let insertAt = lines.findIndex(line => infoLine.test(line));
+    if (insertAt < 0) insertAt = lines.findIndex(line => /^\[--(?:角色档案结束|Amily2::CHAR_END)--\]$/.test(line));
+    if (insertAt < 0) insertAt = lines.length;
+    let removedBefore = 0;
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (infoLine.test(lines[i])) {
+            if (i < insertAt) removedBefore++;
+            lines.splice(i, 1);
+        }
+    }
+    insertAt = Math.max(0, insertAt - removedBefore);
+    const replacement = [
+        ...known.map((item, index) => `[角色已知信息.${index}]:${item.trim()}`),
+        ...unknown.map((item, index) => `[角色未知信息.${index}]:${item.trim()}`),
+    ];
+    lines.splice(insertAt, 0, ...replacement);
+    const nextContent = lines.join(newline);
+    target.content = nextContent;
+    await saveWorldInfo(profile.bookName, data, true);
+    const persisted = await readWorldbookFromServer(profile.bookName);
+    const stored = persisted.entries?.[profile.uid] ?? Object.values(persisted.entries ?? {}).find(item => Number(item.uid) === Number(profile.uid));
+    if (!stored || stored.content !== nextContent) throw Error('重新生成后世界书回读不一致，无法确认结果；请刷新后复查。');
+    return { name: profile.name, bookName: profile.bookName, uid: profile.uid, content: nextContent };
+}
+
 function profileListValues(value) {
     const items = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
     return [...new Set(items.map(item => String(item ?? '').trim()).filter(Boolean))];
