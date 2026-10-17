@@ -8,6 +8,7 @@ test('full and incremental defaults request the expanded profile fields and deta
         assert.match(prompt, /角色已知信息\.N.*角色未知信息\.N.*性经历人员\.N.*性经历人数.*额外补充\.N.*剧情\.N/s);
         assert.match(prompt, /强力推动或改变主线/);
         assert.match(prompt, /64个汉字/);
+        assert.match(prompt, /严禁记录任何任务或系统相关内容/);
     }
 });
 
