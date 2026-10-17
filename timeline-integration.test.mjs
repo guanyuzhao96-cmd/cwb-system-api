@@ -12,7 +12,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     let invalidCombined = false, failApiRequest = false;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
-    const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
+    const extraBooks = new Map();
+    const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ name: '测试角色卡', avatar: 'test-card.png', data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
         if (typeof key === 'object') return key;
@@ -35,8 +36,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         confirm: message => { lastConfirmation = message; return true; },
     },
         fetch: async (_url, options = {}) => {
-            try { worldbookReads.push(JSON.parse(options.body ?? '{}').name); } catch {}
-            return { ok: true, json: async () => structuredClone(disk) };
+            let name;
+            try { name = JSON.parse(options.body ?? '{}').name; worldbookReads.push(name); } catch {}
+            return { ok: true, json: async () => structuredClone(name && name !== '主世界书' ? extraBooks.get(name) || { entries: {} } : disk) };
         },
     });
     const script = {
@@ -70,8 +72,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         renderExtensionTemplateAsync: async () => readFile(new URL('./settings.html', import.meta.url), 'utf8') };
     const world = {
         selected_world_info: [], world_info: {}, world_names: ['主世界书'],
-        loadWorldInfo: async () => structuredClone(cache),
-        saveWorldInfo: async (_, data) => { cache = structuredClone(data); if (!failWrite) disk = structuredClone(data); },
+        loadWorldInfo: async name => structuredClone(name && name !== '主世界书' ? extraBooks.get(name) || { entries: {} } : cache),
+        saveWorldInfo: async (name, data) => {
+            if (name && name !== '主世界书') { if (!failWrite) extraBooks.set(name, structuredClone(data)); return; }
+            cache = structuredClone(data); if (!failWrite) disk = structuredClone(data);
+        },
         createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid }; },
     };
     const root = dirname(fileURLToPath(import.meta.url));
@@ -84,6 +89,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         return mod;
     }
     const index = await load(resolve(root, 'index.js')); await index.link((specifier, parent) => load(specifier.startsWith('/') ? specifier : resolve(dirname(parent.identifier), specifier))); await index.evaluate(); await initialized();
+    const pluginState = modules.get(resolve(root, 'state.js')).namespace.state;
     for (const key of ['fullPrompt', 'incrementalPrompt']) {
         assert.ok(extension_settings.cwb_system_api[key].startsWith('旧的自定义'));
         assert.ok(extension_settings.cwb_system_api[key].includes('CWB角色档案整理规则'));
@@ -421,4 +427,51 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     await click();
     assert.ok($('#cwb-status').text().includes('回读与本次写入不一致'));
     assert.equal(Object.values(disk.entries)[0].content.match(/新增事件/g).length, 3);
+
+    // A character profile belongs to the card, not a chat filename or branch.
+    failWrite = false;
+    const cardProfile = '[姓名]:跨聊天角色\n[角色已知信息.0]:认可与主角保持联系\n[性经历人数]:1\n[剧情.0]:保留在角色卡中的主线剧情';
+    world.world_names.push('角色世界书');
+    extraBooks.set('角色世界书', { entries: {
+        1: { uid: 1, comment: '动态-跨聊天角色', key: ['CWB:自动档案', 'first-chat - Branch #3', '跨聊天角色', '1-20'], disable: true, content: '[姓名]:跨聊天角色\n[剧情.0]:旧聊天剧情' },
+        2: { uid: 2, comment: '动态-跨聊天角色', key: ['CWB:自动档案', 'other-chat', '跨聊天角色', '21-40'], disable: false, content: '[姓名]:跨聊天角色\n[剧情.0]:重复条目内容' },
+    } });
+    contextData.chatMetadata.world_info = '角色世界书';
+    disk = { entries: {
+        3: { uid: 3, comment: '手工同名条目', key: ['跨聊天角色'], disable: false, content: '手工内容不能覆盖' },
+        4: { uid: 4, comment: 'Amily2角色总集-Test - 2026-10-12@09h12m44s596ms - Branch #25-角色总览', key: ['Amily2角色总集', 'Test - 2026-10-12@09h12m44s596ms - Branch #25', '角色总览', '1-150'], disable: false, content: '[旧角色: (详细查看绿灯角色条目)]\n{{// 本条勿动，【前150楼角色世界书已更新完成】}}' },
+    } }; cache = structuredClone(disk);
+    const cardSettings = { incremental: true, enabled: true, multiWorldbookRouting: false, worldbookTarget: 'primary', scanDepth: 6 };
+    contextData.chatId = 'Test - 2026-10-12@09h12m44s596ms - Branch #25';
+    pluginState.chatId = contextData.chatId;
+    const cardUid = await lorebook.saveCharacterDescription(cardSettings, '跨聊天角色', cardProfile, 0, 19);
+    assert.equal(cardUid, '跨聊天角色');
+    assert.equal(Object.keys(disk.entries).length + Object.keys(extraBooks.get('角色世界书').entries).length, 4, 'legacy duplicate archives are reused without creating or merging records');
+    const canonical = Object.values(extraBooks.get('角色世界书').entries).find(entry => entry.key.includes(lorebook.getCardArchiveKey()));
+    assert.ok(canonical, `saved archive has a stable character-card owner key: ${JSON.stringify(disk.entries)}`);
+    assert.equal(canonical.key.includes(contextData.chatId), false, 'new profile ownership does not include a chat ID');
+    const canonicalUid = canonical.uid;
+    const untouchedDuplicate = Object.values(extraBooks.get('角色世界书').entries).find(entry => entry.uid !== canonicalUid);
+    assert.ok(untouchedDuplicate.content.includes('旧聊天剧情') || untouchedDuplicate.content.includes('重复条目内容'));
+    contextData.chatId = 'Test - 2026-10-12@09h12m44s596ms - Branch #31';
+    pluginState.chatId = contextData.chatId;
+    contextData.chatMetadata.integrity = 'different-chat-integrity';
+    await lorebook.saveCharacterDescription(cardSettings, '跨聊天角色', `${cardProfile}\n[剧情.1]:新聊天补充的剧情`, 0, 19);
+    assert.equal(Object.keys(disk.entries).length + Object.keys(extraBooks.get('角色世界书').entries).length, 4, 'changing chat and branch still reuses the same card profile');
+    assert.equal(extraBooks.get('角色世界书').entries[canonicalUid].content.includes('新聊天补充的剧情'), true);
+    assert.equal(disk.entries[3].content, '手工内容不能覆盖');
+    await lorebook.updateRoster(cardSettings, ['跨聊天角色'], 0, 19);
+    contextData.chatId = 'Test - 2026-10-12@09h12m44s596ms - Branch #32';
+    pluginState.chatId = contextData.chatId;
+    await lorebook.saveCharacterDescription(cardSettings, '跨聊天角色', `${cardProfile}\n[剧情.2]:同一聊天继续补充`, 0, 19);
+    await lorebook.updateRoster(cardSettings, ['跨聊天角色'], 0, 19);
+    assert.equal(Object.values(disk.entries).filter(entry => entry.key?.includes('Amily2角色总集')).length, 1, 'same logical chat branch updates reuse one role overview record');
+    assert.equal(Object.values(extraBooks.get('角色世界书').entries).filter(entry => entry.key?.some(key => key.startsWith('CWB:角色卡:')) && entry.key?.includes('CWB:自动档案')).length, 1, 'same logical chat branch updates reuse one dynamic profile');
+    assert.ok(Object.values(disk.entries).find(entry => entry.key?.includes('Amily2角色总集')).key.includes(lorebook.getCardArchiveKey()), 'role overview ownership is tied to the character card');
+    await lorebook.verifyProfileContent(cardSettings, '跨聊天角色', extraBooks.get('角色世界书').entries[canonicalUid].content);
+    assert.ok((await lorebook.getProfileInfoReviewQueue()).characters.some(character => character.name === '跨聊天角色'), 'card-owned profile remains visible in information review');
+    assert.ok((await lorebook.getProfileCountAuditQueue()).profiles.some(profile => profile.name === '跨聊天角色'), 'card-owned profile remains visible in count review');
+    const generatedPreview = await lorebook.getGeneratedContentPreview();
+    assert.ok(generatedPreview.entries.some(entry => entry.uid === canonicalUid && entry.bookName === '角色世界书'), 'one-click preview finds the card-owned profile in its role worldbook');
+    assert.ok(generatedPreview.entries.some(entry => entry.marker === 'Amily2角色总集' && entry.keys.includes(lorebook.getCardArchiveKey())), 'one-click preview finds the card-owned role overview record');
 });
