@@ -10,6 +10,7 @@ import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } f
 import {
     getLastUpdatedFloor,
     getModuleProgress,
+    getProgressRecoveryCandidates,
     recordModuleResult,
     verifyProfileContent,
     getRelationshipSummary,
@@ -77,6 +78,13 @@ function setStatus(text) {
 export async function refreshModuleProgress() {
     refreshChatState();
     const progress = await getModuleProgress();
+    const recoveryCandidates = await getProgressRecoveryCandidates();
+    $('#cwb-recover-progress').prop('hidden', recoveryCandidates.length === 0).text(
+        recoveryCandidates.length ? `找回其他聊天的进度（${recoveryCandidates.length} 条候选）` : '找回其他聊天的进度',
+    );
+    $('#cwb-progress-error').text(recoveryCandidates.length
+        ? `当前聊天 ID 没有匹配到进度存档；发现 ${recoveryCandidates.length} 条其他聊天存档。请选择正确来源恢复，原存档不会被删除。`
+        : '');
     for (const module of Object.keys(MODULE_LABELS)) {
         const status = moduleStatus(progress, module, state.messages.length);
         const missingCount = status.missing.reduce((count, [start, end]) => count + end - start + 1, 0);
