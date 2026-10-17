@@ -10,7 +10,7 @@ import {
 import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt, ensureProfilePromptRules, ensureTimelinePromptRules } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
-import { cleanupProfileFields, convertLegacyEntries, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, listWorldbooks, routeSummary } from './lorebook.js';
+import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, getProgressRecoveryCandidates, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
@@ -123,6 +123,27 @@ function bindUi() {
         });
     });
     $('#cwb-check-progress').on('click', function () { runButton($(this), '读取中…', refreshModuleProgress); });
+    $('#cwb-recover-progress').on('click', function () {
+        runButton($(this), '读取候选…', async () => {
+            refreshChatState();
+            const candidates = await getProgressRecoveryCandidates();
+            if (!candidates.length) throw Error('没有找到其他聊天的可恢复进度。');
+            const details = candidates.map((item, index) => `${index + 1}. ${item.comment || item.chatId}\n   已完成至 ${item.through} 楼；记录总楼数 ${item.totalMessages || '未知'}`).join('\n');
+            let choice;
+            if (candidates.length === 1) {
+                if (!window.confirm(`仅复制进度状态，不复制档案、时间线或关系条目；原进度保留。请确认来源是同一剧情的旧聊天记录：\n\n${details}\n\n继续复制？`)) return;
+                choice = 0;
+            } else {
+                const answer = window.prompt(`仅复制进度状态，不复制档案、时间线或关系条目。请选择同一剧情的来源编号；原进度会保留：\n\n${details}\n\n输入编号：`);
+                choice = Number(answer) - 1;
+                if (!Number.isInteger(choice) || choice < 0 || choice >= candidates.length) return;
+                if (!window.confirm(`确认从“${candidates[choice].comment || candidates[choice].chatId}”复制进度状态到当前聊天？来源记录保留，档案和时间线条目不会复制。`)) return;
+            }
+            const result = await copyProgressFromChat(candidates[choice].chatId);
+            await refreshModuleProgress();
+            notify('success', `已复制进度到当前聊天；来源《${result.bookName}》中的原存档已保留。`);
+        });
+    });
     for (const module of ['profiles', 'timeline', 'relationships']) {
         $(`#cwb-retry-${module}`).on('click', function () { runButton($(this), '补漏中…', () => retryMissingModule(settings(), module)); });
     }
