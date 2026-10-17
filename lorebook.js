@@ -195,13 +195,27 @@ export async function deleteEntries(bookName, uids) {
     await saveWorldInfo(bookName, data, true);
 }
 
-export async function getGeneratedContentPreview() {
+async function mapWithConcurrency(items, limit, worker) {
+    const results = new Array(items.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (true) {
+            const index = next++;
+            if (index >= items.length) return;
+            results[index] = await worker(items[index], index);
+        }
+    }));
+    return results;
+}
+
+async function scanGeneratedContent(phase, onProgress) {
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天 ID，已停止扫描以保护其他聊天数据。');
     const books = [...new Set([...listWorldbooks(), getPrimaryWorldbook()].filter(Boolean))];
-    const entries = [];
-    for (const bookName of books) {
+    let completed = 0;
+    const snapshots = await mapWithConcurrency(books, 4, async bookName => {
         const data = await readWorldbookFromServer(bookName);
+        const entries = [];
         for (const entry of Object.values(data.entries)) {
             const keys = getKeys(entry);
             const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys[0] === marker && keys[1] === chatId);
@@ -211,16 +225,29 @@ export async function getGeneratedContentPreview() {
                 comment: String(entry.comment ?? ''), content: String(entry.content ?? ''), keys: [...keys],
             });
         }
-    }
+        completed++;
+        onProgress?.({ phase, current: completed, total: books.length, bookName });
+        return { bookName, data, entries };
+    });
+    return {
+        chatId,
+        entries: snapshots.flatMap(snapshot => snapshot.entries),
+        snapshots: new Map(snapshots.map(snapshot => [snapshot.bookName, snapshot.data])),
+        bookCount: books.length,
+    };
+}
+
+export async function getGeneratedContentPreview(onProgress) {
+    const { chatId, entries } = await scanGeneratedContent('scan', onProgress);
     return { chatId, entries };
 }
 
-export async function deleteGeneratedContent(preview) {
+export async function deleteGeneratedContent(preview, onProgress) {
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!preview || preview.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
         throw Error('当前聊天已变化或无法确认，未删除任何内容。');
     }
-    const current = await getGeneratedContentPreview();
+    const current = await scanGeneratedContent('verify', onProgress);
     const signature = item => JSON.stringify([item.bookName, item.uid, item.marker, item.label, item.comment, item.content, item.keys]);
     const expected = preview.entries.map(signature).sort();
     const actual = current.entries.map(signature).sort();
@@ -236,8 +263,11 @@ export async function deleteGeneratedContent(preview) {
     }
     let deleted = 0;
     const byType = {};
+    let bookIndex = 0;
     for (const [bookName, targets] of grouped) {
-        const data = await readWorldbookFromServer(bookName);
+        bookIndex++;
+        const data = current.snapshots.get(bookName);
+        if (!data?.entries) throw Error(`世界书《${bookName}》扫描快照缺失，已停止删除。`);
         const uidSet = new Set(targets.map(item => item.uid));
         const toDelete = Object.values(data.entries).filter(entry => {
             const keys = getKeys(entry);
@@ -250,7 +280,9 @@ export async function deleteGeneratedContent(preview) {
             const type = targets.find(item => item.uid === Number(entry.uid))?.label;
             if (type) byType[type] = (byType[type] ?? 0) + 1;
         }
+        onProgress?.({ phase: 'delete', current: bookIndex, total: grouped.size, bookName });
         await saveWorldInfo(bookName, data, true);
+        onProgress?.({ phase: 'readback', current: bookIndex, total: grouped.size, bookName });
         const persisted = await readWorldbookFromServer(bookName);
         const remaining = Object.values(persisted.entries).some(entry => {
             const target = targets.find(item => item.uid === Number(entry.uid));
@@ -781,11 +813,21 @@ function moduleProgressFromLegacy(data, chatId) {
 }
 
 async function readWorldbookFromServer(bookName) {
-    const response = await fetch('/api/worldinfo/get', {
-        method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache',
-    });
-    if (!response.ok) throw Error(`无法从服务端读取世界书《${bookName}》。`);
-    const data = await response.json();
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
+    let response, data;
+    try {
+        response = await fetch('/api/worldinfo/get', {
+            method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache', ...(controller ? { signal: controller.signal } : {}),
+        });
+        if (!response.ok) throw Error(`无法从服务端读取世界书《${bookName}》。`);
+        data = await response.json();
+    } catch (error) {
+        if (controller?.signal.aborted) throw Error(`读取世界书《${bookName}》超过30秒，已停止并保留未确认条目。`);
+        throw error;
+    } finally {
+        if (timeout !== null) clearTimeout(timeout);
+    }
     if (!data?.entries) throw Error(`世界书《${bookName}》返回的数据格式无效。`);
     return data;
 }
