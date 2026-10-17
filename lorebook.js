@@ -2,7 +2,7 @@ import { parseTimelineRecords, formatTimelineRecords } from './timeline-utils.mj
 import { sanitizeProfileContent } from './profile-utils.mjs';
 import { applyModuleResult, intersectRanges, mergeModuleProgress, MODULE_LABELS } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
-import { getContext } from '/scripts/extensions.js';
+import { extension_settings, getContext } from '/scripts/extensions.js';
 import {
     createWorldInfoEntry,
     loadWorldInfo,
@@ -208,27 +208,55 @@ async function mapWithConcurrency(items, limit, worker) {
     return results;
 }
 
+function referencedProfileBooks(primaryData, chatId) {
+    const books = new Set();
+    for (const entry of Object.values(primaryData?.entries ?? {})) {
+        const keys = getKeys(entry);
+        if (!keys.includes('CWB:角色档案目录') || !keys.includes(chatId)) continue;
+        // Follow only the current chat's existing directory; ignore unrelated books.
+        for (const match of String(entry.content ?? '').matchAll(/世界书《([^》]+)》/g)) {
+            const name = match[1].trim();
+            if (world_names.includes(name)) books.add(name);
+        }
+    }
+    return [...books];
+}
+
 async function scanGeneratedContent(phase, onProgress) {
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天 ID，已停止扫描以保护其他聊天数据。');
-    const books = [...new Set([...listWorldbooks(), getPrimaryWorldbook()].filter(Boolean))];
-    let completed = 0;
-    const snapshots = await mapWithConcurrency(books, 4, async bookName => {
+    const primary = getPrimaryWorldbook();
+    if (!primary) throw Error('当前角色卡没有主世界书，无法安全定位本聊天的生成记录。');
+    const primaryData = await readWorldbookFromServer(primary);
+    const configured = extension_settings?.cwb_system_api;
+    const configuredTarget = configured?.worldbookTarget === 'custom' ? configured.customWorldbook : null;
+    const books = [...new Set([
+        primary,
+        ...(configuredTarget && world_names.includes(configuredTarget) ? [configuredTarget] : []),
+        ...referencedProfileBooks(primaryData, chatId),
+    ])];
+    const snapshots = [{ bookName: primary, data: primaryData }];
+    onProgress?.({ phase, current: 1, total: books.length, bookName: primary });
+    let completed = 1;
+    const remaining = await mapWithConcurrency(books.slice(1), 4, async bookName => {
         const data = await readWorldbookFromServer(bookName);
-        const entries = [];
-        for (const entry of Object.values(data.entries)) {
+        onProgress?.({ phase, current: ++completed, total: books.length, bookName });
+        return { bookName, data };
+    });
+    snapshots.push(...remaining);
+    for (const snapshot of snapshots) {
+        snapshot.entries = [];
+        for (const entry of Object.values(snapshot.data.entries)) {
             const keys = getKeys(entry);
-            const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys[0] === marker && keys[1] === chatId);
+            // Older plugin versions and reordered keys may place either value elsewhere.
+            const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys.includes(marker) && keys.includes(chatId));
             if (!type) continue;
-            entries.push({
-                bookName, uid: Number(entry.uid), marker: type[0], label: type[1],
+            snapshot.entries.push({
+                bookName: snapshot.bookName, uid: Number(entry.uid), marker: type[0], label: type[1],
                 comment: String(entry.comment ?? ''), content: String(entry.content ?? ''), keys: [...keys],
             });
         }
-        completed++;
-        onProgress?.({ phase, current: completed, total: books.length, bookName });
-        return { bookName, data, entries };
-    });
+    }
     return {
         chatId,
         entries: snapshots.flatMap(snapshot => snapshot.entries),
@@ -236,7 +264,6 @@ async function scanGeneratedContent(phase, onProgress) {
         bookCount: books.length,
     };
 }
-
 export async function getGeneratedContentPreview(onProgress) {
     const { chatId, entries } = await scanGeneratedContent('scan', onProgress);
     return { chatId, entries };
@@ -271,7 +298,8 @@ export async function deleteGeneratedContent(preview, onProgress) {
         const uidSet = new Set(targets.map(item => item.uid));
         const toDelete = Object.values(data.entries).filter(entry => {
             const keys = getKeys(entry);
-            return uidSet.has(Number(entry.uid)) && keys[0] === targets.find(item => item.uid === Number(entry.uid))?.marker && keys[1] === chatId;
+            const target = targets.find(item => item.uid === Number(entry.uid));
+            return uidSet.has(Number(entry.uid)) && Boolean(target && keys.includes(target.marker) && keys.includes(chatId));
         });
         if (toDelete.length !== targets.length) throw Error(`世界书《${bookName}》条目核对失败，未继续删除该世界书内容。`);
         for (const entry of toDelete) {
@@ -287,7 +315,7 @@ export async function deleteGeneratedContent(preview, onProgress) {
         const remaining = Object.values(persisted.entries).some(entry => {
             const target = targets.find(item => item.uid === Number(entry.uid));
             const keys = getKeys(entry);
-            return Boolean(target && keys[0] === target.marker && keys[1] === chatId);
+            return Boolean(target && keys.includes(target.marker) && keys.includes(chatId));
         });
         if (remaining) throw Error(`世界书《${bookName}》删除后回读仍发现目标条目；请刷新后检查。`);
         deleted += toDelete.length;
