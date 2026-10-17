@@ -117,11 +117,6 @@ export async function retryMissingModule(settings, module) {
     } finally { state.repairing = false; release(); }
 }
 
-function avoidedProfileNames(settings) {
-    return [...new Set(String(settings.avoidedProfileNames || '').split(/[\n,，、;；]+/u)
-        .map(name => name.trim().replace(/^["'“‘]+|["'”’]+$/g, '').trim()).filter(Boolean))];
-}
-
 async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = false, modules = Object.keys(MODULE_LABELS) } = {}) {
     refreshChatState();
     const start = Math.max(0, Number(startIndex) || 0);
@@ -132,8 +127,6 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
     const chatId = state.chatId;
     state.updating = true;
     const names = [], failures = [], successes = [];
-    const avoidedNames = avoidedProfileNames(settings);
-    const avoided = new Set(avoidedNames.map(name => name.toLocaleLowerCase()));
     try {
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
         const selected = state.messages.slice(start, end + 1);
@@ -147,7 +140,6 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
         if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
-        if (targets.includes('profiles') && avoidedNames.length) messages.push({ role: 'system', content: `【角色档案避开名单】${JSON.stringify(avoidedNames)}\n以上姓名按完整姓名匹配。本轮不要生成或更新这些角色的动态档案；其他角色正常处理。时间线与关系按各自规则处理。` });
         messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
         const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
@@ -193,7 +185,6 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         const parsed = parseCustomFormat(block);
                         const type = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
                         const name = characterNameFromBlock(block);
-                        if (name && avoided.has(name.trim().toLocaleLowerCase())) return null;
                         if (!name || ['时间线', 'TIMELINE'].includes(type)) throw Error('角色档案姓名或档案类型不合法');
                         const cleaned = reconcileProfileExperienceCount(block, oldProfiles);
                         if (!cleaned || !hasProfileFacts(cleaned)) return null;
@@ -204,7 +195,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         assertCurrentChat(chatId);
                         const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
                         assertCurrentChat(chatId);
-                        if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，或将不需要更新的角色加入“提示词 → 避开名单”。`);
+                        if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，缺失时先激活目标世界书并扫描生成目录。`);
                         await verifyProfileContent(settings, name, block, isUser);
                         assertCurrentChat(chatId);
                         if (isUser) userUpdated = true; else names.push(saved);
@@ -238,7 +229,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
             assertCurrentChat(chatId);
             await recordChatUpdateRange(start, end, state.messages.length, '三个模块均成功，AI调用1次', 0);
         }
-        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${targets.includes('profiles') && avoidedNames.length ? `；避开名单已生效：${avoidedNames.join('、')}` : ''}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
+        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
         setStatus(message);
         if (failures.length) {
             const failedModules = targets.filter(module => failures.some(failure => failure.startsWith(`${MODULE_LABELS[module]}：`)));
@@ -268,110 +259,6 @@ export async function updateRange(settings, startIndex, endIndex, options = {}) 
     const release = acquireOperationLock(state, '指定范围更新');
     try { return await updateRangeUnlocked(settings, startIndex, endIndex, options); }
     finally { release(); }
-}
-
-function parseProfileInfoResponse(response) {
-    const cleaned = String(response ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    let parsed;
-    try { parsed = JSON.parse(cleaned); }
-    catch {
-        const match = cleaned.match(/\{[\s\S]*\}/);
-        if (match) { try { parsed = JSON.parse(match[0]); } catch { /* report below */ } }
-    }
-    if (!parsed || typeof parsed !== 'object') throw Error('AI 返回的已知 / 未知信息不是有效 JSON。');
-    const known = parsed['角色已知信息'] ?? parsed.known;
-    const unknown = parsed['角色未知信息'] ?? parsed.unknown;
-    if (!Array.isArray(known) || !Array.isArray(unknown)
-        || [...known, ...unknown].some(item => typeof item !== 'string')) {
-        throw Error('AI 返回格式错误：已知信息与未知信息必须是字符串数组。');
-    }
-    return { known, unknown };
-}
-
-function normalizeRegeneratedFacts(values) {
-    return [...new Set(values.flatMap(value => String(value).split(/[，,；;]/).map(item => item.trim())).filter(Boolean))];
-}
-
-export async function regenerateProfileInfo(profile, onProgress = () => {}) {
-    const chatId = state.chatId;
-    const storedChatId = chatId.replace(/ imported/g, '');
-    if (!profile || !['CWB:自动档案', 'CWB:主角档案'].includes(profile.marker)
-        || !Array.isArray(profile.keys) || !profile.keys.includes(storedChatId)) {
-        throw Error('目标档案无法确认属于当前聊天，已停止重新生成。');
-    }
-    const [result] = await regenerateProfileInfoBatch([profile], onProgress);
-    return result;
-}
-
-export async function regenerateProfileInfoBatch(profiles, onProgress = () => {}, responseLength = null) {
-    const chatId = currentChatId();
-    state.chatId = chatId;
-    const storedChatId = chatId.replace(/ imported/g, '');
-    if (!Array.isArray(profiles) || !profiles.length || profiles.length > 5) throw Error('每批必须选择 1 到 5 个角色。');
-    for (const profile of profiles) {
-        if (!profile || !['CWB:自动档案', 'CWB:主角档案'].includes(profile.marker)
-            || !Array.isArray(profile.keys) || !profile.keys.includes(storedChatId)) throw Error('角色档案无法确认属于当前聊天，已停止重新生成。');
-    }
-    const roleInputs = profiles.map(profile => {
-        const parsed = parseCustomFormat(profile.content);
-        const plotValue = profile.plot ?? parsed?.剧情;
-        const plot = (Array.isArray(plotValue) ? plotValue : plotValue && typeof plotValue === 'object' ? Object.values(plotValue) : plotValue === undefined ? [] : [plotValue])
-            .map(item => String(item ?? '').trim()).filter(Boolean);
-        if (!plot.length) throw Error(`角色“${profile.name}”没有个人关键剧情，无法按剧情证据重新生成。`);
-        return { id: profile.id || `${profile.bookName}:${profile.uid}`, name: profile.name, plot };
-    });
-    const systemPrompt = `CWB_REGENERATE_PROFILE_INFO_BATCH\n你是角色世界书信息提炼器。${PROFILE_RULES}\n下面输入的是各角色档案中已有的个人关键剧情摘要，是本次唯一证据来源；不得读取或要求聊天正文，不得把一个角色的信息用于其他角色。先从事件中提炼事件背后的角色认知、态度、意愿、动机、偏好、顾虑和关系判断，再填写已知信息；未知信息只保留剧情明确确认但该角色尚不知道的主线关键事实/秘密。不得把事件经过原样放入已知/未知信息，过滤日常、枝节、任务和系统内容。证据不足则省略。每个独立信息单独作为数组项，严禁用逗号、中文逗号或分号串联多条信息。必须逐个返回输入角色，姓名和档案标识须完全匹配。仅输出 JSON：{"角色":[{"档案标识":"原样返回输入ID","姓名":"角色姓名","角色已知信息":["单条结论"],"角色未知信息":["单条结论"]}]}。`;
-    const userContent = `仅依据下列角色各自的个人关键剧情提炼信息，不要补充剧情摘要以外的事实：\n${JSON.stringify(roleInputs)}`;
-    const started = Date.now();
-    try {
-        assertCurrentChat(chatId);
-        onProgress(`正在按个人关键剧情重新生成：${profiles.map(profile => profile.name).join('、')}…`);
-        const response = await callSystemApi([
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userContent },
-        ], responseLength);
-        assertCurrentChat(chatId);
-        const cleaned = response.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-        const parsed = JSON.parse(cleaned);
-        const rows = parsed?.角色 ?? parsed?.characters;
-        if (!Array.isArray(rows)) throw Error('AI 返回格式错误：缺少“角色”数组。');
-        const expectedIds = new Set(roleInputs.map(item => item.id));
-        const byId = new Map();
-        const byName = new Map();
-        for (const row of rows) {
-            const name = String(row?.姓名 ?? row?.name ?? '').trim();
-            const id = String(row?.档案标识 ?? row?.id ?? '').trim();
-            if (!name || byName.has(name) && !id) throw Error('AI 返回的角色姓名缺失或重复。');
-            const info = parseProfileInfoResponse(JSON.stringify(row));
-            byName.set(name, info);
-            if (id) {
-                if (!expectedIds.has(id) || byId.has(id)) throw Error('AI 返回了未知或重复的档案标识。');
-                byId.set(id, info);
-            }
-        }
-        return profiles.map(profile => {
-            const profileId = profile.id || `${profile.bookName}:${profile.uid}`;
-            const result = byId.get(profileId) || (profiles.filter(item => item.name === profile.name).length === 1 ? byName.get(profile.name) : null);
-            if (!result) throw Error(`AI 未返回角色“${profile.name}”的信息。`);
-            const sanitized = sanitizeProfileContent(`[--角色档案开始--]\n[档案类型]:角色\n[姓名]:${profile.name}\n${normalizeRegeneratedFacts(result.known).map((item, i) => `[角色已知信息.${i}]:${item}`).join('\n')}\n${normalizeRegeneratedFacts(result.unknown).map((item, i) => `[角色未知信息.${i}]:${item}`).join('\n')}\n[--角色档案结束--]`);
-            const safe = parseCustomFormat(sanitized || '');
-            return {
-                profile,
-                id: profileId,
-                name: profile.name,
-                known: normalizeRegeneratedFacts(Array.isArray(safe['角色已知信息']) ? safe['角色已知信息'] : []),
-                unknown: normalizeRegeneratedFacts(Array.isArray(safe['角色未知信息']) ? safe['角色未知信息'] : []),
-            };
-        });
-    } catch (error) {
-        const reported = new Error(`按剧情批量重新生成已知 / 未知信息失败：${error.message}`, { cause: error });
-        reported.cwbDiagnostics = {
-            stage: 'regenerate_profile_known_unknown_batch', modules: ['角色已知信息', '角色未知信息'],
-            batchFloors: profiles.length, totalChatFloors: null,
-            requestCharacters: systemPrompt.length + userContent.length, requestDurationMs: Date.now() - started,
-        };
-        throw reported;
-    }
 }
 
 export async function updateRecent(settings) {
@@ -580,7 +467,6 @@ export async function batchUpdate(settings, onProgress) {
 }
 
 export async function onChatChanged(settings) {
-    state.profileArchiveRegistry = null;
     // Worldbook state is chat-scoped. Let any in-flight save finish its chat check
     // before refreshing or migrating entries for the newly selected chat.
     let waited = 0;

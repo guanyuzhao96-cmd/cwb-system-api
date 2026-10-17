@@ -9,10 +9,9 @@ import { fileURLToPath } from 'node:url';
 
 test('settings button -> real API wrapper -> incremental prompt -> server readback, three rounds', { skip: !vm.SourceTextModule && 'Requires --experimental-vm-modules' }, async () => {
     const nodes = new Map(), requests = [], modules = new Map(), worldbookReads = [];
-    let invalidCombined = false, failApiRequest = false, dropWriteResponse = false;
+    let invalidCombined = false, failApiRequest = false;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
-    const extraBooks = new Map();
     const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
@@ -36,9 +35,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         confirm: message => { lastConfirmation = message; return true; },
     },
         fetch: async (_url, options = {}) => {
-            let name;
-            try { name = JSON.parse(options.body ?? '{}').name; worldbookReads.push(name); } catch {}
-            return { ok: true, json: async () => structuredClone(name && name !== '主世界书' ? extraBooks.get(name) || { entries: {} } : disk) };
+            try { worldbookReads.push(JSON.parse(options.body ?? '{}').name); } catch {}
+            return { ok: true, json: async () => structuredClone(disk) };
         },
     });
     const script = {
@@ -46,16 +44,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         generateRaw: async options => {
             requests.push(options);
             if (failApiRequest) throw new TypeError('Load failed');
-            if (options.systemPrompt.includes('CWB_REGENERATE_PROFILE_INFO')) {
-                const request = JSON.parse(options.prompt.at(-1).content.split('\n').at(-1));
-                return JSON.stringify({ 角色: request.map(profile => ({ 档案标识: profile.id, 姓名: profile.name,
-                    角色已知信息: ['她愿意与主角维持隐秘的亲密关系'], 角色未知信息: ['主角仍在调查影响两人关系的关键秘密'] })) });
-            }
             if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
                 if (invalidCombined) return '[--档案无变化--]';
                 relationRound++;
                 const input = options.prompt.map(x => x.content).join('\n');
-                const latest = [...input.matchAll(/新增事件([一二三四])/g)].at(-1)?.[1];
+                const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
                 return '[--角色档案开始--]\n[档案类型]:主角\n[姓名]:主角\n[角色已知信息.0]:本轮确认的重要事实\n[角色未知信息.0]:对角色隐藏的关键事实\n[性经历人员.0]:成年对象\n[性经历人数]:1\n[额外补充.0]:影响后续判断的事实\n[剧情.0]:日期未知｜本轮关键事件改变主线走向并造成重要后果\n[--角色档案结束--]\n'
                     + '[--时间线增量开始--]\n' + JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] }) + '\n[--时间线增量结束--]\n'
                     + '[--关系增量开始--]\n' + JSON.stringify({ 关系更新: [{ 人物A: 'B', 方向: '↔', 人物B: 'C', 关系: '互相讨厌' }], 删除关系: [] }) + '\n[--关系增量结束--]';
@@ -69,7 +62,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             }
             if (!options.systemPrompt.includes('INTEGRATION_CUSTOM_TIMELINE')) return '本次没有角色档案变化';
             const input = options.prompt.map(x => x.content).join('\n');
-            const latest = [...input.matchAll(/新增事件([一二三四])/g)].at(-1)?.[1];
+            const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
             return JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] });
         },
     };
@@ -77,8 +70,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         renderExtensionTemplateAsync: async () => readFile(new URL('./settings.html', import.meta.url), 'utf8') };
     const world = {
         selected_world_info: [], world_info: {}, world_names: ['主世界书'],
-        loadWorldInfo: async name => structuredClone(name !== '主世界书' ? extraBooks.get(name) || { entries: {} } : cache),
-        saveWorldInfo: async (name, data) => { if (name !== '主世界书') { if (!failWrite) extraBooks.set(name, structuredClone(data)); return; } cache = structuredClone(data); if (!failWrite) disk = structuredClone(data); if (dropWriteResponse) { dropWriteResponse = false; throw new TypeError('Load failed'); } },
+        loadWorldInfo: async () => structuredClone(cache),
+        saveWorldInfo: async (_, data) => { cache = structuredClone(data); if (!failWrite) disk = structuredClone(data); },
         createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid }; },
     };
     const root = dirname(fileURLToPath(import.meta.url));
@@ -145,29 +138,6 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.match(savedProfile, /性经历人员\.0/);
     assert.match(savedProfile, /性经历人数]:1/);
     assert.match(savedProfile, /额外补充\.0/);
-    const lorebookApi = modules.get(resolve(root, 'lorebook.js')).namespace;
-    const coreApi = modules.get(resolve(root, 'core.js')).namespace;
-    const reviewQueue = await lorebookApi.getProfileInfoReviewQueue();
-    const regenerationQueue = await lorebookApi.getProfileRegenerationQueue();
-    assert.equal(regenerationQueue.profiles.length, 1);
-    const targetProfile = regenerationQueue.profiles[0];
-    const fiveRoleBatch = Array.from({ length: 5 }, (_, index) => ({
-        ...targetProfile, id: `test-book:${index}`, uid: index + 100, name: `测试角色${index + 1}`,
-    }));
-    const callsBeforeFiveRoleBatch = requests.length;
-    assert.equal((await coreApi.regenerateProfileInfoBatch(fiveRoleBatch)).length, 5);
-    assert.equal(requests.length - callsBeforeFiveRoleBatch, 1, 'five profiles are extracted together in one request');
-    const regenerated = (await coreApi.regenerateProfileInfoBatch([targetProfile]))[0];
-    const regenerationRequest = requests.at(-1);
-    assert.ok(regenerationRequest.systemPrompt.includes('CWB_REGENERATE_PROFILE_INFO_BATCH'));
-    assert.ok(!regenerationRequest.prompt[0].content.includes('新增事件一'), 'regeneration uses archived plot, not chat transcript');
-    await lorebookApi.saveRegeneratedProfileInfo(regenerationQueue, targetProfile, regenerated.known, regenerated.unknown);
-    const regeneratedProfile = Object.values(disk.entries).find(e => e.key.includes('CWB:主角档案')).content;
-    assert.match(regeneratedProfile, /角色已知信息\.0\]:她愿意与主角维持隐秘的亲密关系/);
-    assert.match(regeneratedProfile, /角色未知信息\.0\]:主角仍在调查影响两人关系的关键秘密/);
-    for (const preserved of ['[性经历人员.0]:成年对象', '[性经历人数]:1', '[额外补充.0]:影响后续判断的事实', '[剧情.0]:日期未知｜本轮关键事件改变主线走向并造成重要后果']) {
-        assert.ok(regeneratedProfile.includes(preserved), `regeneration preserves ${preserved}`);
-    }
     assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).content.includes('B ↔ C：互相讨厌'));
     // Third round: newly appended message must trigger another request and update A/B.
     contextData.chat.push({ mes: 'A和B分手，仍为同班同学' });
@@ -319,16 +289,16 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     cache = structuredClone(disk);
     const splitQueue = await lorebook.getProfileInfoReviewQueue();
     let splitFacts = splitQueue.characters.flatMap(character => character.facts).filter(fact => fact.field === reviewedFact.field);
-    assert.equal(splitFacts.map(fact => fact.value).join('|'), `${reviewedFact.value}|独立事实B|独立事实C`, 'comma and Chinese comma delimit separate review facts');
+    assert.equal(splitFacts.map(fact => fact.value).join('|'), '本轮确认的重要事实|独立事实B|独立事实C', 'comma and Chinese comma delimit separate review facts');
     const middle = splitFacts[1];
     const middleResult = await lorebook.deleteReviewedProfileFact(splitQueue, middle);
-    assert.ok(disk.entries[middle.uid].content.includes(`${reviewedFact.value},独立事实C`) || disk.entries[middle.uid].content.includes(`${reviewedFact.value}，独立事实C`));
+    assert.match(disk.entries[middle.uid].content, /本轮确认的重要事实[,，]独立事实C/);
     assert.doesNotMatch(disk.entries[middle.uid].content, /独立事实B/);
     const afterMiddleQueue = await lorebook.getProfileInfoReviewQueue();
     splitFacts = afterMiddleQueue.characters.flatMap(character => character.facts).filter(fact => fact.field === reviewedFact.field);
-    assert.equal(splitFacts.map(fact => fact.value).join('|'), `${reviewedFact.value}|独立事实C`, 'remaining adjacent facts remain independently reviewable');
+    assert.equal(splitFacts.map(fact => fact.value).join('|'), '本轮确认的重要事实|独立事实C', 'remaining adjacent facts remain independently reviewable');
     await lorebook.deleteReviewedProfileFact(afterMiddleQueue, splitFacts[1]);
-    assert.ok(disk.entries[reviewedFact.uid].content.includes(reviewedFact.value));
+    assert.match(disk.entries[reviewedFact.uid].content, /本轮确认的重要事实/);
     assert.doesNotMatch(disk.entries[reviewedFact.uid].content, /独立事实C/);
     assert.ok(middleResult.content.includes('[角色未知信息.0]'), 'segment deletion preserves other profile fields');
     disk = structuredClone(reviewBaseline);
@@ -342,7 +312,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const batchFacts = batchReview.characters.flatMap(character => character.facts).filter(fact => fact.field === reviewedFact.field);
     const batchResult = await lorebook.deleteUnretainedProfileFacts(batchReview, [batchFacts[1], batchFacts[3]]);
     const batchSaved = disk.entries[reviewedFact.uid].content;
-    assert.ok(batchSaved.includes(`${reviewedFact.value}，保留测试C`));
+    assert.match(batchSaved, /本轮确认的重要事实，保留测试C/);
     assert.doesNotMatch(batchSaved, /删除测试B|删除测试D/);
     assert.equal(batchResult.deleted, 2, 'batch delete removes all and only the unselected facts');
     disk = structuredClone(reviewBaseline);
@@ -394,13 +364,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     disk.entries[deleteUid + 2] = { uid: deleteUid + 2, key: ['CWB:世界书目录'], comment: '全局目录', content: '全局目录必须保留' };
     disk.entries[deleteUid + 3] = { uid: deleteUid + 3, key: ['CWB:自动档案', 'integration-chat', '角色乙', '1-3'], comment: '动态-角色乙', content: '当前聊天生成档案' };
     disk.entries[deleteUid + 4] = { uid: deleteUid + 4, key: ['integration-chat', '角色丙', 'CWB:自动档案', '1-3'], comment: '动态-角色丙', content: '旧版键顺序的当前聊天生成档案' };
-    disk.entries[deleteUid + 5] = { uid: deleteUid + 5, key: ['CWB:世界书目录'], comment: 'CWB目录｜主世界书', content: '插件生成目录' };
     cache = structuredClone(disk);
     world.world_names.push('无关世界书');
-    extraBooks.set('无关世界书', { entries: {
-        0: { uid: 0, key: ['CWB:自动档案', 'old-chat - Branch #25', '旧角色'], comment: '动态-旧角色', content: '未激活旧分支档案', disable: true },
-        1: { uid: 1, key: ['原始资料'], comment: '原始角色设定', content: '原始设定必须保留' },
-    } });
     const previewProgress = [];
     worldbookReads.length = 0;
     const preview = await lorebook.getGeneratedContentPreview(item => previewProgress.push(item));
@@ -430,12 +395,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.match($('#cwb-info-review').html(), /删除本角色未保留信息/);
 
     assert.equal(typeof deleteButton.handlers.click, 'function', 'cleanup action is available in the workbench');
-    dropWriteResponse = true;
     deleteButton.handlers.click.call(deleteButton);
     for (let i = 0; i < 100 && deleteButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
     assert.equal(deleteButton.prop('disabled'), false);
     assert.match(lastConfirmation, /原始\/手工条目/);
-    assert.match(lastConfirmation, /所有聊天、旧分支/);
+    assert.match(lastConfirmation, /其他聊天数据/);
     assert.match(lastConfirmation, /动态-角色乙/);
     assert.match(lastConfirmation, /动态-角色丙/);
     const deletedUids = preview.entries.map(entry => entry.uid);
@@ -446,151 +410,12 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         'CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度', 'Amily2角色总集',
     ].some(marker => e.key[0] === marker)), false, 'all plugin-generated entries for the selected chat are deleted');
     assert.equal(disk.entries[deleteUid].content, '必须保留');
-    assert.equal(disk.entries[deleteUid + 1], undefined, 'all-generated cleanup deletes old chat records too');
+    assert.equal(disk.entries[deleteUid + 1].content, '其他聊天资料');
     assert.equal(disk.entries[deleteUid + 2].content, '全局目录必须保留');
-    assert.equal(disk.entries[deleteUid + 5], undefined, 'plugin-generated global directories are deleted');
-    assert.equal(extraBooks.get('无关世界书').entries[0], undefined, 'disabled generated entries in unreferenced worldbooks are deleted');
-    assert.equal(extraBooks.get('无关世界书').entries[1].content, '原始设定必须保留');
     disk = beforeDelete;
     cache = structuredClone(disk);
-    // Same-chat disabled/duplicate archives must be reused; sibling branches
-    // and identically titled manual records must never be absorbed or deleted.
-    const archiveBaseline = structuredClone(disk);
-    const profileUid = Math.max(...Object.keys(disk.entries).map(Number)) + 1;
-    const archive = (plot, extra = '') => `[--角色档案开始--]\n[档案类型]:角色\n[姓名]:复用角色\n[剧情.0]:${plot}\n${extra}\n[--角色档案结束--]`;
-    disk.entries[profileUid] = { uid: profileUid, comment: '动态-复用角色', key: ['CWB:自动档案', 'integration-chat', '复用角色', '1-20'], disable: true, content: archive('旧关键剧情', '[性经历人数]:3') };
-    disk.entries[profileUid + 1] = { uid: profileUid + 1, comment: '动态-复用角色', key: ['复用角色', 'integration-chat', 'CWB:自动档案', '21-40'], disable: false, content: archive('重复档案中的独有剧情') };
-    disk.entries[profileUid + 2] = { uid: profileUid + 2, comment: '动态-复用角色', key: ['CWB:自动档案', 'sibling-branch', '复用角色'], disable: false, content: archive('其他分支剧情') };
-    disk.entries[profileUid + 3] = { uid: profileUid + 3, comment: '动态-复用角色', key: ['复用角色'], disable: false, content: '手工设定必须保留' };
-    cache = structuredClone(disk);
-    const archiveSettings = { incremental: true, enabled: true, multiWorldbookRouting: false, worldbookTarget: 'primary' };
-    const oldDisabled = await lorebook.getTriggeredOldProfiles(archiveSettings, [{ message: '复用角色' }]);
-    assert.ok(!oldDisabled.some(content => content.includes('旧关键剧情')), 'ordinary incremental evidence lookup is restored to the pre-0.13.2 behavior');
-    const duplicateScan = await lorebook.scanDuplicateArchives();
-    assert.ok(duplicateScan.plans.some(plan => plan.actions.some(action => action.includes('合并 复用角色') && action.includes(`UID ${profileUid}`))), 'scan reports exact profile names and UIDs');
-    const scanBaseline = structuredClone(disk);
-    disk.entries[profileUid].content += '\n并发修改';
-    await assert.rejects(lorebook.repairDuplicateArchives(duplicateScan), /发生变化/);
-    assert.ok(disk.entries[profileUid + 1], 'stale preview never removes duplicates');
-    disk = scanBaseline; cache = structuredClone(disk);
-    assert.ok(await lorebook.repairDuplicateArchives(duplicateScan) > 0);
-    assert.ok(disk.entries[profileUid].content.includes('旧关键剧情'));
-    assert.ok(disk.entries[profileUid].content.includes('重复档案中的独有剧情'));
-    assert.ok(disk.entries[profileUid].content.includes('[性经历人数]:3'));
-    const repeatedScan = await lorebook.scanDuplicateArchives();
-    assert.ok(!repeatedScan.plans.some(plan => plan.actions.some(action => action.includes('合并 复用角色'))), 'repair and rescan are idempotent');
-    const delta = archive('本轮新增剧情');
-    await lorebook.saveCharacterDescription(archiveSettings, '复用角色', delta, 40, 59);
-    await lorebook.verifyProfileContent(archiveSettings, '复用角色', delta);
-    assert.equal(disk.entries[profileUid + 1], undefined, 'only the explicitly confirmed repair consolidated the duplicate');
-    assert.ok(disk.entries[profileUid].content.includes('本轮新增剧情'));
-    assert.ok(!disk.entries[profileUid].content.includes('其他分支剧情'));
-    await lorebook.saveCharacterDescription(archiveSettings, '复用角色', delta, 40, 59);
-    assert.equal(disk.entries[profileUid].content.match(/本轮新增剧情/g).length, 1, 'repeated updates are idempotent');
-    await lorebook.manageChatEntries(archiveSettings);
-    assert.equal(disk.entries[profileUid + 2].disable, false, '0.13.2 automatic foreign-profile deactivation has been removed');
-    assert.ok(disk.entries[profileUid + 2].content.includes('其他分支剧情'), 'foreign branch data is preserved');
-    assert.equal(disk.entries[profileUid + 3].disable, false, 'manual entries retain their activation state');
-    disk.entries[profileUid + 4] = { uid: profileUid + 4, key: ['Amily2角色总集', 'integration-chat', '角色总览', '1-40'], disable: true, content: '[旧角色甲: (详细查看绿灯角色条目)]\n【前40楼角色世界书已更新完成】' };
-    disk.entries[profileUid + 6] = { uid: profileUid + 6, key: ['Amily2角色总集', 'integration-chat', '角色总览', '41-50'], disable: false, content: '[重复总览角色: (详细查看绿灯角色条目)]\n【前50楼角色世界书已更新完成】' };
-    disk.entries[profileUid + 5] = { uid: profileUid + 5, key: ['Amily2角色总集', 'sibling-branch', '角色总览', '1-160'], disable: false, constant: true, content: '[其他分支角色: (详细查看绿灯角色条目)]\n【前160楼角色世界书已更新完成】' };
-    const siblingRoster = disk.entries[profileUid + 5].content;
-    cache = structuredClone(disk);
-    await lorebook.updateRoster(archiveSettings, ['复用角色'], 40, 59);
-    const currentRosters = Object.values(disk.entries).filter(entry => entry.key.includes('Amily2角色总集') && entry.key.includes('integration-chat'));
-    assert.equal(currentRosters.length, 2, 'ordinary roster update no longer automatically deletes duplicate records');
-    assert.ok(disk.entries[profileUid + 4].content.includes('旧角色甲'));
-    assert.ok(currentRosters.some(entry => entry.content.includes('复用角色')));
-    assert.ok(!currentRosters[0].content.includes('其他分支角色'));
-    await lorebook.manageChatEntries({ ...archiveSettings, worldbookTarget: 'custom', customWorldbook: '主世界书' });
-    assert.equal(disk.entries[profileUid + 5].disable, false, 'custom-target activation behavior is restored to pre-0.13.2');
-    assert.equal(disk.entries[profileUid + 5].content, siblingRoster, 'foreign branch roster content is preserved');
-    assert.equal(currentRosters[0].disable, false, 'current roster stays active');
-    disk = archiveBaseline;
-    cache = structuredClone(disk);
-    const chronologicalBaseline = structuredClone(disk);
-    const originalChatId = contextData.chatId;
-    const currentStory = 'integration-chat - Branch #32', olderStory = 'integration-chat - Branch #25', laterStory = 'integration-chat - Branch #31';
-    contextData.chatId = currentStory;
-    modules.get(resolve(root, 'state.js')).namespace.state.chatId = currentStory;
-    const storyProfile = plot => `[姓名]:合并角色\n[剧情.0]:${plot}`;
-    disk = { entries: {
-        0: { uid: 0, key: ['CWB:自动档案', olderStory, '合并角色', '121-150'], content: storyProfile('2025-09-08｜较晚事件'), disable: true },
-        1: { uid: 1, key: ['CWB:自动档案', laterStory, '合并角色', '141-160'], content: storyProfile('2025-09-01｜最早事件'), disable: true },
-        2: { uid: 2, key: ['CWB:自动档案', currentStory, '合并角色', '1-20'], content: storyProfile('2025-09-05｜中间事件'), disable: false },
-        3: { uid: 3, key: ['Amily2角色总集', olderStory], content: '[旧角色: (详细查看绿灯角色条目)]\n【前150楼角色世界书已更新完成】', disable: true },
-        4: { uid: 4, key: ['Amily2角色总集', currentStory], content: '[新角色: (详细查看绿灯角色条目)]\n【前20楼角色世界书已更新完成】', disable: false },
-        5: { uid: 5, key: ['CWB:故事时间线', olderStory, 'CWB:时间线楼层:121-150'], content: '[时间线.0]:2025-9-8｜较晚时间线', disable: true },
-        6: { uid: 6, key: ['CWB:故事时间线', currentStory, 'CWB:时间线楼层:1-20'], content: '[时间线.0]:2025-9-1｜最早时间线', disable: false },
-        7: { uid: 7, key: ['CWB:更新状态', olderStory], content: JSON.stringify({ modules: { profiles: { completed: [[0, 159]] } } }), disable: true },
-        8: { uid: 8, key: ['CWB:自动档案', 'integration-chat - Branch #99', '合并角色'], content: storyProfile('2025-01-01｜未选分支'), disable: true },
-        9: { uid: 9, key: ['合并角色'], content: '手工设定', disable: false },
-    } };
-    cache = structuredClone(disk);
-    const relatedSources = await lorebook.getRelatedArchiveChats();
-    assert.ok(relatedSources.some(source => source.chatId === olderStory));
-    const storyPreview = await lorebook.scanDuplicateArchives(() => {}, [olderStory, laterStory]);
-    assert.ok(storyPreview.plans[0].actions.some(action => action.startsWith('迁入')));
-    dropWriteResponse = true;
-    await lorebook.repairDuplicateArchives(storyPreview);
-    const combinedPlot = disk.entries[2].content;
-    assert.ok(combinedPlot.indexOf('最早事件') < combinedPlot.indexOf('中间事件'));
-    assert.ok(combinedPlot.indexOf('中间事件') < combinedPlot.indexOf('较晚事件'));
-    assert.equal(disk.entries[0], undefined);
-    assert.equal(disk.entries[1], undefined);
-    assert.ok(disk.entries[4].content.includes('旧角色') && disk.entries[4].content.includes('新角色'));
-    assert.equal(disk.entries[3], undefined);
-    assert.ok(disk.entries[6].content.indexOf('最早时间线') < disk.entries[6].content.indexOf('较晚时间线'));
-    assert.ok(!disk.entries[6].key.includes('CWB:时间线楼层:121-150'), 'source message indices must not become target coverage');
-    assert.equal(disk.entries[7], undefined, 'old progress record is archived rather than kept as a separate active record');
-    const archivedProgress = JSON.parse(Object.values(disk.entries).find(entry => entry.key.includes('CWB:更新状态') && entry.key.includes(currentStory)).content);
-    assert.equal(archivedProgress.mergedSourceHistory[0].sourceChatId, olderStory);
-    assert.ok(!archivedProgress.modules.profiles?.completed?.some(range => range[1] === 159), 'source floors are historical only');
-    assert.ok(disk.entries[8].content.includes('未选分支'));
-    assert.equal(disk.entries[8].disable, true, 'unselected branch activation remains unchanged');
-    assert.equal(disk.entries[9].content, '手工设定');
-    assert.ok(!combinedPlot.includes('未选分支'));
-    contextData.chatId = originalChatId;
-    modules.get(resolve(root, 'state.js')).namespace.state.chatId = originalChatId;
-    disk = chronologicalBaseline; cache = structuredClone(disk);
-    const singletonBaseline = structuredClone(disk);
-    const savedContextId = contextData.chatId;
-    contextData.chatId = 'singleton-story - Branch #32';
-    const profileState = modules.get(resolve(root, 'state.js')).namespace.state;
-    profileState.chatId = contextData.chatId; profileState.profileArchiveRegistry = null;
-    disk = { entries: {
-        0: { uid: 0, key: ['CWB:自动档案', 'singleton-story - Branch #25', '唯一角色'], disable: true, content: '[姓名]:唯一角色\n[剧情.0]:2025-09-01｜旧剧情' },
-        1: { uid: 1, key: ['CWB:自动档案', 'different-story - Branch #25', '唯一角色'], disable: false, content: '[姓名]:唯一角色\n[剧情.0]:其他剧情' },
-        2: { uid: 2, key: ['唯一角色'], comment: '动态-唯一角色', content: '手工资料', disable: false },
-        3: { uid: 3, key: ['CWB:主角档案', 'singleton-story - Branch #25', '旧主角名'], content: '[姓名]:旧主角名\n[剧情.0]:主角旧剧情', disable: true },
-    } }; cache = structuredClone(disk);
-    const singletonOld = await lorebook.getTriggeredOldProfiles(archiveSettings, [{ message: '唯一角色' }]);
-    assert.ok(singletonOld.some(content => content.includes('旧剧情')), 'disabled prior branch archive is read for incremental fusion');
-    const finalProfile = '[姓名]:唯一角色\n[剧情.0]:2025-09-01｜旧剧情\n[剧情.1]:2025-09-05｜新增剧情';
-    await lorebook.saveCharacterDescription(archiveSettings, '唯一角色', finalProfile, 0, 29);
-    assert.equal(Object.keys(disk.entries).length, 4, 'first update reuses the previous branch UID without creating any entry');
-    assert.equal(disk.entries[0].content, finalProfile);
-    assert.ok(disk.entries[0].key.some(key => key.startsWith('CWB:档案身份:')));
-    assert.equal(disk.entries[1].content, '[姓名]:唯一角色\n[剧情.0]:其他剧情');
-    assert.equal(disk.entries[2].content, '手工资料');
-    disk.entries[0].disable = true; cache = structuredClone(disk); profileState.profileArchiveRegistry = null;
-    await lorebook.saveCharacterDescription(archiveSettings, '唯一角色', finalProfile, 30, 59);
-    contextData.chatId = 'singleton-story - Branch #33'; profileState.chatId = contextData.chatId; profileState.profileArchiveRegistry = null;
-    await lorebook.saveCharacterDescription(archiveSettings, '唯一角色', finalProfile, 60, 89);
-    assert.equal(Object.keys(disk.entries).length, 4, 'disabled archive and a further branch still reuse one archive');
-    world.world_names.push('新目标世界书'); extraBooks.set('新目标世界书', { entries: {} });
-    profileState.profileArchiveRegistry = null;
-    await lorebook.saveCharacterDescription({ ...archiveSettings, worldbookTarget: 'custom', customWorldbook: '新目标世界书' }, '唯一角色', finalProfile, 90, 119);
-    assert.equal(Object.keys(extraBooks.get('新目标世界书').entries).length, 0, 'changing preferred destination never duplicates an already located archive');
-    await lorebook.verifyProfileContent(archiveSettings, '唯一角色', finalProfile);
-    await lorebook.saveUserDescription(archiveSettings, '新主角名', '[姓名]:新主角名\n[剧情.0]:主角融合后的剧情', 0, 29);
-    assert.equal(Object.keys(disk.entries).length, 4, 'protagonist updates also reuse one UID');
-    assert.ok(disk.entries[3].content.includes('新主角名'));
-    world.world_names.splice(world.world_names.indexOf('新目标世界书'), 1); extraBooks.delete('新目标世界书');
-    contextData.chatId = savedContextId; profileState.chatId = savedContextId; profileState.profileArchiveRegistry = null;
-    disk = singletonBaseline; cache = structuredClone(disk);
     failWrite = true;
-    contextData.chat.push({ mes: '新增事件四。' });
+    contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
     // Force a visibly different response, so readback must detect failed persistence.
     cache.entries = {};
     await click();

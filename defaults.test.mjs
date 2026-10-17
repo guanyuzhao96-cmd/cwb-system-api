@@ -15,8 +15,7 @@ test('full and incremental defaults request the expanded profile fields and deta
 });
 
 test('known information stores event implications, not event logs, with evidence-bounded inference', () => {
-    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.13\.6/);
-    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /完整最终档案，不是仅输出变化字段/);
+    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.9/);
     assert.match(cwbCompleteDefaultSettings.cwb_char_card_prompt, /角色的认知、态度、意愿、动机或关系判断，不记录事件流水/);
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /多次或明确自愿的行为可归纳为有证据支持的当前倾向/);
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /发现旧已知信息只是事件流水时.*改写成结论/);

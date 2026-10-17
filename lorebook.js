@@ -1,10 +1,11 @@
 import { parseTimelineRecords, formatTimelineRecords } from './timeline-utils.mjs';
-import { sanitizeProfileContent, mergeProfileDelta } from './profile-utils.mjs';
+import { sanitizeProfileContent } from './profile-utils.mjs';
 import { applyModuleResult, intersectRanges, mergeModuleProgress, MODULE_LABELS } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
 import { extension_settings, getContext } from '/scripts/extensions.js';
 import {
     createWorldInfoEntry,
+    loadWorldInfo,
     saveWorldInfo,
     selected_world_info,
     world_info,
@@ -105,7 +106,6 @@ export async function generateWorldbookDirectories(onProgress = () => {}) {
         generated.push({ bookName: plan.bookName, count: names.length });
     }
     state.routeCache = null;
-    state.profileArchiveRegistry = null;
     return {
         activeBooks: targetBooks,
         generated,
@@ -139,7 +139,7 @@ export async function routeSummary(settings = {}) {
 
 export async function getEntries(bookName) {
     if (!bookName) return [];
-    const data = await readWorldbookFromServer(bookName);
+    const data = await loadWorldInfo(bookName);
     if (!data?.entries) return [];
     return Object.values(data.entries).map(entry => ({
         ...entry,
@@ -164,7 +164,7 @@ function applyEntryPatch(target, patch) {
 }
 
 export async function patchEntries(bookName, patches) {
-    const data = await readWorldbookFromServer(bookName);
+    const data = await loadWorldInfo(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     for (const patch of patches) {
         const target = data.entries[patch.uid] ?? Object.values(data.entries).find(entry => Number(entry.uid) === Number(patch.uid));
@@ -174,7 +174,7 @@ export async function patchEntries(bookName, patches) {
 }
 
 export async function createEntries(bookName, entries) {
-    const data = await readWorldbookFromServer(bookName);
+    const data = await loadWorldInfo(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     for (const entry of entries) {
         const target = createWorldInfoEntry(bookName, data);
@@ -185,7 +185,7 @@ export async function createEntries(bookName, entries) {
 }
 
 export async function deleteEntries(bookName, uids) {
-    const data = await readWorldbookFromServer(bookName);
+    const data = await loadWorldInfo(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     for (const uid of uids) {
         delete data.entries[uid];
@@ -223,8 +223,7 @@ function referencedProfileBooks(primaryData, chatId) {
     return [...books];
 }
 
-async function scanGeneratedContent(phase, onProgress, { scope = 'current' } = {}) {
-    const allGenerated = scope === 'all-generated';
+async function scanGeneratedContent(phase, onProgress) {
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天 ID，已停止扫描以保护其他聊天数据。');
     const primary = getPrimaryWorldbook();
@@ -234,7 +233,7 @@ async function scanGeneratedContent(phase, onProgress, { scope = 'current' } = {
     const primaryData = await readWorldbookFromServer(primary);
     const configured = extension_settings?.cwb_system_api;
     const configuredTarget = configured?.worldbookTarget === 'custom' ? configured.customWorldbook : null;
-    const books = [...new Set(allGenerated ? [primary, ...listWorldbooks()] : [
+    const books = [...new Set([
         primary,
         ...(configuredTarget && world_names.includes(configuredTarget) ? [configuredTarget] : []),
         ...referencedProfileBooks(primaryData, chatId),
@@ -254,8 +253,7 @@ async function scanGeneratedContent(phase, onProgress, { scope = 'current' } = {
             const keys = getKeys(entry);
             // Older plugin versions and manually reordered Tavern keys may keep
             // the chat ID and marker in a different order. Match both by value.
-            const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys.includes(marker) && (allGenerated || keys.includes(chatId)))
-                || (allGenerated && keys.includes('CWB:世界书目录') && /^CWB目录[｜|]/.test(String(entry.comment ?? '')) ? ['CWB:世界书目录', '插件生成世界书目录'] : null);
+            const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys.includes(marker) && keys.includes(chatId));
             if (!type) continue;
             snapshot.entries.push({
                 bookName: snapshot.bookName, uid: Number(entry.uid), marker: type[0], label: type[1],
@@ -271,211 +269,9 @@ async function scanGeneratedContent(phase, onProgress, { scope = 'current' } = {
     };
 }
 
-export async function getGeneratedContentPreview(onProgress, options = {}) {
-    const scope = options.scope === 'all-generated' ? 'all-generated' : 'current';
-    const { chatId, entries, bookCount } = await scanGeneratedContent('scan', onProgress, { scope });
-    return { chatId, entries, scope, bookCount };
-}
-
-export async function getRelatedArchiveChats() {
-    const chatId = state.chatId.replace(/ imported/g, '');
-    const root = id => String(id).replace(/ imported/g, '').replace(/\s*-\s*Branch #\d+$/i, '').trim();
-    const primary = getPrimaryWorldbook();
-    if (!primary || !chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天或主世界书。');
-    const data = await readWorldbookFromServer(primary);
-    const books = [...new Set([primary, ...getActiveWorldbookNames(), ...referencedProfileBooks(data, chatId), extension_settings?.cwb_system_api?.customWorldbook].filter(Boolean))];
-    const sources = new Map();
-    for (const bookName of books) {
-        const book = bookName === primary ? data : await readWorldbookFromServer(bookName);
-        for (const entry of Object.values(book.entries)) {
-            const keys = getKeys(entry);
-            if (!GENERATED_ENTRY_TYPES.some(([marker]) => keys.includes(marker))) continue;
-            for (const key of keys) {
-                if (key !== chatId && root(key) === root(chatId)) {
-                    if (!sources.has(key)) sources.set(key, { chatId: key, count: 0, books: new Set() });
-                    sources.get(key).count++; sources.get(key).books.add(bookName);
-                }
-            }
-        }
-    }
-    return [...sources.values()].map(source => ({ ...source, books: [...source.books] })).sort((a, b) => a.chatId.localeCompare(b.chatId, 'zh-CN', { numeric: true }));
-}
-
-export async function scanDuplicateArchives(onProgress = () => {}, sourceChatIds = []) {
-    const chatId = state.chatId.replace(/ imported/g, '');
-    if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天，停止检查。');
-    const primary = getPrimaryWorldbook();
-    if (!primary) throw Error('当前角色没有绑定主世界书。');
-    const primaryData = await readWorldbookFromServer(primary);
-    const books = [...new Set([primary, ...getActiveWorldbookNames(), ...referencedProfileBooks(primaryData, chatId), extension_settings?.cwb_system_api?.customWorldbook].filter(Boolean))];
-    const plans = [], warnings = [];
-    const allowedSources = new Set((await (sourceChatIds.length ? getRelatedArchiveChats() : Promise.resolve([]))).map(source => source.chatId));
-    if (sourceChatIds.some(id => !allowedSources.has(id))) throw Error('所选来源不是当前剧情的已识别分支，停止合并。');
-    for (let i = 0; i < books.length; i++) {
-        const bookName = books[i];
-        onProgress(`正在检查《${bookName}》 ${i + 1}/${books.length}…`);
-        const original = bookName === primary ? primaryData : await readWorldbookFromServer(bookName);
-        const next = structuredClone(original), groups = new Map(), actions = [], sourceProgress = [];
-        const currentUids = new Set(Object.values(original.entries).filter(entry => getKeys(entry).includes(chatId)).map(entry => Number(entry.uid)));
-        for (const entry of Object.values(next.entries)) {
-            let keys = getKeys(entry);
-            const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys.includes(marker));
-            if (!type) continue;
-            const sourceId = sourceChatIds.find(id => keys.includes(id));
-            if (sourceId && !keys.includes(chatId)) {
-                if (['CWB:自动档案', 'CWB:主角档案', 'Amily2角色总集', 'CWB:故事时间线'].includes(type[0])) {
-                    if (['CWB:自动档案', 'CWB:主角档案'].includes(type[0]) && !parseCustomFormat(entry.content).姓名) {
-                        warnings.push(`《${bookName}》UID ${entry.uid} 来源档案姓名不可识别，保留原条目`); continue;
-                    }
-                    keys = [...new Set(keys.filter(key => !sourceChatIds.includes(key) && !/^CWB:聊天身份:/.test(key)
-                        && !/^CWB:档案身份:/.test(key)
-                        && !/^(?:CWB:(?:时间线|关系|总结)楼层:)?\d+-\d+$/.test(String(key))).concat(chatId))];
-                    if (['CWB:自动档案', 'CWB:主角档案'].includes(type[0])) keys.push(profileStoryScope().key);
-                    const normalizedContent = ['CWB:自动档案', 'CWB:主角档案'].includes(type[0]) ? mergeProfileDelta([], entry.content)
-                        : type[0] === 'CWB:故事时间线' ? mergeTimelineContent([entry.content]) : entry.content;
-                    applyEntryPatch(entry, { keys, content: normalizedContent, enabled: true });
-                    actions.push(`迁入 ${entry.comment || type[1]}（UID ${entry.uid}）：${sourceId} → ${chatId}`);
-                } else if (['CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度'].includes(type[0])) {
-                    sourceProgress.push({ entry, sourceId, marker: type[0] });
-                    continue;
-                } else {
-                    warnings.push(`《${bookName}》${entry.comment || type[1]}（UID ${entry.uid}）保留为历史参考，不导入旧楼层进度或覆盖当前关系/目录`);
-                }
-            }
-            if (!keys.includes(chatId)) {
-                if (isEnabled(entry) && ['CWB:自动档案', 'CWB:主角档案', 'Amily2角色总集'].includes(type[0])) {
-                    warnings.push(`其他聊天条目已启用：${entry.comment || type[1]}（UID ${entry.uid}）；未选择为来源，不修改`);
-                }
-                continue;
-            }
-            const isProfile = ['CWB:自动档案', 'CWB:主角档案'].includes(type[0]);
-            const name = isProfile ? sanitizeName(parseCustomFormat(entry.content).姓名 || '') : '';
-            if (isProfile && !name) { warnings.push(`《${bookName}》UID ${entry.uid} 姓名无法识别，跳过`); continue; }
-            const id = JSON.stringify([type[0], name]);
-            if (!groups.has(id)) groups.set(id, { marker: type[0], label: name || type[1], entries: [] });
-            groups.get(id).entries.push(entry);
-        }
-        if (sourceProgress.length) {
-            const target = Object.values(next.entries).find(entry => getKeys(entry).includes('CWB:更新状态') && getKeys(entry).includes(chatId));
-            let saved;
-            try {
-                saved = target ? JSON.parse(target.content) : { version: 2, modules: {}, tracking: { completed: [], duplicates: [], startIndex: 0, totalMessages: 0 } };
-                if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw Error('当前进度格式无法识别');
-                const history = [...(Array.isArray(saved.mergedSourceHistory) ? saved.mergedSourceHistory : [])];
-                for (const { entry, sourceId, marker } of sourceProgress) {
-                    history.push({ sourceChatId: sourceId, marker, bookName, uid: entry.uid, content: entry.content, keys: getKeys(entry) });
-                }
-                const destination = target || createWorldInfoEntry(bookName, next);
-                if (!destination) throw Error('无法创建历史进度归档');
-                applyEntryPatch(destination, { content: JSON.stringify({ ...saved, mergedSourceHistory: history }), keys: ['CWB:更新状态', chatId], enabled: false, type: 'selective', comment: `CWB插件更新状态-${chatId}` });
-                for (const { entry, sourceId } of sourceProgress) {
-                    const key = Object.keys(next.entries).find(key => next.entries[key] === entry);
-                    if (key !== undefined) delete next.entries[key];
-                    actions.push(`归档旧进度（UID ${entry.uid}）：${sourceId} → 当前进度历史，不计入当前楼层完成范围`);
-                }
-            } catch (error) { warnings.push(`《${bookName}》旧进度历史未合入，保留原条目：${error.message}`); }
-        }
-        for (const { marker, label, entries } of groups.values()) {
-            if (entries.length < 2) continue;
-            entries.sort((a, b) => Number(currentUids.has(Number(b.uid))) - Number(currentUids.has(Number(a.uid))) || Number(a.uid) - Number(b.uid));
-            const target = entries[0];
-            const chronologicalSources = [...entries.filter(entry => !currentUids.has(Number(entry.uid))), ...entries.filter(entry => currentUids.has(Number(entry.uid)))];
-            let content;
-            try {
-                if (['CWB:自动档案', 'CWB:主角档案'].includes(marker)) {
-                    content = mergeProfileDelta(chronologicalSources.slice(0, -1).map(entry => entry.content), chronologicalSources.at(-1).content);
-                } else if (marker === 'CWB:故事时间线') {
-                    if (entries.some(entry => String(entry.content).trim() && !parseTimelineRecords(entry.content).length)) throw Error('时间线含不可识别内容，未合并');
-                    content = mergeTimelineContent(chronologicalSources.map(entry => entry.content));
-                } else if (marker === 'Amily2角色总集') {
-                    const names = [...new Set(entries.flatMap(entry => [...String(entry.content).matchAll(/^\[([^:\n]+):/gm)].map(match => match[1].trim())))];
-                    if (!names.length) throw Error('总览名单无法识别');
-                    const end = Math.max(...entries.flatMap(entry => [...String(entry.content).matchAll(/【前(\d+)楼/g)].map(match => Number(match[1]))), 0);
-                    content = `当前聊天角色总览：\n${names.sort().map(name => `[${name}: (详细查看绿灯角色条目)]`).join('\n')}\n{{// 【前${end}楼角色世界书已更新完成】}}`;
-                } else if (marker === 'CWB:更新状态') {
-                    const scoped = { entries: Object.fromEntries(entries.map(entry => [entry.uid, entry])) };
-                    content = JSON.stringify(findSavedUpdateState(scoped, chatId).state);
-                } else if (entries.every(entry => entry.content === target.content)) {
-                    content = target.content;
-                } else {
-                    throw Error('内容存在差异，需人工核对，未自动合并');
-                }
-            } catch (error) {
-                for (const entry of entries.filter(entry => !currentUids.has(Number(entry.uid)))) {
-                    const key = Object.keys(original.entries).find(key => Number(original.entries[key].uid) === Number(entry.uid));
-                    if (key !== undefined) next.entries[key] = structuredClone(original.entries[key]);
-                    const actionIndex = actions.findIndex(action => action.startsWith('迁入 ') && action.includes(`（UID ${entry.uid}）`));
-                    if (actionIndex >= 0) actions.splice(actionIndex, 1);
-                }
-                warnings.push(`《${bookName}》${label}：${error.message}`); continue;
-            }
-            const keys = [...new Set(entries.flatMap(getKeys))];
-            applyEntryPatch(target, { content, keys,
-                ...(['CWB:自动档案', 'CWB:主角档案', 'Amily2角色总集', 'CWB:故事时间线'].includes(marker) ? { enabled: true } : {}),
-            });
-            for (const duplicate of entries.slice(1)) {
-                const key = Object.keys(next.entries).find(key => next.entries[key] === duplicate);
-                if (key !== undefined) delete next.entries[key];
-            }
-            actions.push(`合并 ${label}：${entries.map(entry => `${entry.comment || label}（UID ${entry.uid}）`).join('、')} → 保留 UID ${target.uid}`);
-        }
-        if (actions.length) plans.push({ bookName, original, next, actions });
-    }
-    if (state.chatId.replace(/ imported/g, '') !== chatId) throw Error('检查期间聊天变化，请重新检查。');
-    const stats = {
-        removed: plans.reduce((sum, plan) => sum + Math.max(0, Object.keys(plan.original.entries).length - Object.keys(plan.next.entries).length), 0),
-        migrated: plans.reduce((sum, plan) => sum + plan.actions.filter(action => action.startsWith('迁入 ')).length, 0),
-        disabled: plans.reduce((sum, plan) => sum + plan.actions.filter(action => action.startsWith('停用')).length, 0),
-    };
-    return { chatId, plans, warnings, sourceChatIds, stats, bookCount: books.length };
-}
-
-export async function repairDuplicateArchives(preview, onProgress = () => {}) {
-    const readRepairBook = async bookName => {
-        try { return await readWorldbookFromServer(bookName); }
-        catch (error) {
-            if (!(error instanceof TypeError) && !/Load failed|Failed to fetch|network/i.test(error.message)) throw error;
-            onProgress(`《${bookName}》读取连接中断，正在重新核验（不重复写入）…`);
-            try { return await readWorldbookFromServer(bookName); }
-            catch (retryError) { throw Error(`合并《${bookName}》读取/核验阶段失败：${retryError.message}。请重新扫描，勿根据备份下载判断合并成功。`); }
-        }
-    };
-    const assertChat = () => {
-        const context = getContext();
-        const active = context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId;
-        if (!preview || state.chatId.replace(/ imported/g, '') !== preview.chatId || active.replace(/ imported/g, '') !== preview.chatId) throw Error('聊天已变化，停止修复。');
-    };
-    assertChat();
-    // Revalidate every affected book before the first mutation.
-    for (const plan of preview.plans) {
-        const current = await readRepairBook(plan.bookName);
-        if (JSON.stringify(current) !== JSON.stringify(plan.original)) throw Error(`《${plan.bookName}》在扫描后发生变化，未开始修复；请重新扫描。`);
-    }
-    let repaired = 0;
-    for (const plan of preview.plans) {
-        assertChat();
-        const current = await readRepairBook(plan.bookName);
-        if (JSON.stringify(current) !== JSON.stringify(plan.original)) throw Error(`《${plan.bookName}》已变化，停止；此前已修复 ${repaired} 项。`);
-        assertChat();
-        onProgress(`正在写入《${plan.bookName}》；此前已核验 ${repaired} 项…`);
-        let persisted;
-        try { await saveWorldInfo(plan.bookName, plan.next, true); }
-        catch (error) {
-            if (!(error instanceof TypeError) && !/Load failed|Failed to fetch|network/i.test(error.message)) throw error;
-            // A dropped response does not prove the write failed. Read back once;
-            // never replay a destructive write whose outcome is unknown.
-            onProgress(`《${plan.bookName}》保存响应中断，正在核验实际结果…`);
-            persisted = await readRepairBook(plan.bookName);
-            if (JSON.stringify(persisted.entries) !== JSON.stringify(plan.next.entries)) throw Error(`《${plan.bookName}》保存响应失败且未核验到合并结果：${error.message}；此前已核验 ${repaired} 项，请重新扫描。`);
-        }
-        persisted ??= await readRepairBook(plan.bookName);
-        if (JSON.stringify(persisted.entries) !== JSON.stringify(plan.next.entries)) throw Error(`《${plan.bookName}》修复后回读不一致；请保留备份并复查。`);
-        repaired += plan.actions.length;
-        onProgress(`已核验《${plan.bookName}》，完成 ${repaired} 项修复`);
-    }
-    state.routeCache = null;
-    state.profileArchiveRegistry = null;
-    return repaired;
+export async function getGeneratedContentPreview(onProgress) {
+    const { chatId, entries } = await scanGeneratedContent('scan', onProgress);
+    return { chatId, entries };
 }
 
 const REVIEWABLE_INFO_LINE = /^\[(角色已知信息|角色未知信息)\.(\d+)\]\s*:\s*(.*)$/;
@@ -534,71 +330,6 @@ export async function getProfileInfoReviewQueue(onProgress) {
         .map(([name, facts]) => ({ name, facts }))
         .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
     return { chatId, characters, totalFacts: characters.reduce((sum, character) => sum + character.facts.length, 0) };
-}
-
-export async function getProfileRegenerationQueue(onProgress) {
-    const context = getContext();
-    state.chatId = context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId || 'unknown_chat';
-    const { chatId, entries } = await scanGeneratedContent('profile-regeneration', onProgress);
-    const profiles = entries.filter(entry => ['CWB:自动档案', 'CWB:主角档案'].includes(entry.marker)).map(entry => {
-        const parsed = parseCustomFormat(entry.content);
-        const rawName = String(parsed?.姓名 ?? '').replace(/^[\s"'“‘【\[]+|[\s"'”’】\]]+$/g, '').trim();
-        const name = rawName || entry.keys.find(key => !['CWB:自动档案', 'CWB:主角档案', chatId].includes(key) && !/^\d+-\d+$/.test(String(key))) || entry.comment || `UID ${entry.uid}`;
-        const plotValue = parsed?.剧情;
-        const plot = (Array.isArray(plotValue) ? plotValue : plotValue && typeof plotValue === 'object' ? Object.values(plotValue) : plotValue === undefined ? [] : [plotValue])
-            .map(value => String(value ?? '').trim()).filter(Boolean);
-        return { id: `${entry.bookName}:${entry.uid}`, name, bookName: entry.bookName, uid: entry.uid,
-            marker: entry.marker, keys: entry.keys, content: entry.content, plot };
-    }).filter(profile => profile.plot.length).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
-    return { chatId, profiles, total: profiles.length, skippedWithoutPlot: entries.filter(entry => ['CWB:自动档案', 'CWB:主角档案'].includes(entry.marker)).length - profiles.length };
-}
-
-export async function saveRegeneratedProfileInfo(review, profile, known, unknown) {
-    const chatId = state.chatId.replace(/ imported/g, '');
-    if (!review || review.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
-        throw Error('当前聊天已变化或无法确认，未修改档案。请重新扫描审查队列。');
-    }
-    if (!profile || !['CWB:自动档案', 'CWB:主角档案'].includes(profile.marker)
-        || !profile.keys?.includes(chatId) || !Array.isArray(known) || !Array.isArray(unknown)
-        || [...known, ...unknown].some(item => typeof item !== 'string' || !item.trim())) {
-        throw Error('重新生成结果或目标档案无效，未修改内容。');
-    }
-    const current = await scanGeneratedContent('regenerate-profile-info-verify');
-    const entry = current.entries.find(item => item.bookName === profile.bookName && item.uid === profile.uid
-        && item.marker === profile.marker && item.keys.includes(chatId));
-    if (!entry || entry.content !== profile.content || entry.keys.join('\0') !== profile.keys.join('\0')) {
-        throw Error('重新生成期间档案已变化，未修改任何内容。请重新扫描后再试。');
-    }
-    const data = current.snapshots.get(profile.bookName);
-    const target = data?.entries?.[profile.uid] ?? Object.values(data?.entries ?? {}).find(item => Number(item.uid) === Number(profile.uid));
-    if (!target) throw Error('目标档案条目已不存在，未修改内容。');
-    const original = String(target.content ?? '');
-    const newline = original.includes('\r\n') ? '\r\n' : '\n';
-    const lines = original.split(/\r?\n/);
-    const infoLine = /^\[(角色已知信息|角色未知信息)\.\d+\]\s*:/;
-    let insertAt = lines.findIndex(line => infoLine.test(line));
-    if (insertAt < 0) insertAt = lines.findIndex(line => /^\[--(?:角色档案结束|Amily2::CHAR_END)--\]$/.test(line));
-    if (insertAt < 0) insertAt = lines.length;
-    let removedBefore = 0;
-    for (let i = lines.length - 1; i >= 0; i--) {
-        if (infoLine.test(lines[i])) {
-            if (i < insertAt) removedBefore++;
-            lines.splice(i, 1);
-        }
-    }
-    insertAt = Math.max(0, insertAt - removedBefore);
-    const replacement = [
-        ...known.map((item, index) => `[角色已知信息.${index}]:${item.trim()}`),
-        ...unknown.map((item, index) => `[角色未知信息.${index}]:${item.trim()}`),
-    ];
-    lines.splice(insertAt, 0, ...replacement);
-    const nextContent = lines.join(newline);
-    target.content = nextContent;
-    await saveWorldInfo(profile.bookName, data, true);
-    const persisted = await readWorldbookFromServer(profile.bookName);
-    const stored = persisted.entries?.[profile.uid] ?? Object.values(persisted.entries ?? {}).find(item => Number(item.uid) === Number(profile.uid));
-    if (!stored || stored.content !== nextContent) throw Error('重新生成后世界书回读不一致，无法确认结果；请刷新后复查。');
-    return { name: profile.name, bookName: profile.bookName, uid: profile.uid, content: nextContent };
 }
 
 function profileListValues(value) {
@@ -808,8 +539,7 @@ export async function deleteGeneratedContent(preview, onProgress) {
     if (!preview || preview.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
         throw Error('当前聊天已变化或无法确认，未删除任何内容。');
     }
-    const allGenerated = preview.scope === 'all-generated';
-    const current = await scanGeneratedContent('verify', onProgress, { scope: allGenerated ? 'all-generated' : 'current' });
+    const current = await scanGeneratedContent('verify', onProgress);
     const signature = item => JSON.stringify([item.bookName, item.uid, item.marker, item.label, item.comment, item.content, item.keys]);
     const expected = preview.entries.map(signature).sort();
     const actual = current.entries.map(signature).sort();
@@ -828,14 +558,13 @@ export async function deleteGeneratedContent(preview, onProgress) {
     let bookIndex = 0;
     for (const [bookName, targets] of grouped) {
         bookIndex++;
-        const data = await readWorldbookFromServer(bookName);
+        const data = current.snapshots.get(bookName);
         if (!data?.entries) throw Error(`世界书《${bookName}》扫描快照缺失，已停止删除。`);
         const uidSet = new Set(targets.map(item => item.uid));
         const toDelete = Object.values(data.entries).filter(entry => {
             const keys = getKeys(entry);
             const target = targets.find(item => item.uid === Number(entry.uid));
-            return uidSet.has(Number(entry.uid)) && Boolean(target && keys.includes(target.marker) && (allGenerated || keys.includes(chatId))
-                && String(entry.content ?? '') === target.content && String(entry.comment ?? '') === target.comment && JSON.stringify(keys) === JSON.stringify(target.keys));
+            return uidSet.has(Number(entry.uid)) && Boolean(target && keys.includes(target.marker) && keys.includes(chatId));
         });
         if (toDelete.length !== targets.length) throw Error(`世界书《${bookName}》条目核对失败，未继续删除该世界书内容。`);
         for (const entry of toDelete) {
@@ -845,123 +574,73 @@ export async function deleteGeneratedContent(preview, onProgress) {
             if (type) byType[type] = (byType[type] ?? 0) + 1;
         }
         onProgress?.({ phase: 'delete', current: bookIndex, total: grouped.size, bookName });
-        const active = getContext()?.chatId || getContext()?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId;
-        if (state.chatId.replace(/ imported/g, '') !== chatId || active.replace(/ imported/g, '') !== chatId) throw Error(`聊天已变化，停止删除；此前已核验删除 ${deleted} 条。`);
-        let persisted;
-        try { await saveWorldInfo(bookName, data, true); }
-        catch (error) {
-            if (!(error instanceof TypeError) && !/Load failed|Failed to fetch|network/i.test(error.message)) throw Error(`删除《${bookName}》写入失败：${error.message}；此前已核验删除 ${deleted} 条。`);
-            onProgress?.({ phase: 'readback', current: bookIndex, total: grouped.size, bookName });
-            try { persisted = await readWorldbookFromServer(bookName); }
-            catch (readError) { throw Error(`删除《${bookName}》保存响应中断且回读失败：${readError.message}；结果未确认，请重新扫描。此前已核验删除 ${deleted} 条。`); }
-            if (Object.values(persisted.entries).some(entry => targets.some(target => Number(entry.uid) === target.uid && getKeys(entry).includes(target.marker)))) throw Error(`删除《${bookName}》保存响应失败且目标条目仍存在：${error.message}；此前已核验删除 ${deleted} 条。`);
-        }
+        await saveWorldInfo(bookName, data, true);
         onProgress?.({ phase: 'readback', current: bookIndex, total: grouped.size, bookName });
-        persisted ??= await readWorldbookFromServer(bookName);
+        const persisted = await readWorldbookFromServer(bookName);
         const remaining = Object.values(persisted.entries).some(entry => {
             const target = targets.find(item => item.uid === Number(entry.uid));
             const keys = getKeys(entry);
-            return Boolean(target && keys.includes(target.marker) && (allGenerated || keys.includes(chatId)));
+            return Boolean(target && keys.includes(target.marker) && keys.includes(chatId));
         });
         if (remaining) throw Error(`世界书《${bookName}》删除后回读仍发现目标条目；请刷新后检查。`);
         deleted += toDelete.length;
     }
     state.routeCache = null;
-    state.profileArchiveRegistry = null;
     return { deleted, byType };
 }
 
-function profileStoryScope() {
-    const chatId = state.chatId.replace(/ imported/g, '');
-    if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认剧情身份，停止保存角色档案。');
-    const root = chatId.replace(/\s*-\s*Branch #\d+$/i, '').trim();
-    const primary = getPrimaryWorldbook();
-    if (!primary) throw Error('角色卡未绑定主世界书。');
-    const integrity = String(getContext()?.chatMetadata?.integrity || '').trim();
-    const lineage = integrity ? `integrity:${integrity}` : `filename:${root}`;
-    return { chatId, root, primary, key: `CWB:档案身份:${encodeURIComponent(`${primary}\0${lineage}`)}` };
-}
-
-function normalizedProfileName(value) {
-    return sanitizeName(String(value ?? '').trim().replace(/^["'“‘]+|["'”’]+$/g, ''));
-}
-
-function isStoryProfile(entry, scope) {
-    const keys = getKeys(entry);
-    if (!keys.includes('CWB:自动档案') && !keys.includes('CWB:主角档案')) return false;
-    const ownerKeys = keys.filter(key => String(key).startsWith('CWB:档案身份:'));
-    if (ownerKeys.length) return ownerKeys.includes(scope.key);
-    const name = normalizedProfileName(parseCustomFormat(entry.content).姓名 || '');
-    return keys.some(key => typeof key === 'string' && key !== name
-        && key.replace(/ imported/g, '').replace(/\s*-\s*Branch #\d+$/i, '').trim() === scope.root);
-}
-
-async function storyProfileRegistry(settings) {
-    const scope = profileStoryScope();
-    if (state.profileArchiveRegistry?.key === scope.key) return state.profileArchiveRegistry;
-    const books = [...new Set([scope.primary, getTargetWorldbook(settings), ...(settings.multiWorldbookRouting ? listWorldbooks() : getActiveWorldbookNames())].filter(Boolean))];
-    const rows = await mapWithConcurrency(books, 4, async bookName => {
-        const data = await readWorldbookFromServer(bookName);
-        return Object.values(data.entries).filter(entry => isStoryProfile(entry, scope)).map(entry => ({ ...entry, bookName }));
-    });
-    state.profileArchiveRegistry = { key: scope.key, entries: rows.flat() };
-    return state.profileArchiveRegistry;
-}
-
-function profileCandidates(registry, scope, name, marker) {
-    return registry.entries.filter(entry => getKeys(entry).includes(marker)
-        && (marker === 'CWB:主角档案' || normalizedProfileName(parseCustomFormat(entry.content).姓名 || '') === name || getKeys(entry).includes(name)))
-        .sort((a, b) => Number(getKeys(b).includes(scope.key)) - Number(getKeys(a).includes(scope.key))
-            || Number(getKeys(b).includes(scope.chatId)) - Number(getKeys(a).includes(scope.chatId)) || Number(b.uid) - Number(a.uid));
-}
-
-async function persistSingleProfile(settings, rawName, content, startFloor, endFloor, isUser) {
-    const scope = profileStoryScope();
-    const marker = isUser ? 'CWB:主角档案' : 'CWB:自动档案';
-    const name = normalizedProfileName(rawName || (isUser ? '主角' : ''));
-    if (!name) throw Error('角色姓名无效，未新建档案。');
-    const registry = await storyProfileRegistry(settings);
-    const candidates = profileCandidates(registry, scope, name, marker);
-    const located = candidates[0];
-    const bookName = located?.bookName || (isUser ? scope.primary : await routeWorldbook(settings, rawName));
-    if (!bookName) return null;
-    const data = await readWorldbookFromServer(bookName);
-    let target = located ? Object.values(data.entries).find(entry => Number(entry.uid) === Number(located.uid) && isStoryProfile(entry, scope) && getKeys(entry).includes(marker)) : null;
-    if (located && !target) { state.profileArchiveRegistry = null; throw Error(`角色“${name}”原档案位置已变化，停止新建，请重试。`); }
-    // Recheck the destination immediately before creating, including disabled
-    // archives. No duplicate consolidation or cross-branch deactivation here.
-    target ||= profileCandidates({ entries: Object.values(data.entries).filter(entry => isStoryProfile(entry, scope)) }, scope, name, marker)[0];
-    const created = !target;
-    target ||= createWorldInfoEntry(bookName, data);
-    if (!target) throw Error('无法创建角色档案。');
-    applyEntryPatch(target, {
-        comment: `动态-${name}`, content, keys: [marker, scope.chatId, name, scope.key, `${startFloor + 1}-${endFloor + 1}`],
-        enabled: true, type: isUser ? 'constant' : 'selective', position: isUser ? 0 : 4,
-        order: isUser ? 10001 : 100, scanDepth: Number(settings.scanDepth) || 6,
-        ...(isUser ? { preventRecursion: true } : { role: 0 }),
-    });
-    if (created && !isUser) {
-        const depths = Object.values(data.entries).map(entry => Number(entry.depth)).filter(Number.isFinite);
-        target.depth = Math.max(7000, ...depths) + 1;
-    }
-    const active = getContext()?.chatId || getContext()?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId;
-    if (active.replace(/ imported/g, '') !== scope.chatId || state.chatId.replace(/ imported/g, '') !== scope.chatId) throw Error('保存前切换了聊天，未写入档案。');
-    await saveWorldInfo(bookName, data, true);
-    const storedBook = await readWorldbookFromServer(bookName);
-    const stored = Object.values(storedBook.entries).find(entry => Number(entry.uid) === Number(target.uid));
-    if (!stored || stored.content !== content || !getKeys(stored).includes(scope.key)) throw Error(`角色“${name}”更新后回读不一致，未确认保存。`);
-    registry.entries = registry.entries.filter(entry => entry.bookName !== bookName || Number(entry.uid) !== Number(target.uid));
-    registry.entries.push({ ...stored, bookName });
-    if (candidates.length > 1) notify('warning', `角色“${name}”有 ${candidates.length} 份旧档案，本次只更新《${bookName}》UID ${target.uid}，未新建或删除其他份；请用手动合并处理旧重复项。`);
-    return name;
-}
-
 export async function saveCharacterDescription(settings, characterName, content, startFloor, endFloor) {
-    return persistSingleProfile(settings, characterName, content, startFloor, endFloor, false);
+    const bookName = await routeWorldbook(settings, characterName);
+    if (!bookName) return null;
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const safeName = sanitizeName(characterName);
+    const floorRange = `${startFloor + 1}-${endFloor + 1}`;
+    const entries = await getEntries(bookName);
+    const existing = entries.find(entry => isEnabled(entry)
+        && getKeys(entry).includes('CWB:自动档案')
+        && getKeys(entry).includes(chatId)
+        && getKeys(entry).includes(safeName)
+        && !getKeys(entry).includes('Amily2角色总集'));
+    const entryData = {
+        comment: `动态-${safeName}`,
+        content,
+        keys: ['CWB:自动档案', chatId, safeName, floorRange],
+        enabled: true,
+        type: 'selective',
+        scanDepth: Number(settings.scanDepth) || 6,
+        order: 100,
+        position: 4,
+        role: 0,
+    };
+    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
+    else {
+        const depths = entries.filter(entry => getKeys(entry).includes(chatId)).map(entry => Number(entry.depth)).filter(Number.isFinite);
+        await createEntries(bookName, [{ ...entryData, depth: Math.max(7000, ...depths) + 1 }]);
+    }
+    return safeName;
 }
 
 export async function saveUserDescription(settings, userName, content, startFloor, endFloor) {
-    return persistSingleProfile(settings, userName, content, startFloor, endFloor, true);
+    const bookName = getPrimaryWorldbook();
+    if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存主角档案。');
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const safeName = sanitizeName(userName || '主角');
+    const floorRange = `${startFloor + 1}-${endFloor + 1}`;
+    const entries = await getEntries(bookName);
+    const existing = entries.find(entry => getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
+    const entryData = {
+        comment: `动态-${safeName}`,
+        content,
+        keys: ['CWB:主角档案', chatId, safeName, floorRange],
+        enabled: true,
+        type: 'constant',
+        position: 0,
+        order: 10001,
+        preventRecursion: true,
+    };
+    if (existing) await patchEntries(bookName, [{ uid: existing.uid, ...entryData }]);
+    else await createEntries(bookName, [entryData]);
+    return safeName;
 }
 
 function timelineKeys(entry) {
@@ -978,7 +657,7 @@ async function writeTimeline(content, startFloor, endFloor) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存故事时间线。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await readWorldbookFromServer(bookName);
+    const data = structuredClone(await loadWorldInfo(bookName));
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
     if (!existing.length && content === undefined) return [];
@@ -1174,22 +853,26 @@ async function updateRosterForBook(bookName, processedNames, startFloor, endFloo
 }
 
 export async function getTriggeredOldProfiles(settings, messages) {
-    state.profileArchiveRegistry = null;
     if (!settings.incremental) return [];
+    const chatId = state.chatId.replace(/ imported/g, '');
     const haystack = messages.map(message => `${message.name ?? ''}\n${message.message ?? ''}`).join('\n').toLowerCase();
-    const scope = profileStoryScope();
-    const registry = await storyProfileRegistry(settings);
+    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
     const profiles = [];
-    const seen = new Set();
-    for (const entry of registry.entries) {
-        const marker = getKeys(entry).includes('CWB:主角档案') ? 'CWB:主角档案' : 'CWB:自动档案';
-        const name = normalizedProfileName(parseCustomFormat(entry.content).姓名 || '');
-        if (!name || marker !== 'CWB:主角档案' && !haystack.includes(name.toLowerCase())) continue;
-        const id = `${marker}:${name}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const canonical = profileCandidates(registry, scope, name, marker)[0];
-        if (canonical) profiles.push(canonical.content);
+    const masterBook = getPrimaryWorldbook();
+    if (masterBook) {
+        const masterEntries = await getEntries(masterBook);
+        const userProfile = masterEntries.find(entry => entry.enabled && getKeys(entry).includes('CWB:主角档案') && getKeys(entry).includes(chatId));
+        if (userProfile) profiles.push(userProfile.content);
+    }
+    for (const bookName of books.filter(Boolean)) {
+        const entries = await getEntries(bookName);
+        profiles.push(...entries.filter(entry => entry.enabled
+            && getKeys(entry).includes(chatId)
+            && !getKeys(entry).includes('Amily2角色总集')
+            && !getKeys(entry).includes('CWB:故事时间线')
+            && !getKeys(entry).includes('CWB:主角档案')
+            && getKeys(entry).filter(key => !['CWB:自动档案', chatId].includes(key)).some(key => haystack.includes(String(key).toLowerCase())))
+            .map(entry => entry.content));
     }
     return profiles;
 }
@@ -1301,7 +984,7 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存角色关系。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await readWorldbookFromServer(bookName);
+    const data = structuredClone(await loadWorldInfo(bookName));
     if (!data?.entries) throw new Error('无法读取主世界书。');
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId));
     const target = existing[0] || createWorldInfoEntry(bookName, data);
@@ -1413,15 +1096,13 @@ export async function recordModuleResult(module, start, end, error = null) {
 }
 
 export async function verifyProfileContent(settings, name, content, isUser = false) {
-    const scope = profileStoryScope();
-    const registry = await storyProfileRegistry(settings);
-    const located = profileCandidates(registry, scope, normalizedProfileName(name), isUser ? 'CWB:主角档案' : 'CWB:自动档案')[0];
-    const bookName = located?.bookName;
-    if (!bookName) throw Error(`角色 ${name} 未找到已保存的唯一档案位置，未标记完成。`);
+    const bookName = isUser ? getPrimaryWorldbook() : await routeWorldbook(settings, name);
+    if (!bookName) throw Error(`角色 ${name} 未找到目录归属，未标记档案完成。`);
     const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
     if (!response.ok) throw Error(`角色 ${name} 保存后回读失败。`);
     const data = await response.json();
-    if (!Object.values(data?.entries ?? {}).some(entry => Number(entry.uid) === Number(located.uid) && isStoryProfile(entry, scope) && entry.content === content)) throw Error(`角色 ${name} 服务端未确认保存。`);
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!Object.values(data?.entries ?? {}).some(entry => getKeys(entry).includes(chatId) && getKeys(entry).includes(isUser ? 'CWB:主角档案' : 'CWB:自动档案') && entry.content === content)) throw Error(`角色 ${name} 服务端未确认保存。`);
 }
 
 

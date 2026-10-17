@@ -31,24 +31,6 @@ function harness(entries = {}) {
 }
 const entry = (uid, chat, range, content) => ({ uid, key: ['CWB:故事时间线', chat, `CWB:时间线楼层:${range}`], content });
 
-test('stale Tavern worldbook cache must not erase 140-floor server progress during later writes or reload', async () => {
-    const h = harness();
-    // Simulate a host cache snapshot that predates the latest confirmed writes.
-    h.context.loadWorldInfo = async () => ({ entries: {} });
-    for (const module of Object.keys(MODULE_LABELS)) await h.context.recordModuleResult(module, 0, 139);
-    await h.context.saveTimeline('2025-02-01｜本轮剧情', 140, 159);
-    await h.context.saveRelationshipSummary('甲 ↔ 乙：同学', 140, 159);
-    await h.context.createEntries('main', [{ comment: '新增目录', keys: ['CWB:世界书目录'], content: '目录' }]);
-    const directory = Object.values(h.data().entries).find(row => row.comment === '新增目录');
-    await h.context.patchEntries('main', [{ uid: directory.uid, content: '更新目录' }]);
-    await h.context.deleteEntries('main', [directory.uid]);
-    const reloaded = harness(h.data().entries);
-    const progress = await reloaded.context.getModuleProgress();
-    for (const module of Object.keys(MODULE_LABELS)) assert.equal(moduleStatus(progress, module, 340).through, 140);
-    assert.ok(Object.values(reloaded.data().entries).some(row => row.key.includes('CWB:故事时间线')));
-    assert.ok(Object.values(reloaded.data().entries).some(row => row.key.includes('CWB:角色关系汇总')));
-});
-
 test('legacy entries merge atomically, retain UID, deduplicate and isolate other chats', async () => {
     const h = harness({ 0: entry(0, 'chat', '1-20', '[时间线.0]: 2025-02-02｜甲｜事件乙'), 1: entry(1, 'chat', '41-60', '[时间线.0]: 2025-01-01｜甲｜事件甲\n[时间线.1]: 2025-02-02｜甲｜事件乙\n[时间线.2]: 2025-02-02｜乙｜事件丙'), 2: entry(2, 'other', '1-10', 'other') });
     await h.context.getTimelineEntries();
@@ -213,43 +195,6 @@ test('unified no-profile update still saves timeline and relationships with exac
     assert.equal(calls, 1); assert.equal(timelineWrites, 1); assert.equal(relationshipWrites, 1);
 });
 
-
-test('avoid list filters model output before routing; unlisted missing routes still fail', async () => {
-    const h = harness();
-    const attempted = [], verified = [], roster = [], reports = [], statuses = [], prompts = [];
-    h.context.getContext = () => ({ chatId: 'chat', characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }], name1: '用户', chat: [{ mes: '新事件' }] });
-    Object.assign(h.context, {
-        $: () => ({ text() {} }), getTargetWorldbook: () => 'main',
-        getTriggeredOldProfiles: async () => [], getTimelineEntries: async () => [],
-        getRelationshipSummary: async () => '', recordChatUpdateRange: async () => {}, notify() {},
-        COMBINED_OUTPUT_PROTOCOL, RELATIONSHIP_PROMPT: '', mergeRelationships,
-        callSystemApi: async (...args) => { prompts.push(args); return 'response'; },
-        parseCombinedParts: () => ({ profiles: { value: ['周韵涵', '有目录角色'] } }),
-        parseCustomFormat: () => ({ 档案类型: '角色' }), characterNameFromBlock: block => block,
-        reconcileProfileExperienceCount: block => block, hasProfileFacts: () => true,
-        createErrorReport: (...args) => reports.push(args),
-    });
-    vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
-    Object.assign(h.context, {
-        characterNameFromBlock: block => block,
-        saveCharacterDescription: async (_, name) => { attempted.push(name); return name === '周韵涵' ? null : name; },
-        verifyProfileContent: async (_, name) => verified.push(name),
-        updateRoster: async (_, names) => roster.push(...names),
-        setStatus: message => statuses.push(message),
-    });
-    const result = await h.context.updateRange({ avoidedProfileNames: ' 周韵涵，周韵涵\n' }, 0, 0, { silent: true, modules: ['profiles'] });
-    assert.deepEqual(attempted, ['有目录角色']);
-    assert.deepEqual(verified, ['有目录角色']);
-    assert.deepEqual(roster, ['有目录角色']);
-    assert.deepEqual(Array.from(result), ['有目录角色']);
-    assert.equal(reports.length, 0);
-    assert.ok(statuses.some(message => message.includes('避开名单已生效：周韵涵')));
-    assert.ok(JSON.stringify(prompts[0]).includes('【角色档案避开名单】'));
-    assert.equal((await h.context.getModuleProgress()).profiles.completed[0][1], 0);
-    await assert.rejects(h.context.updateRange({}, 0, 0, { silent: true, modules: ['profiles'] }), /周韵涵.*未出现在可用目录/);
-    assert.equal(reports.length, 1);
-    assert.deepEqual(Array.from(h.context.avoidedProfileNames({ avoidedProfileNames: '周韵涵、甲;乙；丙\n周韵涵' })), ['周韵涵', '甲', '乙', '丙']);
-});
 
 test('v0.9.8 confirmed 100-floor progress migrates, arbitrary prose markers do not', async () => {
     const h = harness({

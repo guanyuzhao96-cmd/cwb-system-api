@@ -1,30 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeProfileContent, reconcileProfileExperienceCount, hasProfileFacts, PROFILE_RULES, mergeProfileDelta } from './profile-utils.mjs';
-
-test('merged personal plots follow calendar order with stable same-day order and unknown dates last', () => {
-    const source = '[姓名]:甲\n[剧情.0]:2025-9-8｜晚\n[剧情.1]:日期未知｜未知\n[剧情.2]:2025-09-01｜同日先';
-    const current = '[姓名]:甲\n[剧情.0]:2025-09-05｜中\n[剧情.1]:2025-09-01｜同日后\n[剧情.2]:2025-9-8｜晚';
-    const merged = mergeProfileDelta([source], current);
-    assert.ok(merged.indexOf('同日先') < merged.indexOf('同日后'));
-    assert.ok(merged.indexOf('同日后') < merged.indexOf('｜中'));
-    assert.ok(merged.indexOf('｜中') < merged.indexOf('｜晚'));
-    assert.ok(merged.indexOf('｜晚') < merged.indexOf('｜未知'));
-    assert.equal((merged.match(/｜晚/g) || []).length, 1);
-});
-
-test('incremental profile merge retains old fields, deduplicates plots and never sums duplicate totals', () => {
-    const old = '[姓名]:角色甲\n[剧情.0]:旧剧情\n[角色未知信息.0]:关键秘密\n[性经历人数]:3\n[手工补充]:保留';
-    const delta = '[姓名]:角色甲\n[剧情.0]:新剧情\n[角色已知信息.0]:关键秘密\n[性经历人数]:1';
-    const merged = mergeProfileDelta([old, old], delta);
-    assert.match(merged, /旧剧情/);
-    assert.match(merged, /新剧情/);
-    assert.match(merged, /\[性经历人数\]:3/);
-    assert.match(merged, /\[手工补充\]:保留/);
-    assert.doesNotMatch(merged, /\[角色未知信息\.\d+\]:关键秘密/);
-    assert.equal(mergeProfileDelta([merged], delta), merged);
-    assert.throws(() => mergeProfileDelta(['不可识别的旧档案'], delta), /原档案已保留/);
-});
+import { sanitizeProfileContent, reconcileProfileExperienceCount, hasProfileFacts, PROFILE_RULES } from './profile-utils.mjs';
 
 test('profile sanitizer preserves the requested factual fields and removes unrelated data', () => {
     const source = `[--角色档案开始--]

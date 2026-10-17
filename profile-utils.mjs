@@ -8,34 +8,9 @@ export const PROFILE_RULES = `角色与主角档案只允许“档案类型”�
 个人关键剧情必须同时满足：角色亲自参与、亲自获知或直接承受后果；并且事件强力推动或改变主线、重大冲突、关键秘密、角色核心目标或后续走向。只保留重大决定及其结果、关键冲突转折、重要秘密揭露、目标达成/失败及其持续影响等事件。仅被提及、与主线联系弱、无后续影响的事件不得记录。
 角色档案严禁记录任何任务或系统相关内容，包括任务目标/进度/提示、系统消息/提示/面板/状态/数值/奖励、签到、积分、功能说明、操作过程及界面文本；即使角色亲自经历、内容会影响数值或在剧情中出现，也不得写入任何字段。发现这类内容时整条删除，不要改写后保留。
 日常互动、普通对话、行动步骤、情绪变化、重复背景、枝节、未执行的计划和一般生活细节全部省略；不要把同一事件拆成多条，也不要复制全局时间线。剧情条目格式为“日期｜关键行为、必要因果及结果”，每条不超过64个汉字。相较旧版可保留约两倍篇幅，优先写清角色做了什么、为何重要及造成什么结果；不要删掉关键因果，也不要为凑字数扩写。
-增量更新只处理本轮有新增或实质变化的角色，但对该角色必须输出融合旧档案后的完整最终档案，不是仅输出变化字段；因为插件会原位写回同一个条目，未变化且仍符合规则的旧字段、关键剧情和经历名单必须一起保留，不能因本轮没提到就丢掉。事实变化时改正，重复信息合并，个人关键剧情按日期排序。复核旧“已知信息”时，若内容只是事件经过，应根据可见证据提炼其背后的认知、态度、动机或关系结论；无法可靠提炼时删除，不得照抄成事件。角色没有任何新增或实质变化时用[--档案无变化--]。即使其他提示词要求保留更多字段，也必须遵守本规则。`;
+增量更新时只输出本轮有新增或实质变化的字段；旧档案中符合新规则的有效信息继续保留，事实变化时改正，重复信息合并。复核旧“已知信息”时，若内容只是事件经过，应根据可见证据提炼其背后的认知、态度、动机或关系结论；无法可靠提炼时删除，不得照抄成事件。角色没有任何新增或实质变化时用[--档案无变化--]。即使其他提示词要求保留更多字段，也必须遵守本规则。`;
 
 const lists = new Set(['角色已知信息', '角色未知信息', '性经历人员', '额外补充', '剧情']);
-// Explicit manual archive repair only. Ordinary generation uses pre-0.13.2 save behavior.
-export function mergeProfileDelta(previousContents, incomingContent) {
-    const incoming = parseCustomFormat(incomingContent);
-    const previous = previousContents.map(content => parseCustomFormat(content));
-    if (!incoming.姓名 || previous.some(profile => !profile.姓名)) throw Error('旧角色档案格式无法安全增量合并，请先转换旧格式；原档案已保留。');
-    const output = { ...Object.assign({}, ...previous, incoming), 档案类型: incoming.档案类型 || previous[0]?.档案类型 || '角色', 姓名: incoming.姓名 || previous[0]?.姓名 };
-    for (const field of lists) {
-        const values = [...previous, incoming].flatMap(profile => {
-            const value = profile[field];
-            return Array.isArray(value) ? value : value && typeof value === 'object' ? Object.values(value) : value === undefined ? [] : [value];
-        }).map(value => String(value ?? '').trim()).filter(Boolean);
-        if (values.length) output[field] = [...new Set(values)];
-    }
-    if (output.剧情) {
-        const dateKey = value => {
-            const match = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?/);
-            return match ? `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')} ${String(match[4] || '0').padStart(2, '0')}:${match[5] || '00'}` : '\uffff';
-        };
-        output.剧情.sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
-    }
-    if (output.角色未知信息) output.角色未知信息 = output.角色未知信息.filter(value => !output.角色已知信息?.includes(value));
-    const counts = [...previous, incoming].map(profile => profile.性经历人数).filter(value => /^\d+$/.test(String(value ?? ''))).map(Number);
-    if (counts.length) output.性经历人数 = String(Math.max(...counts));
-    return buildCustomFormat(output);
-}
 const scalars = new Set(['性经历人数']);
 const stat = '(?:好感(?:度|值)?|信任(?:度|值)|依赖(?:度|值)|服从(?:度|值)|忠诚(?:度|值)|堕落(?:度|值)|亲密(?:度|值)|欲望(?:度|值)|经验值|经验点|金币数|累计次数|性经历人数|与主角次数)';
 const statPattern = new RegExp(stat);
