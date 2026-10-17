@@ -1271,8 +1271,9 @@ export async function manageChatEntries(settings) {
             if (!profile && !roster) continue;
             // Keep the archives of this card visible across chat switches. Disable
             // other cards' archives instead of leaving them globally injected.
-            const shouldEnable = settings.enabled !== false
-                && (profile ? isStoryProfile(entry, scope) : belongsToCardOrLegacyChat(keys, cardKey, chatId));
+            if (settings.enabled === false) continue;
+            const shouldEnable = profile ? isStoryProfile(entry, scope)
+                : belongsToCardOrLegacyChat(keys, cardKey, chatId);
             if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
         }
         if (patches.length) await patchEntries(bookName, patches);
