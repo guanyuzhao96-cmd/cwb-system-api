@@ -565,8 +565,8 @@ export async function saveRegeneratedProfileInfo(review, profile, known, unknown
         throw Error('当前聊天已变化或无法确认，未修改档案。请重新扫描审查队列。');
     }
     if (!profile || !['CWB:自动档案', 'CWB:主角档案'].includes(profile.marker)
-        || !belongsToCardOrLegacyChat(profile.keys ?? [], currentCardOwnerKey(), chatId)
-        && !isStoryProfile({ key: profile.keys }, profileStoryScope())
+        || !(belongsToCardOrLegacyChat(profile.keys ?? [], currentCardOwnerKey(), chatId)
+            || isStoryProfile({ key: profile.keys }, profileStoryScope()))
         || !Array.isArray(known) || !Array.isArray(unknown)
         || [...known, ...unknown].some(item => typeof item !== 'string' || !item.trim())) {
         throw Error('重新生成结果或目标档案无效，未修改内容。');
@@ -1239,6 +1239,7 @@ export async function getLastUpdatedFloor(settings) {
 
 export async function manageChatEntries(settings) {
     const cardKey = currentCardOwnerKey();
+    const scope = profileStoryScope();
     const customTarget = settings.worldbookTarget === 'custom';
     const books = customTarget ? [getPrimaryWorldbook()] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
     if (state.chatId.startsWith('unknown_chat')) return;
@@ -1271,7 +1272,7 @@ export async function manageChatEntries(settings) {
             // Keep the archives of this card visible across chat switches. Disable
             // other cards' archives instead of leaving them globally injected.
             const shouldEnable = settings.enabled !== false
-                && belongsToCardOrLegacyChat(keys, cardKey, chatId);
+                && (profile ? isStoryProfile(entry, scope) : belongsToCardOrLegacyChat(keys, cardKey, chatId));
             if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
         }
         if (patches.length) await patchEntries(bookName, patches);
@@ -1512,7 +1513,7 @@ function getStableChatIdentityKey() {
     const integrity = String(metadata?.integrity ?? '').trim();
     // SillyTavern branches may inherit their parent's integrity ID; keep those
     // scoped to their own chat filename to avoid sharing progress across branches.
-    if (!integrity || metadata?.main_chat) return null;
+    if (!integrity || metadata?.main_chat || /\s-\sBranch #\d+$/i.test(state.chatId)) return null;
     return `CWB:聊天身份:${integrity}`;
 }
 
