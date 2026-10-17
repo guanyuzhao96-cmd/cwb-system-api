@@ -18,13 +18,18 @@ test('saved custom prompts retain their text and receive the current mandatory p
     assert.equal(ensureProfilePromptRules(updated), updated);
 });
 
-test('saved timeline prompts are refreshed with same-day grouping and no people column', () => {
-    const old = '旧自定义时间线提示词';
+test('saved timeline prompts replace old rules with longer events and exclude task/system content', () => {
+    const old = '旧自定义时间线提示词\n\n【CWB时间线格式规则 v0.10.5】\n事件正文不超过28个汉字。';
     const updated = ensureTimelinePromptRules(old);
-    assert.ok(updated.startsWith(old));
+    assert.ok(updated.startsWith('旧自定义时间线提示词'));
+    assert.doesNotMatch(updated, /不超过28个汉字/);
     assert.ok(updated.includes(TIMELINE_PROMPT_RULE_MARKER));
-    assert.match(updated, /同一日期的所有关键进展合并为一条/);
+    assert.match(updated, /同一天仅将属于同一故事线的关键进展合并为一条/);
     assert.match(updated, /不得单独列出出场角色/);
+    assert.match(updated, /40—56个汉字/);
+    assert.match(updated, /任务.*系统.*不得.*时间线/s);
+    assert.match(updated, /无因果关联的故事线不要揉在一起/s);
+    assert.match(updated, /不得仅因日期相同.*无关事件/s);
     assert.equal(ensureTimelinePromptRules(updated), updated);
     assert.ok(DEFAULT_TIMELINE_INCREMENTAL_PROMPT.includes(TIMELINE_PROMPT_RULE_MARKER));
 });

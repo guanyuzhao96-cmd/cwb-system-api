@@ -82,7 +82,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         assert.ok(extension_settings.cwb_system_api[key].includes('只允许“档案类型”“姓名”和“剧情.N”字段'));
     }
     assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.startsWith('旧自定义时间线提示词'));
-    assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('同一日期的所有关键进展合并为一条'));
+    assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('同一天仅将属于同一故事线的关键进展合并为一条'));
     $('#cwb-system-settings').handlers.click.call({ attr: () => 'timeline' });
     assert.equal(document.getElementById('cwb-progress-details').open, true);
     assert.equal(document.getElementById('cwb-detail-timeline').scrolled, true);

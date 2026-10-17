@@ -7,8 +7,8 @@
   "js": "index.js",
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
-  "version": "0.10.7",
-  "description": "全量与增量提示词统一筛选强相关个人关键剧情。",
+  "version": "0.10.8",
+  "description": "精简主线时间线并排除任务与系统信息。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/Wx-2025/ST-Amily2-Chat-Optimisation"
 }
