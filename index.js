@@ -75,6 +75,7 @@ function saveFromUi() {
     value.incrementalPrompt = $('#cwb-incremental-prompt').val();
     value.timelineIncrementalPrompt = $('#cwb-timeline-incremental-prompt').val();
     state.routeCache = null;
+    state.profileArchiveRegistry = null;
     saveSettingsDebounced();
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
     updatePluginButton();

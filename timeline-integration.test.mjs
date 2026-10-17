@@ -553,6 +553,42 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     contextData.chatId = originalChatId;
     modules.get(resolve(root, 'state.js')).namespace.state.chatId = originalChatId;
     disk = chronologicalBaseline; cache = structuredClone(disk);
+    const singletonBaseline = structuredClone(disk);
+    const savedContextId = contextData.chatId;
+    contextData.chatId = 'singleton-story - Branch #32';
+    const profileState = modules.get(resolve(root, 'state.js')).namespace.state;
+    profileState.chatId = contextData.chatId; profileState.profileArchiveRegistry = null;
+    disk = { entries: {
+        0: { uid: 0, key: ['CWB:自动档案', 'singleton-story - Branch #25', '唯一角色'], disable: true, content: '[姓名]:唯一角色\n[剧情.0]:2025-09-01｜旧剧情' },
+        1: { uid: 1, key: ['CWB:自动档案', 'different-story - Branch #25', '唯一角色'], disable: false, content: '[姓名]:唯一角色\n[剧情.0]:其他剧情' },
+        2: { uid: 2, key: ['唯一角色'], comment: '动态-唯一角色', content: '手工资料', disable: false },
+        3: { uid: 3, key: ['CWB:主角档案', 'singleton-story - Branch #25', '旧主角名'], content: '[姓名]:旧主角名\n[剧情.0]:主角旧剧情', disable: true },
+    } }; cache = structuredClone(disk);
+    const singletonOld = await lorebook.getTriggeredOldProfiles(archiveSettings, [{ message: '唯一角色' }]);
+    assert.ok(singletonOld.some(content => content.includes('旧剧情')), 'disabled prior branch archive is read for incremental fusion');
+    const finalProfile = '[姓名]:唯一角色\n[剧情.0]:2025-09-01｜旧剧情\n[剧情.1]:2025-09-05｜新增剧情';
+    await lorebook.saveCharacterDescription(archiveSettings, '唯一角色', finalProfile, 0, 29);
+    assert.equal(Object.keys(disk.entries).length, 4, 'first update reuses the previous branch UID without creating any entry');
+    assert.equal(disk.entries[0].content, finalProfile);
+    assert.ok(disk.entries[0].key.some(key => key.startsWith('CWB:档案身份:')));
+    assert.equal(disk.entries[1].content, '[姓名]:唯一角色\n[剧情.0]:其他剧情');
+    assert.equal(disk.entries[2].content, '手工资料');
+    disk.entries[0].disable = true; cache = structuredClone(disk); profileState.profileArchiveRegistry = null;
+    await lorebook.saveCharacterDescription(archiveSettings, '唯一角色', finalProfile, 30, 59);
+    contextData.chatId = 'singleton-story - Branch #33'; profileState.chatId = contextData.chatId; profileState.profileArchiveRegistry = null;
+    await lorebook.saveCharacterDescription(archiveSettings, '唯一角色', finalProfile, 60, 89);
+    assert.equal(Object.keys(disk.entries).length, 4, 'disabled archive and a further branch still reuse one archive');
+    world.world_names.push('新目标世界书'); extraBooks.set('新目标世界书', { entries: {} });
+    profileState.profileArchiveRegistry = null;
+    await lorebook.saveCharacterDescription({ ...archiveSettings, worldbookTarget: 'custom', customWorldbook: '新目标世界书' }, '唯一角色', finalProfile, 90, 119);
+    assert.equal(Object.keys(extraBooks.get('新目标世界书').entries).length, 0, 'changing preferred destination never duplicates an already located archive');
+    await lorebook.verifyProfileContent(archiveSettings, '唯一角色', finalProfile);
+    await lorebook.saveUserDescription(archiveSettings, '新主角名', '[姓名]:新主角名\n[剧情.0]:主角融合后的剧情', 0, 29);
+    assert.equal(Object.keys(disk.entries).length, 4, 'protagonist updates also reuse one UID');
+    assert.ok(disk.entries[3].content.includes('新主角名'));
+    world.world_names.splice(world.world_names.indexOf('新目标世界书'), 1); extraBooks.delete('新目标世界书');
+    contextData.chatId = savedContextId; profileState.chatId = savedContextId; profileState.profileArchiveRegistry = null;
+    disk = singletonBaseline; cache = structuredClone(disk);
     failWrite = true;
     contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
     // Force a visibly different response, so readback must detect failed persistence.
