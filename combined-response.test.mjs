@@ -39,5 +39,6 @@ test('timeline prompts retain only concise key information and major events', ()
         assert.match(prompt, /任务.*系统.*不得.*时间线/s);
         assert.match(prompt, /无因果关联的独立故事线不得揉在一起|无因果关联的故事线不要揉在一起/s);
         assert.match(prompt, /不得仅因日期相同.*无关事件/s);
+        assert.match(prompt, /完整姓名.*不用简称、缩写/);
     }
 });
