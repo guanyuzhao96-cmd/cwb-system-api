@@ -274,6 +274,75 @@ export async function getGeneratedContentPreview(onProgress) {
     return { chatId, entries };
 }
 
+const REVIEWABLE_INFO_LINE = /^\[(角色已知信息|角色未知信息)\.(\d+)\]\s*:\s*(.*)$/;
+
+export async function getProfileInfoReviewQueue(onProgress) {
+    const { chatId, entries } = await scanGeneratedContent('review', onProgress);
+    const grouped = new Map();
+    for (const entry of entries.filter(item => ['CWB:自动档案', 'CWB:主角档案'].includes(item.marker))) {
+        const parsed = parseCustomFormat(entry.content);
+        const rawName = String(parsed?.姓名 ?? '').replace(/^[\s"'“‘【\[]+|[\s"'”’】\]]+$/g, '').trim();
+        const name = rawName || entry.keys.find(key => !['CWB:自动档案', 'CWB:主角档案', chatId].includes(key) && !/^\d+-\d+$/.test(String(key))) || entry.comment || `UID ${entry.uid}`;
+        const lines = entry.content.split(/\r?\n/);
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+            const match = lines[lineIndex].match(REVIEWABLE_INFO_LINE);
+            if (!match || !match[3].trim()) continue;
+            if (!grouped.has(name)) grouped.set(name, []);
+            grouped.get(name).push({
+                id: `${entry.bookName}:${entry.uid}:${lineIndex}`,
+                name,
+                category: match[1] === '角色已知信息' ? '已知信息' : '未知信息',
+                field: `${match[1]}.${match[2]}`,
+                value: match[3],
+                bookName: entry.bookName,
+                uid: entry.uid,
+                marker: entry.marker,
+                keys: entry.keys,
+                content: entry.content,
+                lineIndex,
+                line: lines[lineIndex],
+            });
+        }
+    }
+    const characters = [...grouped.entries()]
+        .map(([name, facts]) => ({ name, facts }))
+        .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
+    return { chatId, characters, totalFacts: characters.reduce((sum, character) => sum + character.facts.length, 0) };
+}
+
+export async function deleteReviewedProfileFact(review, fact) {
+    const chatId = state.chatId.replace(/ imported/g, '');
+    if (!review || review.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
+        throw Error('当前聊天已变化或无法确认，未删除信息。请重新开始审查。');
+    }
+    if (!fact || !['CWB:自动档案', 'CWB:主角档案'].includes(fact.marker) || !REVIEWABLE_INFO_LINE.test(fact.line ?? '')) {
+        throw Error('审查项目校验失败，未删除信息。请重新扫描。');
+    }
+    const current = await scanGeneratedContent('review-verify');
+    const currentEntry = current.entries.find(entry => entry.bookName === fact.bookName
+        && entry.uid === fact.uid
+        && entry.marker === fact.marker
+        && entry.keys.includes(chatId));
+    if (!currentEntry || currentEntry.content !== fact.content || currentEntry.keys.join('\0') !== fact.keys.join('\0')) {
+        throw Error('审查期间档案已变化，未删除任何信息。请重新开始审查。');
+    }
+    const data = current.snapshots.get(fact.bookName);
+    const target = data?.entries?.[fact.uid] ?? Object.values(data?.entries ?? {}).find(entry => Number(entry.uid) === Number(fact.uid));
+    if (!target) throw Error('目标档案条目已不存在，未删除信息。');
+    const content = String(target.content ?? '');
+    const newline = content.includes('\r\n') ? '\r\n' : '\n';
+    const lines = content.split(/\r?\n/);
+    if (lines[fact.lineIndex] !== fact.line) throw Error('目标信息位置已变化，未删除任何内容。请重新扫描。');
+    lines.splice(fact.lineIndex, 1);
+    const nextContent = lines.join(newline);
+    target.content = nextContent;
+    await saveWorldInfo(fact.bookName, data, true);
+    const persisted = await readWorldbookFromServer(fact.bookName);
+    const stored = persisted.entries?.[fact.uid] ?? Object.values(persisted.entries ?? {}).find(entry => Number(entry.uid) === Number(fact.uid));
+    if (!stored || stored.content !== nextContent) throw Error('删除后世界书回读不一致，无法确认结果；请刷新后复查。');
+    return { name: fact.name, category: fact.category, value: fact.value, bookName: fact.bookName };
+}
+
 export async function deleteGeneratedContent(preview, onProgress) {
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!preview || preview.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
