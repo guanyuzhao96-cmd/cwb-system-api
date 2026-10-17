@@ -12,6 +12,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     let invalidCombined = false, failApiRequest = false, dropWriteResponse = false;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
+    const extraBooks = new Map();
     const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
@@ -35,8 +36,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         confirm: message => { lastConfirmation = message; return true; },
     },
         fetch: async (_url, options = {}) => {
-            try { worldbookReads.push(JSON.parse(options.body ?? '{}').name); } catch {}
-            return { ok: true, json: async () => structuredClone(disk) };
+            let name;
+            try { name = JSON.parse(options.body ?? '{}').name; worldbookReads.push(name); } catch {}
+            return { ok: true, json: async () => structuredClone(name && name !== '主世界书' ? extraBooks.get(name) || { entries: {} } : disk) };
         },
     });
     const script = {
@@ -75,8 +77,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         renderExtensionTemplateAsync: async () => readFile(new URL('./settings.html', import.meta.url), 'utf8') };
     const world = {
         selected_world_info: [], world_info: {}, world_names: ['主世界书'],
-        loadWorldInfo: async () => structuredClone(cache),
-        saveWorldInfo: async (_, data) => { cache = structuredClone(data); if (!failWrite) disk = structuredClone(data); if (dropWriteResponse) { dropWriteResponse = false; throw new TypeError('Load failed'); } },
+        loadWorldInfo: async name => structuredClone(name !== '主世界书' ? extraBooks.get(name) || { entries: {} } : cache),
+        saveWorldInfo: async (name, data) => { if (name !== '主世界书') { if (!failWrite) extraBooks.set(name, structuredClone(data)); return; } cache = structuredClone(data); if (!failWrite) disk = structuredClone(data); if (dropWriteResponse) { dropWriteResponse = false; throw new TypeError('Load failed'); } },
         createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid }; },
     };
     const root = dirname(fileURLToPath(import.meta.url));
@@ -392,8 +394,13 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     disk.entries[deleteUid + 2] = { uid: deleteUid + 2, key: ['CWB:世界书目录'], comment: '全局目录', content: '全局目录必须保留' };
     disk.entries[deleteUid + 3] = { uid: deleteUid + 3, key: ['CWB:自动档案', 'integration-chat', '角色乙', '1-3'], comment: '动态-角色乙', content: '当前聊天生成档案' };
     disk.entries[deleteUid + 4] = { uid: deleteUid + 4, key: ['integration-chat', '角色丙', 'CWB:自动档案', '1-3'], comment: '动态-角色丙', content: '旧版键顺序的当前聊天生成档案' };
+    disk.entries[deleteUid + 5] = { uid: deleteUid + 5, key: ['CWB:世界书目录'], comment: 'CWB目录｜主世界书', content: '插件生成目录' };
     cache = structuredClone(disk);
     world.world_names.push('无关世界书');
+    extraBooks.set('无关世界书', { entries: {
+        0: { uid: 0, key: ['CWB:自动档案', 'old-chat - Branch #25', '旧角色'], comment: '动态-旧角色', content: '未激活旧分支档案', disable: true },
+        1: { uid: 1, key: ['原始资料'], comment: '原始角色设定', content: '原始设定必须保留' },
+    } });
     const previewProgress = [];
     worldbookReads.length = 0;
     const preview = await lorebook.getGeneratedContentPreview(item => previewProgress.push(item));
@@ -423,11 +430,12 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.match($('#cwb-info-review').html(), /删除本角色未保留信息/);
 
     assert.equal(typeof deleteButton.handlers.click, 'function', 'cleanup action is available in the workbench');
+    dropWriteResponse = true;
     deleteButton.handlers.click.call(deleteButton);
     for (let i = 0; i < 100 && deleteButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
     assert.equal(deleteButton.prop('disabled'), false);
     assert.match(lastConfirmation, /原始\/手工条目/);
-    assert.match(lastConfirmation, /其他聊天数据/);
+    assert.match(lastConfirmation, /所有聊天、旧分支/);
     assert.match(lastConfirmation, /动态-角色乙/);
     assert.match(lastConfirmation, /动态-角色丙/);
     const deletedUids = preview.entries.map(entry => entry.uid);
@@ -438,8 +446,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         'CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度', 'Amily2角色总集',
     ].some(marker => e.key[0] === marker)), false, 'all plugin-generated entries for the selected chat are deleted');
     assert.equal(disk.entries[deleteUid].content, '必须保留');
-    assert.equal(disk.entries[deleteUid + 1].content, '其他聊天资料');
+    assert.equal(disk.entries[deleteUid + 1], undefined, 'all-generated cleanup deletes old chat records too');
     assert.equal(disk.entries[deleteUid + 2].content, '全局目录必须保留');
+    assert.equal(disk.entries[deleteUid + 5], undefined, 'plugin-generated global directories are deleted');
+    assert.equal(extraBooks.get('无关世界书').entries[0], undefined, 'disabled generated entries in unreferenced worldbooks are deleted');
+    assert.equal(extraBooks.get('无关世界书').entries[1].content, '原始设定必须保留');
     disk = beforeDelete;
     cache = structuredClone(disk);
     // Same-chat disabled/duplicate archives must be reused; sibling branches
