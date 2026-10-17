@@ -27,7 +27,7 @@ export async function openViewer(settings) {
                 <button class="menu_button redWarningBG cwb-delete-profile"><i class="fa-solid fa-trash"></i> 删除</button>
             </div>
         </details>`;
-    }).join('') : '<div class="cwb-note">当前聊天还没有角色档案。</div>';
+    }).join('') : '<div class="cwb-note">当前角色卡还没有动态档案。</div>';
     $('body').append(`<div id="cwb-viewer-modal" class="cwb-modal">
         <div class="cwb-modal-box">
             <div class="cwb-modal-head"><b>角色档案 · ${escapeHtml(bookName)}</b><button class="menu_button cwb-close-viewer">关闭</button></div>
