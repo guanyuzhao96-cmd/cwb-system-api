@@ -1,6 +1,6 @@
 import { PROFILE_RULES } from './profile-utils.mjs';
 
-export const PROFILE_PROMPT_RULE_MARKER = '【CWB角色档案整理规则 v0.11.6】';
+export const PROFILE_PROMPT_RULE_MARKER = '【CWB角色档案整理规则 v0.12.1】';
 export function ensureProfilePromptRules(prompt) {
     const text = String(prompt ?? '').trim()
         .replace(/\n*【CWB角色档案(?:强相关筛选|整理)规则 v[^】]+】[\s\S]*?(?:即使其他提示词要求保留更多字段，也必须遵守本规则。|$)/g, '')

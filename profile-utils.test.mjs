@@ -48,3 +48,26 @@ test('profile rules require strong plot relevance and omit unrelated events', ()
     assert.equal(hasProfileFacts('[--角色档案开始--]\n[姓名]:甲\n[当前状态]:日常上课\n[--角色档案结束--]'), false);
     assert.equal(hasProfileFacts('[--角色档案开始--]\n[姓名]:甲\n[角色已知信息.0]:得知关键秘密\n[--角色档案结束--]'), true);
 });
+
+test('profile sanitizer removes task and system content from every allowed field', () => {
+    const source = `[--角色档案开始--]
+[姓名]:甲
+[角色已知信息.0]:发现关键证据并决定离开
+[角色已知信息.1]:系统提示任务完成，获得奖励
+[角色未知信息.0]:同伴背叛计划已被系统标记
+[性经历人员.0]:乙
+[额外补充.0]:普通日常喝咖啡；系统面板显示积分100
+[剧情.0]:揭露关键秘密，导致盟友关系破裂
+[剧情.1]:完成支线任务并领取系统奖励
+[--角色档案结束--]`;
+    const cleaned = sanitizeProfileContent(source);
+    assert.match(cleaned, /发现关键证据并决定离开/);
+    assert.match(cleaned, /揭露关键秘密，导致盟友关系破裂/);
+    assert.doesNotMatch(cleaned, /任务|系统|奖励|积分|普通日常/);
+});
+
+test('profile rules explicitly restrict known and unknown facts to plot-critical information', () => {
+    assert.match(PROFILE_RULES, /已知信息.*未知信息.*主线剧情强相关/s);
+    assert.match(PROFILE_RULES, /普通日常.*即使真实也不记录/);
+    assert.match(PROFILE_RULES, /严禁记录任何任务或系统相关内容/);
+});
