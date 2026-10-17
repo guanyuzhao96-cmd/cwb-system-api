@@ -45,7 +45,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             requests.push(options);
             if (failApiRequest) throw new TypeError('Load failed');
             if (options.systemPrompt.includes('CWB_REGENERATE_PROFILE_INFO')) {
-                return JSON.stringify({ 角色已知信息: ['她愿意与主角维持隐秘的亲密关系'], 角色未知信息: ['主角仍在调查影响两人关系的关键秘密'] });
+                const request = JSON.parse(options.prompt.at(-1).content.split('\n').at(-1));
+                return JSON.stringify({ 角色: request.map(profile => ({ 档案标识: profile.id, 姓名: profile.name,
+                    角色已知信息: ['她愿意与主角维持隐秘的亲密关系'], 角色未知信息: ['主角仍在调查影响两人关系的关键秘密'] })) });
             }
             if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
                 if (invalidCombined) return '[--档案无变化--]';
@@ -144,9 +146,20 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const lorebookApi = modules.get(resolve(root, 'lorebook.js')).namespace;
     const coreApi = modules.get(resolve(root, 'core.js')).namespace;
     const reviewQueue = await lorebookApi.getProfileInfoReviewQueue();
-    const targetProfile = reviewQueue.characters.find(item => item.name === '主角').facts[0];
-    const regenerated = await coreApi.regenerateProfileInfo(targetProfile);
-    await lorebookApi.saveRegeneratedProfileInfo(reviewQueue, targetProfile, regenerated.known, regenerated.unknown);
+    const regenerationQueue = await lorebookApi.getProfileRegenerationQueue();
+    assert.equal(regenerationQueue.profiles.length, 1);
+    const targetProfile = regenerationQueue.profiles[0];
+    const fiveRoleBatch = Array.from({ length: 5 }, (_, index) => ({
+        ...targetProfile, id: `test-book:${index}`, uid: index + 100, name: `测试角色${index + 1}`,
+    }));
+    const callsBeforeFiveRoleBatch = requests.length;
+    assert.equal((await coreApi.regenerateProfileInfoBatch(fiveRoleBatch)).length, 5);
+    assert.equal(requests.length - callsBeforeFiveRoleBatch, 1, 'five profiles are extracted together in one request');
+    const regenerated = (await coreApi.regenerateProfileInfoBatch([targetProfile]))[0];
+    const regenerationRequest = requests.at(-1);
+    assert.ok(regenerationRequest.systemPrompt.includes('CWB_REGENERATE_PROFILE_INFO_BATCH'));
+    assert.ok(!regenerationRequest.prompt[0].content.includes('新增事件一'), 'regeneration uses archived plot, not chat transcript');
+    await lorebookApi.saveRegeneratedProfileInfo(regenerationQueue, targetProfile, regenerated.known, regenerated.unknown);
     const regeneratedProfile = Object.values(disk.entries).find(e => e.key.includes('CWB:主角档案')).content;
     assert.match(regeneratedProfile, /角色已知信息\.0\]:她愿意与主角维持隐秘的亲密关系/);
     assert.match(regeneratedProfile, /角色未知信息\.0\]:主角仍在调查影响两人关系的关键秘密/);

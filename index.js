@@ -10,8 +10,8 @@ import {
 import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt, ensureProfilePromptRules, ensureTimelinePromptRules } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
-import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule, regenerateProfileInfo } from './core.js';
-import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, deleteUnretainedProfileFacts, generateWorldbookDirectories, getGeneratedContentPreview, getProfileCountAuditQueue, getProfileInfoReviewQueue, getProgressRecoveryCandidates, listWorldbooks, routeSummary, saveReviewedProfileCount, saveRegeneratedProfileInfo } from './lorebook.js';
+import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule, regenerateProfileInfoBatch } from './core.js';
+import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, deleteUnretainedProfileFacts, generateWorldbookDirectories, getGeneratedContentPreview, getProfileCountAuditQueue, getProfileInfoReviewQueue, getProfileRegenerationQueue, getProgressRecoveryCandidates, listWorldbooks, routeSummary, saveReviewedProfileCount, saveRegeneratedProfileInfo } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { escapeHtml, notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
@@ -126,8 +126,6 @@ function renderProfileInfoReview() {
         </article>`;
     }).join('');
     area.html(`<div class="cwb-review-head"><strong>角色 ${profileInfoReviewIndex + 1}/${characters.length}：${escapeHtml(character.name)}</strong><span>${decided}/${character.facts.length} 条已审查</span></div>
-        <button class="menu_button cwb-full-width" data-review-regenerate>按新规则重新生成已知 / 未知信息</button>
-        <small class="cwb-help">只重做本角色这两个字段；其他档案字段不变。新生成的信息默认均不保留，需重新选择保留项。</small>
         ${factCards}
         <button class="menu_button cwb-full-width cwb-danger" data-review-delete-unkept ${character.facts.some(fact => !fact.decision) ? '' : 'disabled'}>删除本角色未保留信息（${character.facts.filter(fact => !fact.decision).length} 条）</button>
         <div class="cwb-review-nav"><button class="menu_button" data-review-nav="previous" ${profileInfoReviewIndex === 0 ? 'disabled' : ''}>上一位角色</button><button class="menu_button" data-review-nav="next" ${!allDecided ? 'disabled' : ''}>下一位角色</button></div>
@@ -330,30 +328,31 @@ function bindUi() {
             $('#cwb-status').text(`批量删除未完成：${error.message}`);
         }
     });
-    $('#cwb-info-review').on('click', '[data-review-regenerate]', async function () {
-        const button = $(this);
-        await runButton(button, '正在重新生成…', async () => {
-            assertActiveProfileReview();
-            const character = profileInfoReview.characters[profileInfoReviewIndex];
-            const sources = [...new Map(character.facts.map(fact => [`${fact.bookName}:${fact.uid}`, fact])).values()];
-            if (sources.length !== 1) throw Error(`角色“${character.name}”对应 ${sources.length} 个档案条目；为避免误覆盖，请先合并为单一档案条目。`);
-            const source = sources[0];
-            if (!window.confirm(`将根据当前聊天剧情，重新生成“${character.name}”的已知信息和未知信息，并覆盖该档案中的这两个字段。性经历、剧情及其他字段不会修改。新生成的条目默认均不保留，之后可逐条选择。\n\n继续？`)) return;
-            const release = acquireOperationLock(state, `重新生成${character.name}的已知 / 未知信息`);
+    $('#cwb-regenerate-profile-info').on('click', function () {
+        runButton($(this), '读取角色剧情…', async () => {
+            const queue = await getProfileRegenerationQueue();
+            if (!queue.profiles.length) throw Error('当前聊天没有带个人关键剧情的插件角色档案；请先生成或补充角色档案剧情。');
+            const names = queue.profiles.map(profile => profile.name);
+            const skipped = queue.skippedWithoutPlot ? `\n另有 ${queue.skippedWithoutPlot} 个角色档案没有个人关键剧情，将跳过。` : '';
+            if (!window.confirm(`将仅依据角色档案中已有的个人关键剧情，重新生成 ${queue.profiles.length} 个角色的已知 / 未知信息；每批 5 个角色。不会读取聊天正文，也不会改动性经历、人数、剧情及其他字段。\n\n角色：${names.join('、')}${skipped}\n\n生成结果会覆盖这两个字段，并默认不勾选保留；之后仍可使用逐条筛选和未保留项一键删除。继续？`)) return;
+            const release = acquireOperationLock(state, '批量重新生成角色已知 / 未知信息');
+            let saved = 0;
             try {
-                const generated = await regenerateProfileInfo(source, message => $('#cwb-status').text(message));
-                assertActiveProfileReview();
-                await saveRegeneratedProfileInfo(profileInfoReview, source, generated.known, generated.unknown);
-                const previousName = character.name;
-                const previousIndex = profileInfoReviewIndex;
-                profileInfoReview = await getProfileInfoReviewQueue();
-                profileInfoReviewIndex = Math.max(0, profileInfoReview.characters.findIndex(item => item.name === previousName));
-                if (profileInfoReviewIndex === 0 && !profileInfoReview.characters.some(item => item.name === previousName)) {
-                    profileInfoReviewIndex = Math.min(previousIndex, Math.max(0, profileInfoReview.characters.length - 1));
+                for (let start = 0; start < queue.profiles.length; start += 5) {
+                    const batch = queue.profiles.slice(start, start + 5);
+                    const results = await regenerateProfileInfoBatch(batch, message => $('#cwb-status').text(`第 ${Math.floor(start / 5) + 1}/${Math.ceil(queue.profiles.length / 5)} 批：${message}`), settings().responseLength);
+                    for (const result of results) {
+                        if (state.chatId.replace(/ imported/g, '') !== queue.chatId) throw Error('重新生成期间当前聊天已切换；剩余角色未写入。');
+                        await saveRegeneratedProfileInfo(queue, result.profile, result.known, result.unknown);
+                        saved++;
+                        $('#cwb-status').text(`已重新生成并核验 ${saved}/${queue.profiles.length} 个角色…`);
+                    }
                 }
-                renderProfileInfoReview();
-                $('#cwb-status').text(`已重新生成并核验“${previousName}”的已知 / 未知信息；新条目均未选择，未保留项可一键删除。`);
-                notify('success', `已重新生成并核验“${previousName}”的已知 / 未知信息。`);
+                $('#cwb-status').text(`完成：已按个人关键剧情重新生成并核验 ${saved} 个角色的已知 / 未知信息。手动筛选功能仍可单独使用。`);
+                notify('success', `已重新生成并核验 ${saved} 个角色的已知 / 未知信息。`);
+            } catch (error) {
+                error.message = `${error.message}（已成功写回 ${saved}/${queue.profiles.length} 个角色；已写回部分已核验）`;
+                throw error;
             } finally { release(); }
         });
     });
