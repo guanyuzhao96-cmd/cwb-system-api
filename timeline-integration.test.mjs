@@ -13,7 +13,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
     const extraBooks = new Map();
-    const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ data: { extensions: { world: '主世界书' } } }], chat: [] };
+    const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ avatar: 'integration-role-card.png', name: '集成测试角色卡', data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
         if (typeof key === 'object') return key;
@@ -178,13 +178,13 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.ok(relationEntries[0].content.includes('已分手'));
     assert.ok(!relationEntries[0].content.includes('情侣'));
     assert.ok(relationEntries[0].content.includes('B ↔ C：互相讨厌'));
-    assert.ok(relationEntries[0].key.includes('CWB:关系楼层:0-3'));
+    assert.ok(relationEntries[0].key.some(key => key.startsWith('CWB:角色卡身份:')));
     // An eight-message gap must be processed in full, rather than just the most recent six.
     const relationCallsBefore = relationRound;
     contextData.chat.push(...Array.from({ length: 8 }, () => ({ mes: '后续互动' })));
     await modules.get(resolve(root, 'core.js')).namespace.updateRelationships({ threshold: 2 });
     assert.equal(relationRound - relationCallsBefore, 4);
-    assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).key.includes('CWB:关系楼层:0-11'));
+    assert.ok((await modules.get(resolve(root, 'lorebook.js')).namespace.getModuleProgress()).relationships.completed.some(([, end]) => end >= 11));
     assert.equal(Object.values(disk.entries).filter(e => e.key.includes('CWB:故事时间线')).length, 1);
     const beforeBatch = requests.length;
     const batchSettings = { ...extension_settings.cwb_system_api, threshold: 4 };
