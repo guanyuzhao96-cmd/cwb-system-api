@@ -1,6 +1,6 @@
 import { PROFILE_RULES } from './profile-utils.mjs';
 
-export const PROFILE_PROMPT_RULE_MARKER = '【CWB角色档案整理规则 v0.12.6】';
+export const PROFILE_PROMPT_RULE_MARKER = '【CWB角色档案整理规则 v0.12.9】';
 export function ensureProfilePromptRules(prompt) {
     const text = String(prompt ?? '').trim()
         .replace(/\n*【CWB角色档案(?:强相关筛选|整理)规则 v[^】]+】[\s\S]*?(?:即使其他提示词要求保留更多字段，也必须遵守本规则。|$)/g, '')
@@ -12,8 +12,8 @@ const PROFILE_FORMAT = `只输出档案数据，不解释、不用Markdown代码
 [--角色档案开始--]
 [档案类型]:角色或主角
 [姓名]:实际姓名
-[角色已知信息.0]:角色亲自经历或明确获知的重要事实
-[角色未知信息.0]:已由剧情确认、但角色尚未获知的重要事实
+[角色已知信息.0]:从关键事件提炼的角色认知、态度、意愿、动机或关系判断，不写事件经过
+[角色未知信息.0]:已由剧情确认、但角色尚未获知的重要事实或秘密（写结论，不写事件经过）
 [性经历人员.0]:明确确认的成年对象姓名
 [性经历人数]:明确确认的成年对象去重人数
 [额外补充.0]:影响后续理解或扮演、且未被其他字段覆盖的信息
@@ -23,8 +23,8 @@ const PROFILE_FORMAT = `只输出档案数据，不解释、不用Markdown代码
 
 export const cwbCompleteDefaultSettings = {
     cwb_break_armor_prompt: '你是动态世界书整理器。只整理给定聊天中已发生的事实，不续写、不推测，不让角色知道其尚未获知的秘密。',
-    cwb_char_card_prompt: ensureProfilePromptRules(`从给定聊天整理角色与主角的个人档案：记录角色知道的重要事实、尚未知晓的重要事实、已确认的成年性经历对象与人数、必要补充和个人关键剧情。只根据聊天和旧档案中的明确事实整理，不推测。\n${PROFILE_FORMAT}`),
-    cwb_incremental_char_card_prompt: ensureProfilePromptRules(`融合旧档案与新对话，更新角色已知/未知信息、成年性经历对象及去重人数、必要补充和个人关键剧情。性经历人数必须以旧档案人数为基数，只增加本轮新剧情明确确认且旧档案名单中不存在的成年对象；“性经历人员”增量字段仅输出这些本轮新增对象，插件会合并旧名单并计算最终人数。重复提及旧对象不得重复计数。重新核对旧档案，纠正已变化的信息、删除重复或失实内容；剧情只保留对角色本人和后续走向有强影响的事件。\n${PROFILE_FORMAT}`),
+    cwb_char_card_prompt: ensureProfilePromptRules(`从给定聊天整理角色与主角的个人档案：已知信息要从关键事件中提炼角色的认知、态度、意愿、动机或关系判断，不记录事件流水；尚未知晓的重要秘密写结论；另记录已确认的成年性经历对象与人数、必要补充和个人关键剧情。只根据明确行为和聊天事实判断，不能把一次含义不明的行为夸大为稳定偏好。\n${PROFILE_FORMAT}`),
+    cwb_incremental_char_card_prompt: ensureProfilePromptRules(`融合旧档案与新对话，更新角色已知/未知信息、成年性经历对象及去重人数、必要补充和个人关键剧情。已知信息必须提炼关键事件背后的角色认知、态度、意愿、动机或关系判断，不复述事件经过；多次或明确自愿的行为可归纳为有证据支持的当前倾向，单次含义不明的行为不得夸大推断。发现旧已知信息只是事件流水时，依据可用证据改写成结论，证据不足则删除。性经历人数必须以旧档案人数为基数，只增加本轮新剧情明确确认且旧档案名单中不存在的成年对象；“性经历人员”增量字段仅输出这些本轮新增对象，插件会合并旧名单并计算最终人数。重复提及旧对象不得重复计数。重新核对旧档案，纠正已变化的信息、删除重复或失实内容；剧情只保留对角色本人和后续走向有强影响的事件。\n${PROFILE_FORMAT}`),
 };
 
 // Replace only exact fingerprints of the previous built-in prompts; preserve custom prompts.
