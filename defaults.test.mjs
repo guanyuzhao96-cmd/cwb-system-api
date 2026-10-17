@@ -5,28 +5,30 @@ import { cwbCompleteDefaultSettings, ensureProfilePromptRules, migrateBuiltinPro
 test('full and incremental defaults request the expanded profile fields and detailed key events', () => {
     for (const prompt of [cwbCompleteDefaultSettings.cwb_char_card_prompt, cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt]) {
         assert.ok(prompt.includes(PROFILE_PROMPT_RULE_MARKER));
-        assert.match(prompt, /角色已知信息\.N.*角色未知信息\.N.*性经历人员\.N.*性经历人数.*额外补充\.N.*剧情\.N/s);
-        assert.match(prompt, /强力推动或改变主线/);
-        assert.match(prompt, /64个汉字/);
-        assert.match(prompt, /严禁记录任何任务或系统相关内容/);
-        assert.match(prompt, /已知信息.*(?:提炼|不是事件流水账)/);
+        assert.match(prompt, /角色已知信息\.0.*角色未知信息\.0.*性经历人员\.0.*性经历人数.*额外补充\.0.*剧情\.0/s);
+        assert.match(prompt, /【总纲｜.*【角色已知信息｜.*【角色未知信息｜.*【性经历人员与人数｜.*【剧情｜/s);
+        assert.match(prompt, /每条最多128字/);
+        assert.match(prompt, /任务.*系统.*任何栏目/s);
+        assert.match(prompt, /角色已知信息/);
     }
-    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /旧档案人数为基数.*只增加本轮新剧情明确确认.*成年对象/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /完整最终快照.*禁止只输出增量片段/s);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /旧档案4人.*结果必须为5人/s);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /不得只选最近一两件.*不得漏掉/s);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /有效的.*剧情全部保留/);
 });
 
 test('known information stores event implications, not event logs, with evidence-bounded inference', () => {
-    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.9/);
-    assert.match(cwbCompleteDefaultSettings.cwb_char_card_prompt, /角色的认知、态度、意愿、动机或关系判断，不记录事件流水/);
-    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /多次或明确自愿的行为可归纳为有证据支持的当前倾向/);
-    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /发现旧已知信息只是事件流水时.*改写成结论/);
-    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /单次含义不明的行为不得夸大推断/);
+    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.11/);
+    assert.match(cwbCompleteDefaultSettings.cwb_char_card_prompt, /已知信息写关键事件背后的认知、态度、意愿或关系结论，不写事件流水/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /明确言行充分体现的态度/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /一次含义不明的行为不得夸大为稳定偏好/);
 });
 
 test('saved custom prompts retain their text and receive the current mandatory profile rules once', () => {
     const old = '自定义提示词：整理角色信息';
     const updated = ensureProfilePromptRules(old);
     assert.ok(updated.startsWith(old));
-    assert.ok(updated.includes('强力推动或改变主线'));
+    assert.ok(updated.includes('【角色已知信息｜记角色从事件中形成的结论】'));
     assert.equal(ensureProfilePromptRules(updated), updated);
 });
 
@@ -43,6 +45,15 @@ test('old mandatory profile rules are replaced instead of stacked on saved promp
 test('previous built-in profile prompts upgrade to the expanded defaults', () => {
     const old = '从给定聊天整理角色与主角的个人关键剧情档案，不输出其他资料。\n[--角色档案开始--]\n[档案类型]:角色或主角\n[姓名]:实际姓名\n[剧情.0]:关键剧情\n[--角色档案结束--]\n上面是唯一允许的档案字段；无符合强相关标准的新剧情则输出[--档案无变化--]。主角与其他角色使用相同格式。\n\n【CWB角色档案强相关筛选规则 v0.10.4】\n旧规则正文。';
     assert.equal(migrateBuiltinProfilePrompt(old, 'fullPrompt'), cwbCompleteDefaultSettings.cwb_char_card_prompt);
+});
+
+test('v0.12.9 built-in profile prompts upgrade without replacing user-customized prompts', () => {
+    const currentRules = '【CWB角色档案整理规则 v0.12.9】\n旧规则。即使其他提示词要求保留更多字段，也必须遵守本规则。';
+    const oldIncremental = `融合旧档案与新对话，更新角色已知/未知信息、成年性经历对象及去重人数。旧内置内容。\n\n${currentRules}`;
+    const oldFull = `从给定聊天整理角色与主角的个人档案：已知信息要从关键事件中提炼旧内置内容。\n\n${currentRules}`;
+    assert.equal(migrateBuiltinProfilePrompt(oldIncremental, 'incrementalPrompt'), cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt);
+    assert.equal(migrateBuiltinProfilePrompt(oldFull, 'fullPrompt'), cwbCompleteDefaultSettings.cwb_char_card_prompt);
+    assert.notEqual(migrateBuiltinProfilePrompt(`${oldIncremental}\n用户自定义附加要求`, 'incrementalPrompt'), cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt);
 });
 
 test('saved timeline prompts replace old rules with longer events and exclude task/system content', () => {
