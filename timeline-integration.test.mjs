@@ -404,7 +404,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const previewProgress = [];
     worldbookReads.length = 0;
     const preview = await lorebook.getGeneratedContentPreview(item => previewProgress.push(item));
-    assert.deepEqual(worldbookReads, ['主世界书'], 'cleanup uses the primary chat record and does not read unrelated worldbooks');
+    assert.ok(worldbookReads.includes('主世界书'), 'maintenance reads the primary lorebook as well as routed lorebooks');
     assert.ok(previewProgress.some(item => item.phase === 'scan' && item.current === item.total));
     assert.ok(preview.entries.some(e => e.marker === 'CWB:自动档案'));
     assert.ok(preview.entries.some(e => e.marker === 'CWB:故事时间线'));
@@ -465,7 +465,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     cache = structuredClone(disk);
     const archiveSettings = { incremental: true, enabled: true, multiWorldbookRouting: false, worldbookTarget: 'primary' };
     const oldDisabled = await lorebook.getTriggeredOldProfiles(archiveSettings, [{ message: '复用角色' }]);
-    assert.ok(!oldDisabled.some(content => content.includes('旧关键剧情')), 'ordinary incremental evidence lookup is restored to the pre-0.13.2 behavior');
+    assert.ok(oldDisabled.some(content => content.includes('旧关键剧情')), 'disabled card archive is still loaded for safe incremental merges');
     const duplicateScan = await lorebook.scanDuplicateArchives();
     assert.ok(duplicateScan.plans.some(plan => plan.actions.some(action => action.includes('合并 复用角色') && action.includes(`UID ${profileUid}`))), 'scan reports exact profile names and UIDs');
     const scanBaseline = structuredClone(disk);
@@ -488,7 +488,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     await lorebook.saveCharacterDescription(archiveSettings, '复用角色', delta, 40, 59);
     assert.equal(disk.entries[profileUid].content.match(/本轮新增剧情/g).length, 1, 'repeated updates are idempotent');
     await lorebook.manageChatEntries(archiveSettings);
-    assert.equal(disk.entries[profileUid + 2].disable, false, '0.13.2 automatic foreign-profile deactivation has been removed');
+    assert.equal(disk.entries[profileUid + 2].disable, true, 'other stories are not injected into the active card');
     assert.ok(disk.entries[profileUid + 2].content.includes('其他分支剧情'), 'foreign branch data is preserved');
     assert.equal(disk.entries[profileUid + 3].disable, false, 'manual entries retain their activation state');
     disk.entries[profileUid + 4] = { uid: profileUid + 4, key: ['Amily2角色总集', 'integration-chat', '角色总览', '1-40'], disable: true, content: '[旧角色甲: (详细查看绿灯角色条目)]\n【前40楼角色世界书已更新完成】' };
@@ -497,13 +497,14 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const siblingRoster = disk.entries[profileUid + 5].content;
     cache = structuredClone(disk);
     await lorebook.updateRoster(archiveSettings, ['复用角色'], 40, 59);
-    const currentRosters = Object.values(disk.entries).filter(entry => entry.key.includes('Amily2角色总集') && entry.key.includes('integration-chat'));
-    assert.equal(currentRosters.length, 2, 'ordinary roster update no longer automatically deletes duplicate records');
+    const currentRosters = Object.values(disk.entries).filter(entry => entry.key.includes('Amily2角色总集')
+        && (entry.key.includes('integration-chat') || entry.key.some(key => key.startsWith('CWB:角色卡身份:'))));
+    assert.equal(currentRosters.length, 2, 'old duplicate roster remains as history; one is migrated in place');
     assert.ok(disk.entries[profileUid + 4].content.includes('旧角色甲'));
     assert.ok(currentRosters.some(entry => entry.content.includes('复用角色')));
-    assert.ok(!currentRosters[0].content.includes('其他分支角色'));
+    assert.ok(!currentRosters.find(entry => entry.key.some(key => key.startsWith('CWB:角色卡身份:'))).content.includes('其他分支角色'));
     await lorebook.manageChatEntries({ ...archiveSettings, worldbookTarget: 'custom', customWorldbook: '主世界书' });
-    assert.equal(disk.entries[profileUid + 5].disable, false, 'custom-target activation behavior is restored to pre-0.13.2');
+    assert.equal(disk.entries[profileUid + 5].disable, true, 'foreign roster is deactivated for the current card');
     assert.equal(disk.entries[profileUid + 5].content, siblingRoster, 'foreign branch roster content is preserved');
     assert.equal(currentRosters[0].disable, false, 'current roster stays active');
     disk = archiveBaseline;
@@ -569,8 +570,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const finalProfile = '[姓名]:唯一角色\n[剧情.0]:2025-09-01｜旧剧情\n[剧情.1]:2025-09-05｜新增剧情';
     await lorebook.saveCharacterDescription(archiveSettings, '唯一角色', finalProfile, 0, 29);
     assert.equal(Object.keys(disk.entries).length, 4, 'first update reuses the previous branch UID without creating any entry');
-    assert.equal(disk.entries[0].content, finalProfile);
-    assert.ok(disk.entries[0].key.some(key => key.startsWith('CWB:档案身份:')));
+    assert.ok(disk.entries[0].content.includes('旧剧情') && disk.entries[0].content.includes('新增剧情'));
+    assert.ok(disk.entries[0].key.some(key => key.startsWith('CWB:角色卡身份:')));
     assert.equal(disk.entries[1].content, '[姓名]:唯一角色\n[剧情.0]:其他剧情');
     assert.equal(disk.entries[2].content, '手工资料');
     disk.entries[0].disable = true; cache = structuredClone(disk); profileState.profileArchiveRegistry = null;
