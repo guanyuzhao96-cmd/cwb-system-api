@@ -11,9 +11,9 @@ import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrat
 import { testSystemApi } from './api.js';
 import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
-import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, getProgressRecoveryCandidates, listWorldbooks, routeSummary } from './lorebook.js';
+import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, deleteReviewedProfileFact, generateWorldbookDirectories, getGeneratedContentPreview, getProfileInfoReviewQueue, getProgressRecoveryCandidates, listWorldbooks, routeSummary } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
-import { notify } from './utils.js';
+import { escapeHtml, notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
 
 const defaults = {
@@ -32,6 +32,10 @@ const defaults = {
     incrementalPrompt: cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt,
     timelineIncrementalPrompt: DEFAULT_TIMELINE_INCREMENTAL_PROMPT,
 };
+
+let profileInfoReview = null;
+let profileInfoReviewIndex = 0;
+let profileInfoReviewDeleted = 0;
 
 function settings() {
     extension_settings[MODULE_NAME] ??= structuredClone(defaults);
@@ -94,6 +98,47 @@ function loadUi() {
     updatePluginButton();
 }
 
+function renderProfileInfoReview() {
+    const area = $('#cwb-info-review');
+    if (!profileInfoReview) { area.prop('hidden', true).empty(); return; }
+    area.prop('hidden', false);
+    const characters = profileInfoReview.characters;
+    if (!characters.length) {
+        area.html('<div class="cwb-review-summary">当前聊天中没有可审查的已知 / 未知信息。</div>');
+        return;
+    }
+    const reviewed = characters.flatMap(character => character.facts).filter(fact => fact.decision).length;
+    if (profileInfoReviewIndex >= characters.length) {
+        area.html(`<div class="cwb-review-summary">审查完成：已检查 ${reviewed}/${profileInfoReview.totalFacts} 条，删除 ${profileInfoReviewDeleted} 条。<button class="menu_button cwb-full-width" data-review-nav="close">结束审查</button></div>`);
+        return;
+    }
+    const character = characters[profileInfoReviewIndex];
+    const decided = character.facts.filter(fact => fact.decision).length;
+    const allDecided = decided === character.facts.length;
+    const factCards = character.facts.map((fact, index) => {
+        const decisionLabel = fact.decision === 'keep' ? '已保留' : fact.decision === 'delete' ? '已删除' : '待审查';
+        const disabled = fact.decision ? 'disabled' : '';
+        return `<article class="cwb-review-fact" data-decision="${fact.decision || 'pending'}">
+            <div class="cwb-review-fact-head"><b>${escapeHtml(fact.category)} · 第 ${index + 1} 条</b><span>${decisionLabel}</span></div>
+            <p>${escapeHtml(fact.value)}</p>
+            ${fact.decision ? '' : `<div class="cwb-review-actions"><button class="menu_button" data-review-action="keep" data-fact-id="${escapeHtml(fact.id)}" ${disabled}>保留这条</button><button class="menu_button cwb-danger" data-review-action="delete" data-fact-id="${escapeHtml(fact.id)}" ${disabled}>删除这条</button></div>`}
+        </article>`;
+    }).join('');
+    area.html(`<div class="cwb-review-head"><strong>角色 ${profileInfoReviewIndex + 1}/${characters.length}：${escapeHtml(character.name)}</strong><span>${decided}/${character.facts.length} 条已审查</span></div>
+        ${factCards}
+        <div class="cwb-review-nav"><button class="menu_button" data-review-nav="previous" ${profileInfoReviewIndex === 0 ? 'disabled' : ''}>上一位角色</button><button class="menu_button" data-review-nav="next" ${!allDecided ? 'disabled' : ''}>下一位角色</button></div>
+        <small class="cwb-help">总进度 ${reviewed}/${profileInfoReview.totalFacts} 条；删除会立即写回并核验，只移除对应信息行。</small>`);
+}
+
+function assertActiveProfileReview() {
+    refreshChatState();
+    if (!profileInfoReview || state.chatId !== profileInfoReview.chatId) {
+        profileInfoReview = null;
+        renderProfileInfoReview();
+        throw Error('当前聊天已变化，请重新开始审查，未删除任何信息。');
+    }
+}
+
 async function runButton(button, label, action) {
     const original = button.html();
     button.prop('disabled', true).text(label);
@@ -152,6 +197,66 @@ function bindUi() {
     for (const module of ['profiles', 'timeline', 'relationships']) {
         $(`#cwb-retry-${module}`).on('click', function () { runButton($(this), '补漏中…', () => retryMissingModule(settings(), module)); });
     }
+    $('#cwb-start-info-review').on('click', function () {
+        runButton($(this), '读取档案中…', async () => {
+            const release = acquireOperationLock(state, '已知 / 未知信息审查');
+            try {
+                refreshChatState();
+                profileInfoReview = await getProfileInfoReviewQueue();
+                profileInfoReviewIndex = 0;
+                profileInfoReviewDeleted = 0;
+                renderProfileInfoReview();
+                $('#cwb-status').text(`已读取 ${profileInfoReview.characters.length} 个角色、${profileInfoReview.totalFacts} 条已知 / 未知信息；请逐条审查。`);
+            } finally { release(); }
+        });
+    });
+    $('#cwb-info-review').on('click', '[data-review-action]', async function () {
+        try {
+            assertActiveProfileReview();
+            const action = $(this).attr('data-review-action');
+            const factId = $(this).attr('data-fact-id');
+            const character = profileInfoReview.characters[profileInfoReviewIndex];
+            const fact = character?.facts.find(item => item.id === factId);
+            if (!fact || fact.decision) throw Error('这条信息已处理或已不存在，请重新扫描。');
+            if (action === 'keep') {
+                fact.decision = 'keep';
+            } else if (action === 'delete') {
+                const confirmed = window.confirm(`确认从世界书《${fact.bookName}》的角色档案中删除这一条${fact.category}？\n\n${fact.value}\n\n只删除这条信息，不会删除整个角色档案。`);
+                if (!confirmed) return;
+                const button = $(this);
+                button.prop('disabled', true).text('正在删除并核验…');
+                const release = acquireOperationLock(state, '删除单条角色信息');
+                try {
+                    await deleteReviewedProfileFact(profileInfoReview, fact);
+                    fact.decision = 'delete';
+                    profileInfoReviewDeleted++;
+                } finally { release(); }
+            } else {
+                throw Error('未知的审查操作。');
+            }
+            renderProfileInfoReview();
+        } catch (error) {
+            notify('error', error.message);
+            $('#cwb-status').text(`信息审查未完成：${error.message}`);
+        }
+    });
+    $('#cwb-info-review').on('click', '[data-review-nav]', function () {
+        try {
+            assertActiveProfileReview();
+            const action = $(this).attr('data-review-nav');
+            if (action === 'previous') profileInfoReviewIndex = Math.max(0, profileInfoReviewIndex - 1);
+            else if (action === 'next') {
+                const character = profileInfoReview.characters[profileInfoReviewIndex];
+                if (character.facts.some(fact => !fact.decision)) throw Error('请先决定当前角色的每一条信息，再进入下一位角色。');
+                profileInfoReviewIndex++;
+            } else if (action === 'close') {
+                profileInfoReview = null;
+            }
+            renderProfileInfoReview();
+        } catch (error) {
+            notify('warning', error.message);
+        }
+    });
     $('#cwb-cleanup-profiles').on('click', function () {
         runButton($(this), '精简中…', async () => {
             const release = acquireOperationLock(state, '角色档案精简');
