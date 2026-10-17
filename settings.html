@@ -6,7 +6,7 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.13.7</span><h2>聊天世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.13.8</span><h2>聊天世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
@@ -134,6 +134,9 @@
                     <div class="cwb-subsection">
                         <h3>提示词</h3>
                     <p class="cwb-help">修改后自动保存，下次更新档案时生效。</p>
+                    <label for="cwb-avoided-profile-names">避开名单（角色动态档案）</label>
+                    <textarea id="cwb-avoided-profile-names" rows="3" class="text_pole textarea_compact" placeholder="例如：周韵涵&#10;多个姓名可换行，或用逗号、顿号分隔"></textarea>
+                    <p class="cwb-help">按完整姓名匹配，名单内角色不生成或更新动态档案。已有档案保留，时间线与关系照常处理。修改后自动保存；清空名单即可恢复更新。</p>
                     <details class="cwb-prompt-editor"><summary>前置提示词</summary><label class="cwb-sr-only" for="cwb-break-prompt">前置提示词</label><textarea id="cwb-break-prompt" rows="3" class="text_pole textarea_compact"></textarea></details>
                     <details class="cwb-prompt-editor"><summary>全量生成</summary><label class="cwb-sr-only" for="cwb-full-prompt">全量生成</label><textarea id="cwb-full-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></details>
                     <details class="cwb-prompt-editor"><summary>角色增量规则</summary><label class="cwb-sr-only" for="cwb-incremental-prompt">角色增量规则</label><textarea id="cwb-incremental-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></details>

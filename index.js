@@ -28,6 +28,7 @@ const defaults = {
     customWorldbook: '',
     multiWorldbookRouting: true,
     worldbookRoutes: {},
+    avoidedProfileNames: '',
     breakPrompt: cwbCompleteDefaultSettings.cwb_break_armor_prompt,
     fullPrompt: cwbCompleteDefaultSettings.cwb_char_card_prompt,
     incrementalPrompt: cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt,
@@ -71,6 +72,7 @@ function saveFromUi() {
     value.worldbookTarget = $('#cwb-worldbook-target').val();
     value.customWorldbook = $('#cwb-custom-worldbook').val() || '';
     value.breakPrompt = $('#cwb-break-prompt').val();
+    value.avoidedProfileNames = $('#cwb-avoided-profile-names').val() || '';
     value.fullPrompt = $('#cwb-full-prompt').val();
     value.incrementalPrompt = $('#cwb-incremental-prompt').val();
     value.timelineIncrementalPrompt = $('#cwb-timeline-incremental-prompt').val();
@@ -96,6 +98,7 @@ function loadUi() {
     listWorldbooks().forEach(name => select.append($('<option>').val(name).text(name)));
     select.val(value.customWorldbook);
     $('#cwb-break-prompt').val(value.breakPrompt);
+    $('#cwb-avoided-profile-names').val(value.avoidedProfileNames);
     $('#cwb-full-prompt').val(value.fullPrompt);
     $('#cwb-incremental-prompt').val(value.incrementalPrompt);
     $('#cwb-timeline-incremental-prompt').val(value.timelineIncrementalPrompt);

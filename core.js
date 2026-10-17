@@ -117,6 +117,11 @@ export async function retryMissingModule(settings, module) {
     } finally { state.repairing = false; release(); }
 }
 
+function avoidedProfileNames(settings) {
+    return [...new Set(String(settings.avoidedProfileNames || '').split(/[\n,，、;；]+/u)
+        .map(name => name.trim().replace(/^["'“‘]+|["'”’]+$/g, '').trim()).filter(Boolean))];
+}
+
 async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = false, modules = Object.keys(MODULE_LABELS) } = {}) {
     refreshChatState();
     const start = Math.max(0, Number(startIndex) || 0);
@@ -126,7 +131,9 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
     if (!targets.length) throw Error('未选择更新模块。');
     const chatId = state.chatId;
     state.updating = true;
-    const names = [], failures = [], successes = [], skippedProfiles = [];
+    const names = [], failures = [], successes = [];
+    const avoidedNames = avoidedProfileNames(settings);
+    const avoided = new Set(avoidedNames.map(name => name.toLocaleLowerCase()));
     try {
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
         const selected = state.messages.slice(start, end + 1);
@@ -140,6 +147,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
         if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
+        if (targets.includes('profiles') && avoidedNames.length) messages.push({ role: 'system', content: `【角色档案避开名单】${JSON.stringify(avoidedNames)}\n以上姓名按完整姓名匹配。本轮不要生成或更新这些角色的动态档案；其他角色正常处理。时间线与关系按各自规则处理。` });
         messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
         const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
@@ -185,6 +193,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         const parsed = parseCustomFormat(block);
                         const type = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
                         const name = characterNameFromBlock(block);
+                        if (name && avoided.has(name.trim().toLocaleLowerCase())) return null;
                         if (!name || ['时间线', 'TIMELINE'].includes(type)) throw Error('角色档案姓名或档案类型不合法');
                         const cleaned = reconcileProfileExperienceCount(block, oldProfiles);
                         if (!cleaned || !hasProfileFacts(cleaned)) return null;
@@ -195,7 +204,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         assertCurrentChat(chatId);
                         const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
                         assertCurrentChat(chatId);
-                        if (!saved) { skippedProfiles.push(name); continue; }
+                        if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，或将不需要更新的角色加入“提示词 → 避开名单”。`);
                         await verifyProfileContent(settings, name, block, isUser);
                         assertCurrentChat(chatId);
                         if (isUser) userUpdated = true; else names.push(saved);
@@ -229,7 +238,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
             assertCurrentChat(chatId);
             await recordChatUpdateRange(start, end, state.messages.length, '三个模块均成功，AI调用1次', 0);
         }
-        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${skippedProfiles.length ? `；无匹配目录，已跳过：${[...new Set(skippedProfiles)].join('、')}` : ''}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
+        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${targets.includes('profiles') && avoidedNames.length ? `；避开名单已生效：${avoidedNames.join('、')}` : ''}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
         setStatus(message);
         if (failures.length) {
             const failedModules = targets.filter(module => failures.some(failure => failure.startsWith(`${MODULE_LABELS[module]}：`)));
