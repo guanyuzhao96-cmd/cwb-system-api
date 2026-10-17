@@ -329,12 +329,17 @@ export async function scanDuplicateArchives(onProgress = () => {}, sourceChatIds
             if (!type) continue;
             const sourceId = sourceChatIds.find(id => keys.includes(id));
             if (sourceId && !keys.includes(chatId)) {
+                if (hasOtherCardOwner(keys, currentCardOwnerKey())) {
+                    warnings.push(`《${bookName}》UID ${entry.uid} 属于另一张角色卡，禁止跨卡合并`);
+                    continue;
+                }
                 if (['CWB:自动档案', 'CWB:主角档案', 'Amily2角色总集', 'CWB:故事时间线'].includes(type[0])) {
                     if (['CWB:自动档案', 'CWB:主角档案'].includes(type[0]) && !parseCustomFormat(entry.content).姓名) {
                         warnings.push(`《${bookName}》UID ${entry.uid} 来源档案姓名不可识别，保留原条目`); continue;
                     }
                     keys = [...new Set(keys.filter(key => !sourceChatIds.includes(key) && !/^CWB:聊天身份:/.test(key)
                         && !/^CWB:档案身份:/.test(key)
+                        && !/^CWB:角色卡身份:/.test(key)
                         && !/^(?:CWB:(?:时间线|关系|总结)楼层:)?\d+-\d+$/.test(String(key))).concat(chatId))];
                     if (['CWB:自动档案', 'CWB:主角档案'].includes(type[0])) keys.push(profileStoryScope().key);
                     const normalizedContent = ['CWB:自动档案', 'CWB:主角档案'].includes(type[0]) ? mergeProfileDelta([], entry.content)
