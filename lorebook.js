@@ -127,13 +127,10 @@ export async function previewChatBoundProfilesForCardMigration(settings, onProgr
     const cardKey = getCardArchiveKey();
     const primary = getPrimaryWorldbook();
     if (!primary || !world_names.includes(primary)) throw Error('当前角色卡没有可用的主世界书，无法安全定位档案。');
-    const primaryData = await readWorldbookFromServer(primary);
-    const routeBooks = Object.keys(settings?.worldbookRoutes ?? {}).filter(name => world_names.includes(name));
-    const books = [...new Set([
-        ...await profileArchiveBooks(settings, getTargetWorldbook(settings)),
-        ...referencedProfileBooks(primaryData),
-        ...routeBooks,
-    ].filter(name => name && world_names.includes(name)))];
+    // The directory/active-book list can be stale after chats or routing change.
+    // This explicit migration action must find archives even in orphaned books,
+    // so inventory every worldbook registered in Tavern and report scan failures.
+    const books = [...new Set(listWorldbooks().filter(name => name && world_names.includes(name)))];
     const rows = await mapWithConcurrency(books, 4, async (bookName, index) => {
         const data = await readWorldbookFromServer(bookName);
         const entries = Object.values(data.entries).map(entry => ({ ...entry, keys: getKeys(entry), enabled: isEnabled(entry) }));
