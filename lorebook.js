@@ -896,6 +896,15 @@ export function isCurrentCharacterProfile(entry) {
     return isStoryProfile(entry, profileStoryScope());
 }
 
+function mayAdoptLegacyFromOtherChats(scope) {
+    const characters = Object.values(getContext()?.characters ?? {});
+    const sharing = characters.filter(character =>
+        (character?.data?.extensions?.world || character?.extensions?.world) === scope.primary);
+    // A v0.13 archive has no card identity: never infer its owner if two cards
+    // share the same primary lorebook. Exact-current-chat legacy is still safe.
+    return sharing.length <= 1;
+}
+
 function cardEntries(entries, marker, scope = profileStoryScope()) {
     const matching = entries.filter(entry => getKeys(entry).includes(marker));
     const owned = matching.filter(entry => getKeys(entry).includes(scope.key));
@@ -904,7 +913,7 @@ function cardEntries(entries, marker, scope = profileStoryScope()) {
     // surviving record; never delete different historical branches implicitly.
     const legacy = matching.filter(entry => !getKeys(entry).some(key => String(key).startsWith(CARD_OWNER_PREFIX)));
     const inChat = legacy.filter(entry => getKeys(entry).includes(scope.chatId));
-    const candidates = inChat.length ? inChat : legacy;
+    const candidates = inChat.length ? inChat : mayAdoptLegacyFromOtherChats(scope) ? legacy : [];
     return candidates.sort((a, b) => String(b.content ?? '').length - String(a.content ?? '').length || Number(b.uid) - Number(a.uid)).slice(0, 1);
 }
 
@@ -923,7 +932,8 @@ function isStoryProfile(entry, scope) {
     // v0.13.x uses a chat integrity-based owner. Only migrate historical
     // archives which explicitly name this character card's primary worldbook.
     if (keys.some(key => String(key).startsWith('CWB:档案身份:')))
-        return legacyProfileMatchesWorldbook(keys, scope.primary);
+        return legacyProfileMatchesWorldbook(keys, scope.primary)
+            && (keys.includes(scope.chatId) || mayAdoptLegacyFromOtherChats(scope));
     const name = normalizedProfileName(parseCustomFormat(entry.content).姓名 || '');
     return keys.includes(scope.chatId) || keys.some(key => typeof key === 'string' && key !== name
         && key.replace(/ imported/g, '').replace(/\s*-\s*Branch #\d+$/i, '').trim() === scope.root);
@@ -1176,25 +1186,17 @@ async function updateRosterForBook(bookName, processedNames, startFloor, endFloo
     const entries = await getEntries(bookName);
     const existing = cardEntries(entries, 'Amily2角色总集', scope)[0];
     const names = new Set();
-    let oldStart = 1;
-    let oldEnd = 0;
     if (existing) {
         for (const line of String(existing.content ?? '').split('\n')) {
             const match = line.match(/^\[([^:]+):/);
             if (match) names.add(match[1].trim());
         }
-        const completed = String(existing.content ?? '').match(/【前(\d+)楼角色世界书已更新完成】/);
-        if (completed) oldEnd = Number(completed[1]);
-        const range = getKeys(existing).find(key => /^\d+-\d+$/.test(key));
-        if (range) oldStart = Number(range.split('-')[0]);
     }
     processedNames.forEach(name => names.add(String(name).trim()));
-    const newStart = Math.min(oldStart, startFloor + 1);
-    const newEnd = Math.max(oldEnd, endFloor + 1);
     const characterName = context?.characters?.[context.characterId]?.name ?? context?.name2 ?? '未识别角色卡';
     const content = `此为当前角色卡【${characterName}】中登场的角色，AI需要根据剧情让以下角色在合适的时机登场：\n\n`
         + [...names].sort().map(name => `[${name}: (详细查看绿灯角色条目)]`).join('\n')
-        + `\n\n{{// 本条勿动，【前${newEnd}楼角色世界书已更新完成】否则后续更新无法完成。}}`;
+        + '\n\n{{// 此角色总览归属当前角色卡；楼层进度由每段聊天独立记录。}}';
     const data = {
         comment,
         content,
@@ -1247,11 +1249,19 @@ export async function manageChatEntries(settings) {
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
         const patches = [];
+        const selectedTimeline = bookName === scope.primary ? cardEntries(entries, 'CWB:故事时间线', scope)[0] : null;
+        const selectedRelations = bookName === scope.primary ? cardEntries(entries, 'CWB:角色关系汇总', scope)[0] : null;
         for (const entry of entries) {
             const keys = getKeys(entry);
             if (isPluginReferenceEntry(entry)) {
                 if (isAlwaysOnReferenceEntry(entry)) {
-                    if (belongsToCardOrLegacyChat(keys, cardKey, chatId)) {
+                    const selected = keys.includes('CWB:故事时间线') ? selectedTimeline : selectedRelations;
+                    if (selected?.uid === entry.uid && !keys.includes(cardKey)) {
+                        const marker = keys.includes('CWB:故事时间线') ? 'CWB:故事时间线' : 'CWB:角色关系汇总';
+                        patches.push({ uid: entry.uid, keys: [marker, cardKey,
+                            marker === 'CWB:故事时间线' ? '故事时间线' : '角色关系'],
+                            enabled: true, type: 'constant' });
+                    } else if (belongsToCardOrLegacyChat(keys, cardKey, chatId)) {
                         if (!entry.enabled || entry.constant !== true || entry.selective === true)
                             patches.push({ uid: entry.uid, enabled: true, type: 'constant' });
                     } else if (entry.enabled || entry.constant === true) {
