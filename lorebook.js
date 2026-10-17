@@ -1359,7 +1359,8 @@ export async function getModuleProgress() {
     const { entry, state: saved } = findSavedUpdateState(data, chatId);
     const legacy = moduleProgressFromLegacy(data, chatId);
     const identityKey = getStableChatIdentityKey();
-    if (saved && entry && identityKey && !getKeys(entry).includes(identityKey)) {
+    if (saved && entry && (!getKeys(entry).includes(currentCardOwnerKey())
+        || (identityKey && !getKeys(entry).includes(identityKey)))) {
         // One-time migration: bind existing chat-ID progress to SillyTavern's
         // stable chat metadata so a later rename/replacement can still find it.
         await persistUpdateState(bookName, chatId, data, saved);
@@ -1378,7 +1379,8 @@ export async function getProgressRecoveryCandidates() {
     const candidates = new Map();
     for (const entry of Object.values(data.entries)) {
         const keys = getKeys(entry);
-        if (!keys.includes('CWB:更新状态') || keys.includes(chatId) || (identityKey && keys.includes(identityKey))) continue;
+        if (!keys.includes('CWB:更新状态') || keys.includes(chatId)
+            || hasOtherCardOwner(keys, currentCardOwnerKey()) || (identityKey && keys.includes(identityKey))) continue;
         const sourceChatId = keys.find(key => key !== 'CWB:更新状态' && !String(key).startsWith('CWB:聊天身份:'));
         if (!sourceChatId || candidates.has(sourceChatId)) continue;
         let saved;
@@ -1404,7 +1406,8 @@ export async function copyProgressFromChat(sourceChatId) {
     const data = await readWorldbookFromServer(bookName);
     const existing = findSavedUpdateState(data, chatId);
     if (existing.state) throw Error('当前聊天已经有进度存档；为防止覆盖，未复制其他聊天记录。');
-    const source = Object.values(data.entries).find(entry => getKeys(entry).includes('CWB:更新状态') && getKeys(entry).includes(sourceChatId));
+    const source = Object.values(data.entries).find(entry => getKeys(entry).includes('CWB:更新状态')
+        && !hasOtherCardOwner(getKeys(entry), currentCardOwnerKey()) && getKeys(entry).includes(sourceChatId));
     if (!source) throw Error('找不到所选来源的进度存档；原始存档未修改。');
     let saved;
     try { saved = JSON.parse(source.content); }
@@ -1416,7 +1419,7 @@ export async function copyProgressFromChat(sourceChatId) {
     applyEntryPatch(target, {
         comment: `CWB插件更新状态-${chatId}`,
         content: source.content,
-        keys: ['CWB:更新状态', chatId, ...(identityKey ? [identityKey] : [])],
+        keys: ['CWB:更新状态', currentCardOwnerKey(), chatId, ...(identityKey ? [identityKey] : [])],
         enabled: false, type: 'selective', preventRecursion: true,
     });
     await saveWorldInfo(bookName, data, true);
@@ -1459,7 +1462,8 @@ export async function verifyProfileContent(settings, name, content, isUser = fal
 
 
 function legacyModuleProgress(data, chatId) {
-    const entries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes(chatId));
+    const entries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes(chatId)
+        && !hasOtherCardOwner(getKeys(entry), currentCardOwnerKey()));
     const trackers = entries.filter(entry => getKeys(entry).includes('CWB:更新记录'));
     // v0.9.8 wrote this explicit confirmation only after all three sections saved.
     if (!trackers.some(entry => String(entry.content ?? '').includes('三个模块均成功，AI调用1次'))) return {};
@@ -1479,7 +1483,9 @@ function findSavedUpdateState(data, chatId) {
     const identityKey = getStableChatIdentityKey();
     const matches = Object.values(data?.entries ?? {}).filter(entry => {
         const keys = getKeys(entry);
-        return keys.includes('CWB:更新状态') && (keys.includes(chatId) || (identityKey && keys.includes(identityKey)));
+        return keys.includes('CWB:更新状态')
+            && !hasOtherCardOwner(keys, currentCardOwnerKey())
+            && (keys.includes(chatId) || (identityKey && keys.includes(identityKey)));
     });
     if (!matches.length) return { entry: null, state: null, duplicates: [] };
     const states = matches.map(entry => {
@@ -1514,7 +1520,8 @@ function getStableChatIdentityKey() {
 }
 
 function findLegacyUpdateRecords(data, chatId) {
-    return Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:更新记录') && getKeys(entry).includes(chatId));
+    return Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:更新记录')
+        && getKeys(entry).includes(chatId) && !hasOtherCardOwner(getKeys(entry), currentCardOwnerKey()));
 }
 
 function trackingFromLegacy(entries = [], fallbackStart = 0) {
@@ -1532,7 +1539,8 @@ function trackingFromLegacy(entries = [], fallbackStart = 0) {
 
 function moduleProgressFromLegacy(data, chatId) {
     const current = legacyModuleProgress(data, chatId);
-    const oldEntries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:模块进度') && getKeys(entry).includes(chatId));
+    const oldEntries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:模块进度')
+        && getKeys(entry).includes(chatId) && !hasOtherCardOwner(getKeys(entry), currentCardOwnerKey()));
     if (!oldEntries.length) return current;
     try {
         const parsed = oldEntries.map(entry => JSON.parse(entry.content).modules ?? {});
@@ -1574,14 +1582,15 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
     const matches = Object.values(data.entries).filter(entry => {
         const keys = getKeys(entry);
         const belongsToChat = keys.includes(chatId) || (identityKey && keys.includes(identityKey));
-        return belongsToChat && (keys.includes('CWB:更新状态') || keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度'));
+        return belongsToChat && !hasOtherCardOwner(keys, currentCardOwnerKey())
+            && (keys.includes('CWB:更新状态') || keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度'));
     });
     const target = matches.find(entry => getKeys(entry).includes('CWB:更新状态')) || matches[0] || createWorldInfoEntry(bookName, data);
     if (!target) throw Error('无法创建统一更新状态条目。');
     const canonical = {
         comment: `CWB插件更新状态-${chatId}`,
         content: JSON.stringify({ version: 2, numbering: 'zero-based inclusive', ...nextState }),
-        keys: ['CWB:更新状态', chatId, ...(identityKey ? [identityKey] : [])],
+        keys: ['CWB:更新状态', currentCardOwnerKey(), chatId, ...(identityKey ? [identityKey] : [])],
         enabled: false,
         type: 'selective',
         preventRecursion: true,
