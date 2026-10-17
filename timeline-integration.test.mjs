@@ -481,24 +481,30 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     // associated books, including entries from replaced chats, without merging.
     extraBooks.get('角色世界书').entries[20] = { uid: 20, comment: '动态-跨聊天角色旧副本', key: ['CWB:自动档案', 'replaced-chat-1', '跨聊天角色', '1-20'], disable: false, content: '[姓名]:跨聊天角色\n[剧情.0]:旧聊天关键剧情' };
     extraBooks.get('角色世界书').entries[21] = { uid: 21, comment: '动态-其他卡角色', key: ['CWB:自动档案', 'CWB:角色卡:other-card', '其他角色'], disable: false, content: '[姓名]:其他角色\n[剧情.0]:其他卡内容' };
+    world.world_names.push('未激活旧档案世界书');
+    extraBooks.set('未激活旧档案世界书', { entries: {
+        30: { uid: 30, comment: '动态-未被目录引用的旧角色', key: ['CWB:自动档案', 'replaced-chat-3', '未被目录引用的旧角色', '1-20'], disable: false, content: '[姓名]:未被目录引用的旧角色\n[剧情.0]:未激活世界书里的旧档案' },
+    } });
     disk.entries[12] = { uid: 12, comment: '主角档案-旧聊天', key: ['CWB:主角档案', 'replaced-chat-2', '主角', '1-20'], disable: false, content: '[姓名]:主角\n[剧情.0]:旧聊天主线信息' };
     cache = structuredClone(disk);
     const migrationPreview = await lorebook.previewChatBoundProfilesForCardMigration(cardSettings);
-    assert.equal(JSON.stringify(migrationPreview.candidates.map(item => item.uid).sort((a, b) => a - b)), JSON.stringify([2, 12, 20]), 'preview includes every old-chat copy and protagonist profile and skips card-owned records');
+    assert.equal(JSON.stringify(migrationPreview.candidates.map(item => item.uid).sort((a, b) => a - b)), JSON.stringify([2, 12, 20, 30]), 'preview scans unreferenced books too, includes every old-chat copy and skips card-owned records');
     const scanButton = $('#cwb-scan-card-profile-migration');
     assert.equal(typeof scanButton.handlers.click, 'function', 'old profile migration scan button is registered');
     scanButton.handlers.click.call(scanButton);
     for (let i = 0; i < 100 && scanButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
     assert.match($('#cwb-card-profile-migration-preview').text(), /UID 20/);
     assert.match($('#cwb-card-profile-migration-preview').text(), /UID 12/);
+    assert.match($('#cwb-card-profile-migration-preview').text(), /UID 30/);
     const convertButton = $('#cwb-convert-card-profile-migration');
     assert.equal(typeof convertButton.handlers.click, 'function', 'confirmation button is registered after listing entries');
     convertButton.handlers.click.call(convertButton);
     for (let i = 0; i < 100 && convertButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
-    assert.match($('#cwb-status').text(), /3 条档案转换/);
+    assert.match($('#cwb-status').text(), /4 条档案转换/);
     assert.equal(JSON.stringify(extraBooks.get('角色世界书').entries[2].key), JSON.stringify(['CWB:自动档案', cardOwnerKey, '跨聊天角色']));
     assert.equal(JSON.stringify(disk.entries[12].key), JSON.stringify(['CWB:主角档案', cardOwnerKey, '主角']));
     assert.equal(JSON.stringify(extraBooks.get('角色世界书').entries[20].key), JSON.stringify(['CWB:自动档案', cardOwnerKey, '跨聊天角色']));
+    assert.equal(JSON.stringify(extraBooks.get('未激活旧档案世界书').entries[30].key), JSON.stringify(['CWB:自动档案', cardOwnerKey, '未被目录引用的旧角色']));
     assert.equal(disk.entries[12].content, '[姓名]:主角\n[剧情.0]:旧聊天主线信息', 'migration preserves profile content');
     assert.equal(extraBooks.get('角色世界书').entries[20].content, '[姓名]:跨聊天角色\n[剧情.0]:旧聊天关键剧情', 'migration preserves duplicate content rather than merging it');
     assert.ok(extraBooks.get('角色世界书').entries[21].key.includes('CWB:角色卡:other-card'), 'profile bound to a different card remains untouched');
