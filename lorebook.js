@@ -741,8 +741,13 @@ export async function getModuleProgress() {
     if (!bookName) throw Error('当前角色卡未绑定主世界书，无法读取模块进度。');
     const chatId = state.chatId.replace(/ imported/g, '');
     const data = await readWorldbookFromServer(bookName);
-    const { state: saved } = findSavedUpdateState(data, chatId);
+    const { entry, state: saved } = findSavedUpdateState(data, chatId);
     const legacy = moduleProgressFromLegacy(data, chatId);
+    const identityKey = getStableChatIdentityKey();
+    if (saved && entry && identityKey && !getKeys(entry).includes(identityKey)) {
+        // One-time migration binds the old chat-ID record to stable chat metadata.
+        await persistUpdateState(bookName, chatId, data, saved);
+    }
     if (saved) return mergeModuleProgress(saved.modules ?? {}, legacy);
     return legacy;
 }
@@ -795,13 +800,40 @@ function parseTrackingStart(keys, fallback = 0) {
 }
 
 function findSavedUpdateState(data, chatId) {
-    const matches = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:更新状态') && getKeys(entry).includes(chatId));
+    const identityKey = getStableChatIdentityKey();
+    const matches = Object.values(data?.entries ?? {}).filter(entry => {
+        const keys = getKeys(entry);
+        return keys.includes('CWB:更新状态') && (keys.includes(chatId) || (identityKey && keys.includes(identityKey)));
+    });
     if (!matches.length) return { entry: null, state: null, duplicates: [] };
-    let state;
-    try { state = JSON.parse(matches[0].content); }
-    catch { throw Error('更新状态存档损坏，无法确认进度；原始存档已保留，请先导出备份。'); }
-    if (!state || typeof state !== 'object' || Array.isArray(state)) throw Error('更新状态存档格式无效，原始存档已保留。');
+    const states = matches.map(entry => {
+        let saved;
+        try { saved = JSON.parse(entry.content); }
+        catch { throw Error('更新状态存档损坏，无法确认进度；原始存档已保留，请先导出备份。'); }
+        if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw Error('更新状态存档格式无效，原始存档已保留。');
+        return saved;
+    });
+    const state = states.slice(1).reduce((merged, saved) => ({
+        ...merged,
+        ...saved,
+        modules: mergeModuleProgress(merged.modules ?? {}, saved.modules ?? {}),
+        tracking: {
+            ...(merged.tracking ?? {}), ...(saved.tracking ?? {}),
+            completed: mergeRanges([...(merged.tracking?.completed ?? []), ...(saved.tracking?.completed ?? [])]),
+            duplicates: mergeRanges([...(merged.tracking?.duplicates ?? []), ...(saved.tracking?.duplicates ?? [])]),
+            startIndex: Math.min(merged.tracking?.startIndex ?? 0, saved.tracking?.startIndex ?? 0),
+            totalMessages: Math.max(merged.tracking?.totalMessages ?? 0, saved.tracking?.totalMessages ?? 0),
+        },
+    }), states[0]);
     return { entry: matches[0], state, duplicates: matches.slice(1) };
+}
+
+function getStableChatIdentityKey() {
+    const metadata = getContext()?.chatMetadata;
+    const integrity = String(metadata?.integrity ?? '').trim();
+    // Branches can inherit their parent's integrity ID; keep them file-scoped.
+    if (!integrity || metadata?.main_chat) return null;
+    return `CWB:聊天身份:${integrity}`;
 }
 
 function findLegacyUpdateRecords(data, chatId) {
@@ -861,16 +893,18 @@ async function readWorldbookFromServer(bookName) {
 }
 
 async function persistUpdateState(bookName, chatId, data, nextState) {
+    const identityKey = getStableChatIdentityKey();
     const matches = Object.values(data.entries).filter(entry => {
         const keys = getKeys(entry);
-        return keys.includes(chatId) && (keys.includes('CWB:更新状态') || keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度'));
+        const belongsToChat = keys.includes(chatId) || (identityKey && keys.includes(identityKey));
+        return belongsToChat && (keys.includes('CWB:更新状态') || keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度'));
     });
     const target = matches.find(entry => getKeys(entry).includes('CWB:更新状态')) || matches[0] || createWorldInfoEntry(bookName, data);
     if (!target) throw Error('无法创建统一更新状态条目。');
     const canonical = {
         comment: `CWB插件更新状态-${chatId}`,
         content: JSON.stringify({ version: 2, numbering: 'zero-based inclusive', ...nextState }),
-        keys: ['CWB:更新状态', chatId],
+        keys: ['CWB:更新状态', chatId, ...(identityKey ? [identityKey] : [])],
         enabled: false,
         type: 'selective',
         preventRecursion: true,
