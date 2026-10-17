@@ -266,6 +266,23 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     contextData.chatMetadata = { integrity: 'stable-integration-chat' };
     modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-chat';
     const beforeDelete = structuredClone(disk);
+    const lorebook = modules.get(resolve(root, 'lorebook.js')).namespace;
+    const reviewBaseline = structuredClone(disk);
+    const infoReview = await lorebook.getProfileInfoReviewQueue();
+    const reviewedFact = infoReview.characters.flatMap(character => character.facts).find(fact => fact.category === '已知信息');
+    assert.ok(reviewedFact, 'manual review finds generated known facts for the current chat');
+    disk.entries[reviewedFact.uid].content += '\n并发修改保护测试';
+    await assert.rejects(lorebook.deleteReviewedProfileFact(infoReview, reviewedFact), /档案已变化/);
+    disk = structuredClone(reviewBaseline);
+    cache = structuredClone(disk);
+    await lorebook.deleteReviewedProfileFact(infoReview, reviewedFact);
+    const reviewedEntryAfter = disk.entries[reviewedFact.uid];
+    assert.ok(!reviewedEntryAfter.content.split(/\r?\n/).includes(reviewedFact.line), 'delete removes only the selected information line');
+    assert.ok(reviewedEntryAfter.content.includes('[角色未知信息.0]'), 'other known/unknown fields remain untouched');
+    assert.ok(reviewedEntryAfter.content.includes('[剧情.0]'), 'story fields remain untouched');
+    disk = structuredClone(reviewBaseline);
+    cache = structuredClone(disk);
+
     const deleteUid = Math.max(-1, ...Object.keys(disk.entries).map(Number)) + 1;
     disk.entries[deleteUid] = { uid: deleteUid, key: ['手工条目', 'integration-chat'], comment: '手写资料', content: '必须保留' };
     disk.entries[deleteUid + 1] = { uid: deleteUid + 1, key: ['CWB:自动档案', 'other-chat', '角色甲', '1-3'], comment: '动态-角色甲', content: '其他聊天资料' };
@@ -274,7 +291,6 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     disk.entries[deleteUid + 4] = { uid: deleteUid + 4, key: ['integration-chat', '角色丙', 'CWB:自动档案', '1-3'], comment: '动态-角色丙', content: '旧版键顺序的当前聊天生成档案' };
     cache = structuredClone(disk);
     world.world_names.push('无关世界书');
-    const lorebook = modules.get(resolve(root, 'lorebook.js')).namespace;
     const previewProgress = [];
     worldbookReads.length = 0;
     const preview = await lorebook.getGeneratedContentPreview(item => previewProgress.push(item));
@@ -294,6 +310,15 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.ok(Object.values(disk.entries).some(e => e.key.includes('CWB:故事时间线')), 'stale preview aborts before deleting any entries');
     cache = structuredClone(disk);
     const deleteButton = $('#cwb-delete-generated');
+    const reviewButton = $('#cwb-start-info-review');
+    reviewButton.handlers.click.call(reviewButton);
+    for (let i = 0; i < 100 && reviewButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
+    assert.equal(reviewButton.prop('disabled'), false);
+    assert.equal($('#cwb-info-review').prop('hidden'), false);
+    assert.match($('#cwb-info-review').html(), /角色 1\//);
+    assert.match($('#cwb-info-review').html(), /保留这条/);
+    assert.match($('#cwb-info-review').html(), /删除这条/);
+
     assert.equal(typeof deleteButton.handlers.click, 'function', 'cleanup action is available in the workbench');
     deleteButton.handlers.click.call(deleteButton);
     for (let i = 0; i < 100 && deleteButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
