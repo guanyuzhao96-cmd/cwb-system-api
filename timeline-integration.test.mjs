@@ -45,7 +45,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
                 relationRound++;
                 const input = options.prompt.map(x => x.content).join('\n');
                 const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
-                return '[--角色档案开始--]\n[档案类型]:主角\n[姓名]:主角\n[剧情.0]:日期未知｜本轮关键事件改变主线走向\n[--角色档案结束--]\n'
+                return '[--角色档案开始--]\n[档案类型]:主角\n[姓名]:主角\n[角色已知信息.0]:本轮确认的重要事实\n[角色未知信息.0]:对角色隐藏的关键事实\n[性经历人员.0]:成年对象\n[性经历人数]:1\n[额外补充.0]:影响后续判断的事实\n[剧情.0]:日期未知｜本轮关键事件改变主线走向并造成重要后果\n[--角色档案结束--]\n'
                     + '[--时间线增量开始--]\n' + JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] }) + '\n[--时间线增量结束--]\n'
                     + '[--关系增量开始--]\n' + JSON.stringify({ 关系更新: [{ 人物A: 'B', 方向: '↔', 人物B: 'C', 关系: '互相讨厌' }], 删除关系: [] }) + '\n[--关系增量结束--]';
             }
@@ -82,8 +82,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const index = await load(resolve(root, 'index.js')); await index.link((specifier, parent) => load(specifier.startsWith('/') ? specifier : resolve(dirname(parent.identifier), specifier))); await index.evaluate(); await initialized();
     for (const key of ['fullPrompt', 'incrementalPrompt']) {
         assert.ok(extension_settings.cwb_system_api[key].startsWith('旧的自定义'));
-        assert.ok(extension_settings.cwb_system_api[key].includes('CWB角色档案强相关筛选规则'));
-        assert.ok(extension_settings.cwb_system_api[key].includes('只允许“档案类型”“姓名”和“剧情.N”字段'));
+        assert.ok(extension_settings.cwb_system_api[key].includes('CWB角色档案整理规则'));
+        assert.ok(extension_settings.cwb_system_api[key].includes('角色已知信息.N'));
+        assert.ok(extension_settings.cwb_system_api[key].includes('性经历人数'));
     }
     assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.startsWith('旧自定义时间线提示词'));
     assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('同一天仅将属于同一故事线的关键进展合并为一条'));
@@ -127,6 +128,12 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     await modules.get(resolve(root, 'core.js')).namespace.updateRange(extension_settings.cwb_system_api, 0, 2, { silent: true });
     assert.equal(requests.length - callsBeforeCombined, 1);
     assert.equal(Object.values(disk.entries).filter(e => e.key.includes('CWB:主角档案')).length, 1);
+    const savedProfile = Object.values(disk.entries).find(e => e.key.includes('CWB:主角档案')).content;
+    assert.match(savedProfile, /角色已知信息\.0/);
+    assert.match(savedProfile, /角色未知信息\.0/);
+    assert.match(savedProfile, /性经历人员\.0/);
+    assert.match(savedProfile, /性经历人数]:1/);
+    assert.match(savedProfile, /额外补充\.0/);
     assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).content.includes('B ↔ C：互相讨厌'));
     // Third round: newly appended message must trigger another request and update A/B.
     contextData.chat.push({ mes: 'A和B分手，仍为同班同学' });
