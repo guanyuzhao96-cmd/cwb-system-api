@@ -6,7 +6,7 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.13.0</span><h2>聊天世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.13.1</span><h2>聊天世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
@@ -58,6 +58,11 @@
                 <summary><span class="cwb-section-title">档案维护</span><span>清理、删除与单项更新</span></summary>
                 <div class="cwb-section-body">
 <div class="cwb-subsection">
+                        <h3>按剧情重新生成已知 / 未知信息</h3>
+                        <p class="cwb-help">直接读取本聊天插件生成的角色档案“个人关键剧情”，不扫描聊天正文；每批提取 5 个角色。只重写已知 / 未知字段，其他档案字段不变。重新生成后仍可使用下方手动筛选保留与一键删除。</p>
+                        <button id="cwb-regenerate-profile-info" class="menu_button cwb-full-width">按剧情批量重新生成（每批 5 个角色）</button>
+                    </div>
+                    <div class="cwb-subsection">
                         <h3>性经历人数核对</h3>
                         <p class="cwb-help">手动勾选当前聊天的角色档案，输入动态信息中的人数进行对比，并查看对象名单和关键剧情。最终人数按旧档案人数加上剧情中新确认的不同对象；发现不一致时可只修改档案人数，不调用 AI。</p>
                         <button id="cwb-start-profile-audit" class="menu_button cwb-full-width">选择档案并开始核对</button>

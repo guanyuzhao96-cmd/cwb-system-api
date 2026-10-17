@@ -332,6 +332,23 @@ export async function getProfileInfoReviewQueue(onProgress) {
     return { chatId, characters, totalFacts: characters.reduce((sum, character) => sum + character.facts.length, 0) };
 }
 
+export async function getProfileRegenerationQueue(onProgress) {
+    const context = getContext();
+    state.chatId = context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId || 'unknown_chat';
+    const { chatId, entries } = await scanGeneratedContent('profile-regeneration', onProgress);
+    const profiles = entries.filter(entry => ['CWB:自动档案', 'CWB:主角档案'].includes(entry.marker)).map(entry => {
+        const parsed = parseCustomFormat(entry.content);
+        const rawName = String(parsed?.姓名 ?? '').replace(/^[\s"'“‘【\[]+|[\s"'”’】\]]+$/g, '').trim();
+        const name = rawName || entry.keys.find(key => !['CWB:自动档案', 'CWB:主角档案', chatId].includes(key) && !/^\d+-\d+$/.test(String(key))) || entry.comment || `UID ${entry.uid}`;
+        const plotValue = parsed?.剧情;
+        const plot = (Array.isArray(plotValue) ? plotValue : plotValue && typeof plotValue === 'object' ? Object.values(plotValue) : plotValue === undefined ? [] : [plotValue])
+            .map(value => String(value ?? '').trim()).filter(Boolean);
+        return { id: `${entry.bookName}:${entry.uid}`, name, bookName: entry.bookName, uid: entry.uid,
+            marker: entry.marker, keys: entry.keys, content: entry.content, plot };
+    }).filter(profile => profile.plot.length).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    return { chatId, profiles, total: profiles.length, skippedWithoutPlot: entries.filter(entry => ['CWB:自动档案', 'CWB:主角档案'].includes(entry.marker)).length - profiles.length };
+}
+
 export async function saveRegeneratedProfileInfo(review, profile, known, unknown) {
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!review || review.chatId !== chatId || !chatId || chatId.startsWith('unknown_chat')) {
