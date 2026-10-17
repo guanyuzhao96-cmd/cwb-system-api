@@ -458,12 +458,12 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
         assertCurrentChat(chatId);
         const total = messagesSnapshot.length;
         const covered = new Array(total + 1).fill(false);
-        for (const entry of existing) {
-            for (const range of timelineRanges(entry)) {
-            const start = Math.max(1, range[0]);
-            const end = Math.min(total, range[1]);
-            for (let floor = start; floor <= end; floor++) covered[floor] = true;
-            }
+        // Shared timeline content belongs to the character card, but a floor
+        // number means something only within its own chat. Use that chat's ledger.
+        const progress = await getModuleProgress();
+        for (const [startIndex, endIndex] of progress.timeline?.completed ?? []) {
+            for (let floor = Math.max(1, startIndex + 1); floor <= Math.min(total, endIndex + 1); floor++)
+                covered[floor] = true;
         }
         // Explicit character updates must check their selected range again, even if
         // a previous request marked it covered but returned no events (or was swiped).
