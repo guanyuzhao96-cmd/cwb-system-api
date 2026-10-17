@@ -31,6 +31,24 @@ function harness(entries = {}) {
 }
 const entry = (uid, chat, range, content) => ({ uid, key: ['CWB:故事时间线', chat, `CWB:时间线楼层:${range}`], content });
 
+test('stale Tavern worldbook cache must not erase 140-floor server progress during later writes or reload', async () => {
+    const h = harness();
+    // Simulate a host cache snapshot that predates the latest confirmed writes.
+    h.context.loadWorldInfo = async () => ({ entries: {} });
+    for (const module of Object.keys(MODULE_LABELS)) await h.context.recordModuleResult(module, 0, 139);
+    await h.context.saveTimeline('2025-02-01｜本轮剧情', 140, 159);
+    await h.context.saveRelationshipSummary('甲 ↔ 乙：同学', 140, 159);
+    await h.context.createEntries('main', [{ comment: '新增目录', keys: ['CWB:世界书目录'], content: '目录' }]);
+    const directory = Object.values(h.data().entries).find(row => row.comment === '新增目录');
+    await h.context.patchEntries('main', [{ uid: directory.uid, content: '更新目录' }]);
+    await h.context.deleteEntries('main', [directory.uid]);
+    const reloaded = harness(h.data().entries);
+    const progress = await reloaded.context.getModuleProgress();
+    for (const module of Object.keys(MODULE_LABELS)) assert.equal(moduleStatus(progress, module, 340).through, 140);
+    assert.ok(Object.values(reloaded.data().entries).some(row => row.key.includes('CWB:故事时间线')));
+    assert.ok(Object.values(reloaded.data().entries).some(row => row.key.includes('CWB:角色关系汇总')));
+});
+
 test('legacy entries merge atomically, retain UID, deduplicate and isolate other chats', async () => {
     const h = harness({ 0: entry(0, 'chat', '1-20', '[时间线.0]: 2025-02-02｜甲｜事件乙'), 1: entry(1, 'chat', '41-60', '[时间线.0]: 2025-01-01｜甲｜事件甲\n[时间线.1]: 2025-02-02｜甲｜事件乙\n[时间线.2]: 2025-02-02｜乙｜事件丙'), 2: entry(2, 'other', '1-10', 'other') });
     await h.context.getTimelineEntries();

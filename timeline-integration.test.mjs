@@ -55,7 +55,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
                 if (invalidCombined) return '[--档案无变化--]';
                 relationRound++;
                 const input = options.prompt.map(x => x.content).join('\n');
-                const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
+                const latest = [...input.matchAll(/新增事件([一二三四])/g)].at(-1)?.[1];
                 return '[--角色档案开始--]\n[档案类型]:主角\n[姓名]:主角\n[角色已知信息.0]:本轮确认的重要事实\n[角色未知信息.0]:对角色隐藏的关键事实\n[性经历人员.0]:成年对象\n[性经历人数]:1\n[额外补充.0]:影响后续判断的事实\n[剧情.0]:日期未知｜本轮关键事件改变主线走向并造成重要后果\n[--角色档案结束--]\n'
                     + '[--时间线增量开始--]\n' + JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] }) + '\n[--时间线增量结束--]\n'
                     + '[--关系增量开始--]\n' + JSON.stringify({ 关系更新: [{ 人物A: 'B', 方向: '↔', 人物B: 'C', 关系: '互相讨厌' }], 删除关系: [] }) + '\n[--关系增量结束--]';
@@ -69,7 +69,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             }
             if (!options.systemPrompt.includes('INTEGRATION_CUSTOM_TIMELINE')) return '本次没有角色档案变化';
             const input = options.prompt.map(x => x.content).join('\n');
-            const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
+            const latest = [...input.matchAll(/新增事件([一二三四])/g)].at(-1)?.[1];
             return JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] });
         },
     };
@@ -590,7 +590,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     contextData.chatId = savedContextId; profileState.chatId = savedContextId; profileState.profileArchiveRegistry = null;
     disk = singletonBaseline; cache = structuredClone(disk);
     failWrite = true;
-    contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
+    contextData.chat.push({ mes: '新增事件四。' });
     // Force a visibly different response, so readback must detect failed persistence.
     cache.entries = {};
     await click();
