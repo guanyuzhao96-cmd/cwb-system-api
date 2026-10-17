@@ -44,6 +44,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         generateRaw: async options => {
             requests.push(options);
             if (failApiRequest) throw new TypeError('Load failed');
+            if (options.systemPrompt.includes('CWB_REGENERATE_PROFILE_INFO')) {
+                return JSON.stringify({ 角色已知信息: ['她愿意与主角维持隐秘的亲密关系'], 角色未知信息: ['主角仍在调查影响两人关系的关键秘密'] });
+            }
             if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
                 if (invalidCombined) return '[--档案无变化--]';
                 relationRound++;
@@ -138,6 +141,18 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.match(savedProfile, /性经历人员\.0/);
     assert.match(savedProfile, /性经历人数]:1/);
     assert.match(savedProfile, /额外补充\.0/);
+    const lorebookApi = modules.get(resolve(root, 'lorebook.js')).namespace;
+    const coreApi = modules.get(resolve(root, 'core.js')).namespace;
+    const reviewQueue = await lorebookApi.getProfileInfoReviewQueue();
+    const targetProfile = reviewQueue.characters.find(item => item.name === '主角').facts[0];
+    const regenerated = await coreApi.regenerateProfileInfo(targetProfile);
+    await lorebookApi.saveRegeneratedProfileInfo(reviewQueue, targetProfile, regenerated.known, regenerated.unknown);
+    const regeneratedProfile = Object.values(disk.entries).find(e => e.key.includes('CWB:主角档案')).content;
+    assert.match(regeneratedProfile, /角色已知信息\.0\]:她愿意与主角维持隐秘的亲密关系/);
+    assert.match(regeneratedProfile, /角色未知信息\.0\]:主角仍在调查影响两人关系的关键秘密/);
+    for (const preserved of ['[性经历人员.0]:成年对象', '[性经历人数]:1', '[额外补充.0]:影响后续判断的事实', '[剧情.0]:日期未知｜本轮关键事件改变主线走向并造成重要后果']) {
+        assert.ok(regeneratedProfile.includes(preserved), `regeneration preserves ${preserved}`);
+    }
     assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).content.includes('B ↔ C：互相讨厌'));
     // Third round: newly appended message must trigger another request and update A/B.
     contextData.chat.push({ mes: 'A和B分手，仍为同班同学' });
