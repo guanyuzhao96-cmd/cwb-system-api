@@ -57,7 +57,20 @@
             <details class="cwb-section">
                 <summary><span class="cwb-section-title">档案维护</span><span>清理、删除与单项更新</span></summary>
                 <div class="cwb-section-body">
+<div class="cwb-subsection">
+                        <h3>已知 / 未知信息审查</h3>
+                        <p class="cwb-help">手动逐个角色检查当前聊天的插件档案；每条信息可选择保留或删除。不调用 AI，也不改动其他档案字段。</p>
+                        <button id="cwb-start-info-review" class="menu_button cwb-full-width">开始审查所有已知 / 未知信息</button>
+                        <div id="cwb-info-review" class="cwb-info-review" hidden></div>
+                    </div>
                     <div class="cwb-subsection">
+                        <h3>整理生成内容</h3>
+                        <button id="cwb-cleanup-profiles" class="menu_button cwb-full-width">精简已有角色档案</button>
+                        <p class="cwb-help">不调用 AI；仅保留姓名和个人关键剧情，只处理当前聊天由本插件生成的角色及主角档案。</p>
+                        <button id="cwb-delete-generated" class="menu_button cwb-full-width cwb-danger">删除本聊天生成的世界书数据</button>
+                        <p class="cwb-help">删除前会列出条目分类并二次确认。仅删除当前聊天中带插件标记的档案、时间线、关系、档案目录、更新进度和角色总览；原始及手工条目、全局目录、其他聊天数据和插件设置都会保留。</p>
+                    </div>
+                                        <div class="cwb-subsection">
                         <h3>整理生成内容</h3>
                         <button id="cwb-cleanup-profiles" class="menu_button cwb-full-width">精简已有角色档案</button>
                         <p class="cwb-help">不调用 AI；仅保留姓名和个人关键剧情，只处理当前聊天由本插件生成的角色及主角档案。</p>
