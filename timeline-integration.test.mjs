@@ -282,6 +282,27 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.ok(reviewedEntryAfter.content.includes('[剧情.0]'), 'story fields remain untouched');
     disk = structuredClone(reviewBaseline);
     cache = structuredClone(disk);
+    const infoEntry = disk.entries[reviewedFact.uid];
+    const infoLines = infoEntry.content.split(/\r?\n/);
+    infoLines[reviewedFact.lineIndex] = `${reviewedFact.line}，独立事实B,独立事实C`;
+    infoEntry.content = infoLines.join('\n');
+    cache = structuredClone(disk);
+    const splitQueue = await lorebook.getProfileInfoReviewQueue();
+    let splitFacts = splitQueue.characters.flatMap(character => character.facts).filter(fact => fact.field === reviewedFact.field);
+    assert.equal(splitFacts.map(fact => fact.value).join('|'), '本轮确认的重要事实|独立事实B|独立事实C', 'comma and Chinese comma delimit separate review facts');
+    const middle = splitFacts[1];
+    const middleResult = await lorebook.deleteReviewedProfileFact(splitQueue, middle);
+    assert.match(disk.entries[middle.uid].content, /本轮确认的重要事实[,，]独立事实C/);
+    assert.doesNotMatch(disk.entries[middle.uid].content, /独立事实B/);
+    const afterMiddleQueue = await lorebook.getProfileInfoReviewQueue();
+    splitFacts = afterMiddleQueue.characters.flatMap(character => character.facts).filter(fact => fact.field === reviewedFact.field);
+    assert.equal(splitFacts.map(fact => fact.value).join('|'), '本轮确认的重要事实|独立事实C', 'remaining adjacent facts remain independently reviewable');
+    await lorebook.deleteReviewedProfileFact(afterMiddleQueue, splitFacts[1]);
+    assert.match(disk.entries[reviewedFact.uid].content, /本轮确认的重要事实/);
+    assert.doesNotMatch(disk.entries[reviewedFact.uid].content, /独立事实C/);
+    assert.ok(middleResult.content.includes('[角色未知信息.0]'), 'segment deletion preserves other profile fields');
+    disk = structuredClone(reviewBaseline);
+    cache = structuredClone(disk);
 
     const auditQueue = await lorebook.getProfileCountAuditQueue();
     assert.ok(auditQueue.profiles.length > 0, 'manual count audit lists current-chat generated profiles');

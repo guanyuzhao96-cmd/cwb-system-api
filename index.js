@@ -129,7 +129,7 @@ function renderProfileInfoReview() {
     area.html(`<div class="cwb-review-head"><strong>角色 ${profileInfoReviewIndex + 1}/${characters.length}：${escapeHtml(character.name)}</strong><span>${decided}/${character.facts.length} 条已审查</span></div>
         ${factCards}
         <div class="cwb-review-nav"><button class="menu_button" data-review-nav="previous" ${profileInfoReviewIndex === 0 ? 'disabled' : ''}>上一位角色</button><button class="menu_button" data-review-nav="next" ${!allDecided ? 'disabled' : ''}>下一位角色</button></div>
-        <small class="cwb-help">总进度 ${reviewed}/${profileInfoReview.totalFacts} 条；删除会立即写回并核验，只移除对应信息行。</small>`);
+        <small class="cwb-help">总进度 ${reviewed}/${profileInfoReview.totalFacts} 条；逗号或分号分隔的内容会拆成独立条目，删除只移除对应片段。</small>`);
 }
 
 function assertActiveProfileReview() {
@@ -294,7 +294,21 @@ function bindUi() {
                 button.prop('disabled', true).text('正在删除并核验…');
                 const release = acquireOperationLock(state, '删除单条角色信息');
                 try {
-                    await deleteReviewedProfileFact(profileInfoReview, fact);
+                    const result = await deleteReviewedProfileFact(profileInfoReview, fact);
+                    for (const pending of profileInfoReview.characters.flatMap(item => item.facts)) {
+                        if (pending.bookName !== fact.bookName || pending.uid !== fact.uid || pending.decision) continue;
+                        pending.content = result.content;
+                        if (pending.lineIndex === fact.lineIndex) {
+                            if (result.lineRemoved) continue;
+                            pending.line = result.line;
+                            pending.segmentCount--;
+                            if (pending.segmentIndex > result.segmentIndex) pending.segmentIndex--;
+                            pending.id = `${pending.bookName}:${pending.uid}:${pending.lineIndex}:${pending.segmentIndex}`;
+                        } else if (result.lineRemoved && pending.lineIndex > fact.lineIndex) {
+                            pending.lineIndex--;
+                        }
+                        pending.id = `${pending.bookName}:${pending.uid}:${pending.lineIndex}:${pending.segmentIndex ?? 0}`;
+                    }
                     fact.decision = 'delete';
                     profileInfoReviewDeleted++;
                 } finally { release(); }
