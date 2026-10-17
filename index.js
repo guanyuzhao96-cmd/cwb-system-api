@@ -11,7 +11,7 @@ import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrat
 import { testSystemApi } from './api.js';
 import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
-import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, deleteUnretainedProfileFacts, generateWorldbookDirectories, getGeneratedContentPreview, getProfileCountAuditQueue, getProfileInfoReviewQueue, getProgressRecoveryCandidates, listWorldbooks, routeSummary, saveReviewedProfileCount } from './lorebook.js';
+import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, deleteUnretainedProfileFacts, generateWorldbookDirectories, getGeneratedContentPreview, getProfileCountAuditQueue, getProfileInfoReviewQueue, getProgressRecoveryCandidates, listWorldbooks, migrateChatBoundProfilesToCard, previewChatBoundProfilesForCardMigration, routeSummary, saveReviewedProfileCount } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { escapeHtml, notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
@@ -38,6 +38,7 @@ let profileInfoReviewIndex = 0;
 let profileInfoReviewDeleted = 0;
 let profileCountAudit = null;
 let profileCountAuditSelected = new Set();
+let cardProfileMigrationPreview = null;
 
 function settings() {
     extension_settings[MODULE_NAME] ??= structuredClone(defaults);
@@ -426,6 +427,59 @@ function bindUi() {
             notify('error', error.message);
             $('#cwb-status').text(`档案核对未完成：${error.message}`);
             renderProfileCountAudit();
+        }
+    });
+    $('#cwb-scan-card-profile-migration').on('click', function () {
+        runButton($(this), '扫描世界书…', async () => {
+            const release = acquireOperationLock(state, '扫描旧聊天绑定角色档案');
+            const preview = $('#cwb-card-profile-migration-preview');
+            const convert = $('#cwb-convert-card-profile-migration');
+            try {
+                saveFromUi();
+                preview.prop('hidden', false).text('正在扫描当前角色卡关联的世界书…');
+                convert.prop('hidden', true);
+                cardProfileMigrationPreview = await previewChatBoundProfilesForCardMigration(settings(), ({ current, total, bookName }) => {
+                    preview.text(`正在扫描 ${current}/${total}：《${bookName}》…`);
+                });
+                const candidates = cardProfileMigrationPreview.candidates;
+                if (!candidates.length) {
+                    preview.text(`扫描完成：检查 ${cardProfileMigrationPreview.books.length} 本关联世界书，没有找到仍绑定聊天 ID 的角色档案。已绑定角色卡的档案不会更改。`);
+                    $('#cwb-status').text('旧档案扫描完成：没有需要转换的条目。');
+                    return;
+                }
+                const lines = candidates.map((item, index) => `${index + 1}. ${item.name}｜${item.marker === 'CWB:主角档案' ? '主角档案' : '角色档案'}｜《${item.bookName}》｜${item.comment || '（无标题）'}｜UID ${item.uid}`).join('\n');
+                preview.text(`扫描完成：检查 ${cardProfileMigrationPreview.books.length} 本关联世界书，找到 ${candidates.length} 条旧聊天绑定档案。\n\n将转换为当前角色卡：${decodeURIComponent(cardProfileMigrationPreview.cardKey.replace('CWB:角色卡:', ''))}\n\n${lines}\n\n将保留所有条目和内容；已绑定其他角色卡的档案不在列表中。`);
+                convert.text(`确认转换全部 ${candidates.length} 条档案`).prop('hidden', false);
+                $('#cwb-status').text(`旧档案扫描完成：发现 ${candidates.length} 条，已列出完整世界书与 UID。`);
+            } finally { release(); }
+        });
+    });
+    $('#cwb-convert-card-profile-migration').on('click', async function () {
+        const button = $(this);
+        const preview = cardProfileMigrationPreview;
+        if (!preview?.candidates?.length) return;
+        const details = preview.candidates.map((item, index) => `${index + 1}. ${item.name}｜《${item.bookName}》｜UID ${item.uid}`).join('\n');
+        if (!window.confirm(`即将把以下 ${preview.candidates.length} 条旧聊天绑定档案改为当前角色卡绑定：\n\n${details}\n\n只改归属键；原条目、UID 和内容均保留，不合并、不删除。确认转换？`)) return;
+        const original = button.text();
+        button.prop('disabled', true).text('正在逐条转换并核验…');
+        let release;
+        try {
+            release = acquireOperationLock(state, '转换旧聊天绑定角色档案');
+            const result = await migrateChatBoundProfilesToCard(settings(), preview, ({ phase, current, total, bookName }) => {
+                button.text(phase === 'write' ? `转换并核验 ${current}/${total}：《${bookName}》…` : `复核扫描 ${current}/${total}…`);
+            });
+            cardProfileMigrationPreview = null;
+            $('#cwb-card-profile-migration-preview').text(`转换完成并回读核验：${result.migrated} 条档案，扫描 ${result.booksScanned} 本关联世界书，修改 ${result.booksChanged} 本。所有内容和 UID 均保留；没有合并或删除条目。`);
+            button.prop('hidden', true);
+            $('#cwb-status').text(`已将 ${result.migrated} 条档案转换为当前角色卡绑定，并逐条核验成功。`);
+            notify('success', `已转换并核验 ${result.migrated} 条旧档案。`);
+        } catch (error) {
+            $('#cwb-status').text(`旧档案转换未完成：${error.message}`);
+            notify('error', `旧档案转换未完成：${error.message}`);
+        } finally {
+            release?.();
+            button.prop('disabled', false);
+            if (!button.prop('hidden')) button.text(original);
         }
     });
     $('#cwb-cleanup-profiles').on('click', function () {
