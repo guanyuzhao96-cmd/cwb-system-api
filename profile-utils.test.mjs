@@ -38,12 +38,14 @@ test('profile sanitizer preserves the requested factual fields and removes unrel
 });
 
 test('profile rules require strong plot relevance and omit unrelated events', () => {
-    assert.match(PROFILE_RULES, /角色已知信息\.N.*角色未知信息\.N.*性经历人员\.N.*性经历人数.*额外补充\.N.*剧情\.N/s);
-    assert.match(PROFILE_RULES, /强力推动或改变主线/);
-    assert.match(PROFILE_RULES, /仅被提及、与主线联系弱、无后续影响的事件不得记录/);
-    assert.match(PROFILE_RULES, /每条不超过64个汉字/);
-    assert.match(PROFILE_RULES, /未成年或年龄不明一律省略/);
-    assert.match(PROFILE_RULES, /已确认成年对象去重计数/);
+    assert.match(PROFILE_RULES, /【总纲｜.*【角色已知信息｜.*【角色未知信息｜.*【性经历人员与人数｜.*【额外补充｜.*【剧情｜/s);
+    assert.match(PROFILE_RULES, /关键事实.*态度.*意愿.*动机.*关系判断/s);
+    assert.match(PROFILE_RULES, /未成年、年龄不明.*一律不记/);
+    assert.match(PROFILE_RULES, /旧档案人数\+本轮新确认/);
+    assert.match(PROFILE_RULES, /旧档案4人.*结果必须为5人/);
+    assert.match(PROFILE_RULES, /完整最终档案快照，不得只输出变化片段/);
+    assert.match(PROFILE_RULES, /不得只选最近一两件.*不得漏掉/s);
+    assert.match(PROFILE_RULES, /每条最多128字/);
     assert.equal(sanitizeProfileContent('[--角色档案开始--]\n[姓名]:甲\n[好感度]:80\n[--角色档案结束--]'), '[--角色档案开始--]\n[档案类型]:角色\n[姓名]:甲\n[--角色档案结束--]');
     assert.equal(hasProfileFacts('[--角色档案开始--]\n[姓名]:甲\n[当前状态]:日常上课\n[--角色档案结束--]'), false);
     assert.equal(hasProfileFacts('[--角色档案开始--]\n[姓名]:甲\n[角色已知信息.0]:得知关键秘密\n[--角色档案结束--]'), true);
@@ -67,9 +69,9 @@ test('profile sanitizer removes task and system content from every allowed field
 });
 
 test('profile rules explicitly restrict known and unknown facts to plot-critical information', () => {
-    assert.match(PROFILE_RULES, /已知信息.*未知信息.*主线剧情强相关/s);
-    assert.match(PROFILE_RULES, /普通日常.*即使真实也不记录/);
-    assert.match(PROFILE_RULES, /严禁记录任何任务或系统相关内容/);
+    assert.match(PROFILE_RULES, /【角色已知信息｜.*【角色未知信息｜/s);
+    assert.match(PROFILE_RULES, /普通日常、闲聊.*省略/);
+    assert.match(PROFILE_RULES, /任何情况下都不得写入角色档案任何栏目/);
 });
 
 test('sanitizing a profile never replaces the stored experience total with list length', () => {
@@ -94,4 +96,23 @@ test('incremental experience count does not increment for an already known partn
     const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
     assert.match(reconciled, /性经历人数]:5/);
     assert.equal((reconciled.match(/\[性经历人员\.\d+\]/g) ?? []).length, 1);
+});
+
+test('incremental experience count deduplicates an existing partner when relationship details change', () => {
+    const oldProfile = '[--角色档案开始--]\n[姓名]:甲\n[性经历人员.0]:乙｜旧关系状态\n[性经历人数]:4\n[--角色档案结束--]';
+    const incremental = '[--角色档案开始--]\n[姓名]:甲\n[性经历人员.0]:乙｜已确认性交\n[性经历人数]:5\n[剧情.0]:关系状态变化\n[--角色档案结束--]';
+    const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
+    assert.match(reconciled, /性经历人数]:4/);
+    assert.match(reconciled, /性经历人员\.0]:乙｜旧关系状态；已确认性交/);
+    assert.doesNotMatch(reconciled, /性经历人员\.1/);
+});
+
+test('profile sanitizer splits comma-separated facts but keeps whole plot events and one partner row', () => {
+    const source = `[--角色档案开始--]\n[姓名]:甲\n[角色已知信息.0]:她信任乙，愿意和乙维持秘密关系\n[性经历人员.0]:乙｜旧关系\n[性经历人员.1]:乙｜新关系\n[剧情.0]:2025-09-01｜她主动隐瞒关系，并在关键冲突中保护乙。\n[--角色档案结束--]`;
+    const cleaned = sanitizeProfileContent(source);
+    assert.match(cleaned, /角色已知信息\.0]:她信任乙/);
+    assert.match(cleaned, /角色已知信息\.1]:愿意和乙维持秘密关系/);
+    assert.match(cleaned, /性经历人员\.0]:乙｜旧关系；新关系/);
+    assert.doesNotMatch(cleaned, /性经历人员\.1/);
+    assert.match(cleaned, /剧情\.0]:2025-09-01｜她主动隐瞒关系，并在关键冲突中保护乙。/);
 });
