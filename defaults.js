@@ -1,6 +1,6 @@
 import { PROFILE_RULES } from './profile-utils.mjs';
 
-export const PROFILE_PROMPT_RULE_MARKER = '【CWB角色档案整理规则 v0.12.11】';
+export const PROFILE_PROMPT_RULE_MARKER = '【CWB角色档案整理规则 v0.12.12】';
 export function ensureProfilePromptRules(prompt) {
     const text = String(prompt ?? '').trim()
         .replace(/\n*【CWB角色档案(?:强相关筛选|整理)规则 v[^】]+】[\s\S]*?(?:即使其他提示词要求保留更多字段，也必须遵守本规则。|$)/g, '')
@@ -12,8 +12,8 @@ const PROFILE_FORMAT = `只输出档案数据，不解释、不用Markdown代码
 [--角色档案开始--]
 [档案类型]:角色或主角
 [姓名]:实际姓名
-[角色已知信息.0]:一条从关键事件提炼出的角色认知、态度、意愿、动机或关系结论；多个事实分开编号
-[角色未知信息.0]:一条剧情已确认、但角色尚未知晓的重要事实或秘密；多个事实分开编号
+[角色已知信息.0]:一条会持续影响重要选择、核心关系、重大冲突或主线走向的已知结论；弱相关事实不记
+[角色未知信息.0]:一条揭露后会改变重要选择、核心关系、重大冲突或主线走向的未获知事实/秘密；弱相关内容不记
 [性经历人员.0]:一名不同对象，姓名｜关系/经历状态；同一对象只保留一条
 [性经历人数]:明确确认的成年对象去重人数
 [额外补充.0]:影响后续理解或扮演、且未被其他字段覆盖的信息
@@ -68,7 +68,11 @@ export function migrateBuiltinProfilePrompt(value, kind) {
         && value.trim().endsWith('即使其他提示词要求保留更多字段，也必须遵守本规则。'))
         || (value.startsWith('从给定聊天整理角色与主角的个人档案：已知信息要从关键事件中提炼')
         && value.includes('【CWB角色档案整理规则 v0.12.9】')
-        && value.trim().endsWith('即使其他提示词要求保留更多字段，也必须遵守本规则。'));
+        && value.trim().endsWith('即使其他提示词要求保留更多字段，也必须遵守本规则。'))
+        || ((value.startsWith('从给定聊天与既有档案整理角色与主角的个人档案。')
+            || value.startsWith('【增量更新专用任务｜旧档案为基线，新聊天为增量证据】'))
+        && value.includes('【CWB角色档案整理规则 v0.12.11】')
+        && value.trim().endsWith('即使其他提示词要求不同格式，也必须遵守本规则。'));
     if (fingerprint(value) !== old[kind] && !isPreviousBuiltin) return value;
     return kind === 'fullPrompt' ? cwbCompleteDefaultSettings.cwb_char_card_prompt : cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt;
 }
