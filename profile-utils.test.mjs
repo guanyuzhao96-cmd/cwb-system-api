@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeProfileContent, reconcileProfileExperienceCount, hasProfileFacts, PROFILE_RULES } from './profile-utils.mjs';
+import { sanitizeProfileContent, reconcileProfileExperienceCount, replaceProfilePlot, hasProfileFacts, PROFILE_RULES } from './profile-utils.mjs';
 
 test('profile sanitizer preserves the requested factual fields and removes unrelated data', () => {
     const source = `[--角色档案开始--]
@@ -119,4 +119,15 @@ test('profile sanitizer splits comma-separated facts but keeps whole plot events
     assert.match(cleaned, /性经历人员\.0]:乙｜旧关系；新关系/);
     assert.doesNotMatch(cleaned, /性经历人员\.1/);
     assert.match(cleaned, /剧情\.0]:2025-09-01｜她主动隐瞒关系，并在关键冲突中保护乙。/);
+});
+
+test('plot compaction changes only the plot field and rejects unsafe output', () => {
+    const source = `[--角色档案开始--]\n[档案类型]:角色\n[姓名]:甲\n[角色已知信息.0]:持续信任乙\n[性经历人员.0]:乙｜关系状态\n[性经历人数]:1\n[剧情.0]:2025-09-01｜日常吃饭\n[剧情.1]:2025-09-01｜乙揭露秘密，甲因此与丙决裂\n[--角色档案结束--]`;
+    const compacted = replaceProfilePlot(source, ['2025-09-01｜乙揭露秘密，导致甲与丙决裂并改变后续合作']);
+    assert.match(compacted, /\[角色已知信息\.0\]:持续信任乙/);
+    assert.match(compacted, /\[性经历人数\]:1/);
+    assert.doesNotMatch(compacted, /日常吃饭/);
+    assert.match(compacted, /导致甲与丙决裂/);
+    assert.throws(() => replaceProfilePlot(source, ['x'.repeat(129)]), /超过128字/);
+    assert.throws(() => replaceProfilePlot(source, 'not a list'), /字符串列表/);
 });
