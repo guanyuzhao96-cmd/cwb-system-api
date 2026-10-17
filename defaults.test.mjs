@@ -9,8 +9,17 @@ test('full and incremental defaults request the expanded profile fields and deta
         assert.match(prompt, /强力推动或改变主线/);
         assert.match(prompt, /64个汉字/);
         assert.match(prompt, /严禁记录任何任务或系统相关内容/);
+        assert.match(prompt, /已知信息.*(?:提炼|不是事件流水账)/);
     }
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /旧档案人数为基数.*只增加本轮新剧情明确确认.*成年对象/);
+});
+
+test('known information stores event implications, not event logs, with evidence-bounded inference', () => {
+    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.9/);
+    assert.match(cwbCompleteDefaultSettings.cwb_char_card_prompt, /角色的认知、态度、意愿、动机或关系判断，不记录事件流水/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /多次或明确自愿的行为可归纳为有证据支持的当前倾向/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /发现旧已知信息只是事件流水时.*改写成结论/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /单次含义不明的行为不得夸大推断/);
 });
 
 test('saved custom prompts retain their text and receive the current mandatory profile rules once', () => {
