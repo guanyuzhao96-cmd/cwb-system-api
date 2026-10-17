@@ -39,7 +39,11 @@ test('profile sanitizer preserves the requested factual fields and removes unrel
 
 test('profile rules require strong plot relevance and omit unrelated events', () => {
     assert.match(PROFILE_RULES, /【总纲｜.*【角色已知信息｜.*【角色未知信息｜.*【性经历人员与人数｜.*【额外补充｜.*【剧情｜/s);
-    assert.match(PROFILE_RULES, /关键事实.*态度.*意愿.*动机.*关系判断/s);
+    assert.match(PROFILE_RULES, /只记录角色已确知、且对后续剧情有实质影响的结论/);
+    assert.match(PROFILE_RULES, /删除这条信息，不会改变.*就不要记录/);
+    assert.match(PROFILE_RULES, /普通事实、单次情绪\/反应、临时偏好.*一律省略/);
+    assert.match(PROFILE_RULES, /揭露会实质改变重要选择、核心关系、重大冲突或主线走向/);
+    assert.match(PROFILE_RULES, /若角色得知后不会改变其行动、关系或关键剧情，就不要记录/);
     assert.match(PROFILE_RULES, /未成年、年龄不明.*一律不记/);
     assert.match(PROFILE_RULES, /旧档案人数\+本轮新确认/);
     assert.match(PROFILE_RULES, /旧档案4人.*结果必须为5人/);
