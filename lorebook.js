@@ -276,6 +276,25 @@ export async function getGeneratedContentPreview(onProgress) {
 
 const REVIEWABLE_INFO_LINE = /^\[(角色已知信息|角色未知信息)\.(\d+)\]\s*:\s*(.*)$/;
 
+function splitProfileInfoFacts(value) {
+    const facts = [];
+    const separators = /[，,；;]/g;
+    let start = 0;
+    let match;
+    while ((match = separators.exec(value))) {
+        const raw = value.slice(start, match.index);
+        const leading = raw.length - raw.trimStart().length;
+        const trailing = raw.trimEnd().length;
+        if (trailing > leading) facts.push({ value: raw.slice(leading, trailing), start: start + leading, end: start + trailing });
+        start = match.index + match[0].length;
+    }
+    const raw = value.slice(start);
+    const leading = raw.length - raw.trimStart().length;
+    const trailing = raw.trimEnd().length;
+    if (trailing > leading) facts.push({ value: raw.slice(leading, trailing), start: start + leading, end: start + trailing });
+    return facts;
+}
+
 export async function getProfileInfoReviewQueue(onProgress) {
     const { chatId, entries } = await scanGeneratedContent('review', onProgress);
     const grouped = new Map();
@@ -288,12 +307,15 @@ export async function getProfileInfoReviewQueue(onProgress) {
             const match = lines[lineIndex].match(REVIEWABLE_INFO_LINE);
             if (!match || !match[3].trim()) continue;
             if (!grouped.has(name)) grouped.set(name, []);
-            grouped.get(name).push({
-                id: `${entry.bookName}:${entry.uid}:${lineIndex}`,
+            const splitFacts = splitProfileInfoFacts(match[3]);
+            splitFacts.forEach((splitFact, segmentIndex) => grouped.get(name).push({
+                id: `${entry.bookName}:${entry.uid}:${lineIndex}:${segmentIndex}`,
                 name,
                 category: match[1] === '角色已知信息' ? '已知信息' : '未知信息',
                 field: `${match[1]}.${match[2]}`,
-                value: match[3],
+                value: splitFact.value,
+                segmentIndex,
+                segmentCount: splitFacts.length,
                 bookName: entry.bookName,
                 uid: entry.uid,
                 marker: entry.marker,
@@ -301,7 +323,7 @@ export async function getProfileInfoReviewQueue(onProgress) {
                 content: entry.content,
                 lineIndex,
                 line: lines[lineIndex],
-            });
+            }));
         }
     }
     const characters = [...grouped.entries()]
@@ -409,14 +431,32 @@ export async function deleteReviewedProfileFact(review, fact) {
     const newline = content.includes('\r\n') ? '\r\n' : '\n';
     const lines = content.split(/\r?\n/);
     if (lines[fact.lineIndex] !== fact.line) throw Error('目标信息位置已变化，未删除任何内容。请重新扫描。');
-    lines.splice(fact.lineIndex, 1);
+    const match = lines[fact.lineIndex].match(REVIEWABLE_INFO_LINE);
+    const prefix = lines[fact.lineIndex].slice(0, lines[fact.lineIndex].length - match[3].length);
+    const segments = splitProfileInfoFacts(match[3]);
+    const selected = segments[fact.segmentIndex ?? 0];
+    if (!selected || selected.value !== fact.value) throw Error('目标信息片段已变化，未删除任何内容。请重新扫描。');
+    let lineRemoved = false;
+    if (segments.length === 1) {
+        lines.splice(fact.lineIndex, 1);
+        lineRemoved = true;
+    } else {
+        const previous = segments[fact.segmentIndex - 1];
+        const next = segments[fact.segmentIndex + 1];
+        const removeStart = previous ? previous.end : 0;
+        const removeEnd = next ? selected.end : match[3].length;
+        const nextValue = match[3].slice(0, removeStart) + match[3].slice(removeEnd);
+        lines[fact.lineIndex] = `${prefix}${nextValue}`;
+    }
     const nextContent = lines.join(newline);
     target.content = nextContent;
     await saveWorldInfo(fact.bookName, data, true);
     const persisted = await readWorldbookFromServer(fact.bookName);
     const stored = persisted.entries?.[fact.uid] ?? Object.values(persisted.entries ?? {}).find(entry => Number(entry.uid) === Number(fact.uid));
     if (!stored || stored.content !== nextContent) throw Error('删除后世界书回读不一致，无法确认结果；请刷新后复查。');
-    return { name: fact.name, category: fact.category, value: fact.value, bookName: fact.bookName };
+    return { name: fact.name, category: fact.category, value: fact.value, bookName: fact.bookName,
+        content: nextContent, lineIndex: fact.lineIndex, line: lineRemoved ? null : lines[fact.lineIndex],
+        lineRemoved, segmentIndex: fact.segmentIndex ?? 0, uid: fact.uid, keys: fact.keys };
 }
 
 export async function deleteGeneratedContent(preview, onProgress) {
