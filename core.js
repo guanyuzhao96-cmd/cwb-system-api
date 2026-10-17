@@ -195,7 +195,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         assertCurrentChat(chatId);
                         const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
                         assertCurrentChat(chatId);
-                        if (!saved) throw Error(`角色 ${name} 未路由到世界书，档案未全部完成`);
+                        if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，缺失时先激活目标世界书并扫描生成目录。`);
                         await verifyProfileContent(settings, name, block, isUser);
                         assertCurrentChat(chatId);
                         if (isUser) userUpdated = true; else names.push(saved);
@@ -231,7 +231,22 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         }
         const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
         setStatus(message);
-        if (failures.length) throw Error(message);
+        if (failures.length) {
+            const failedModules = targets.filter(module => failures.some(failure => failure.startsWith(`${MODULE_LABELS[module]}：`)));
+            const reportError = new Error(message);
+            reportError.cwbDiagnostics = {
+                stage: failures.some(failure => failure.includes('未出现在可用目录')) ? 'profile_worldbook_routing' : 'module_save',
+                modules: failedModules.map(module => MODULE_LABELS[module]),
+                startFloor: start + 1,
+                endFloor: end + 1,
+                batchFloors: end - start + 1,
+                totalChatFloors: state.messages.length,
+                requestCharacters: requestChars || null,
+            };
+            createErrorReport(reportError, reportError.cwbDiagnostics);
+            reportError.cwbReportGenerated = true;
+            throw reportError;
+        }
         if (!silent) notify('success', message);
         return [...new Set(names)];
     } finally {
