@@ -18,10 +18,12 @@ test('full and incremental defaults request the expanded profile fields and deta
 });
 
 test('known information stores event implications, not event logs, with evidence-bounded inference', () => {
-    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.11/);
+    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.12/);
     assert.match(cwbCompleteDefaultSettings.cwb_char_card_prompt, /已知信息写关键事件背后的认知、态度、意愿或关系结论，不写事件流水/);
-    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /明确言行充分体现的态度/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /普通事实、单次情绪\/反应、临时偏好/);
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /一次含义不明的行为不得夸大为稳定偏好/);
+    assert.match(cwbCompleteDefaultSettings.cwb_char_card_prompt, /若删除这条信息，不会改变.*就不要记录/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /重要性或持续影响不明确时，宁可省略/);
 });
 
 test('saved custom prompts retain their text and receive the current mandatory profile rules once', () => {
@@ -53,6 +55,16 @@ test('v0.12.9 built-in profile prompts upgrade without replacing user-customized
     const oldFull = `从给定聊天整理角色与主角的个人档案：已知信息要从关键事件中提炼旧内置内容。\n\n${currentRules}`;
     assert.equal(migrateBuiltinProfilePrompt(oldIncremental, 'incrementalPrompt'), cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt);
     assert.equal(migrateBuiltinProfilePrompt(oldFull, 'fullPrompt'), cwbCompleteDefaultSettings.cwb_char_card_prompt);
+    assert.notEqual(migrateBuiltinProfilePrompt(`${oldIncremental}\n用户自定义附加要求`, 'incrementalPrompt'), cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt);
+});
+
+test('v0.12.11 built-in prompts receive the stricter relevance gate while custom additions survive', () => {
+    const oldFull = cwbCompleteDefaultSettings.cwb_char_card_prompt
+        .replace(PROFILE_PROMPT_RULE_MARKER, '【CWB角色档案整理规则 v0.12.11】');
+    const oldIncremental = cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt
+        .replace(PROFILE_PROMPT_RULE_MARKER, '【CWB角色档案整理规则 v0.12.11】');
+    assert.equal(migrateBuiltinProfilePrompt(oldFull, 'fullPrompt'), cwbCompleteDefaultSettings.cwb_char_card_prompt);
+    assert.equal(migrateBuiltinProfilePrompt(oldIncremental, 'incrementalPrompt'), cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt);
     assert.notEqual(migrateBuiltinProfilePrompt(`${oldIncremental}\n用户自定义附加要求`, 'incrementalPrompt'), cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt);
 });
 
