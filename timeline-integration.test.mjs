@@ -8,7 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 test('settings button -> real API wrapper -> incremental prompt -> server readback, three rounds', { skip: !vm.SourceTextModule && 'Requires --experimental-vm-modules' }, async () => {
-    const nodes = new Map(), requests = [], modules = new Map();
+    const nodes = new Map(), requests = [], modules = new Map(), worldbookReads = [];
     let invalidCombined = false;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
@@ -34,7 +34,10 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         jQuery: f => initialized = f,
         confirm: message => { lastConfirmation = message; return true; },
     },
-        fetch: async () => ({ ok: true, json: async () => structuredClone(disk) }),
+        fetch: async (_url, options = {}) => {
+            try { worldbookReads.push(JSON.parse(options.body ?? '{}').name); } catch {}
+            return { ok: true, json: async () => structuredClone(disk) };
+        },
     });
     const script = {
         eventSource: { on() {} }, event_types: {}, saveSettingsDebounced() {}, getRequestHeaders: () => ({}),
@@ -229,6 +232,14 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.deepEqual(migratedState.tracking.duplicates, [[3, 4]]);
     disk = beforeMigration;
     cache = structuredClone(disk);
+    contextData.chatId = 'integration-recovered';
+    contextData.chatMetadata = { integrity: 'new-integrity' };
+    modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-recovered';
+    const recoveryCandidates = await progressStore.getProgressRecoveryCandidates();
+    assert.ok(recoveryCandidates.some(item => item.chatId === 'integration-chat'), 'unmatched prior progress is offered as an explicit recovery candidate');
+    await progressStore.copyProgressFromChat('integration-chat');
+    assert.ok(Object.values(disk.entries).some(entry => entry.key.includes('CWB:更新状态') && entry.key.includes('integration-chat')), 'source progress remains intact after recovery');
+    assert.ok(Object.values(disk.entries).some(entry => entry.key.includes('CWB:更新状态') && entry.key.includes('integration-recovered')), 'recovered progress is copied under the current chat ID');
     contextData.chatId = 'integration-chat';
     contextData.chatMetadata = { integrity: 'stable-integration-chat' };
     modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-chat';
@@ -238,10 +249,14 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     disk.entries[deleteUid + 1] = { uid: deleteUid + 1, key: ['CWB:自动档案', 'other-chat', '角色甲', '1-3'], comment: '动态-角色甲', content: '其他聊天资料' };
     disk.entries[deleteUid + 2] = { uid: deleteUid + 2, key: ['CWB:世界书目录'], comment: '全局目录', content: '全局目录必须保留' };
     disk.entries[deleteUid + 3] = { uid: deleteUid + 3, key: ['CWB:自动档案', 'integration-chat', '角色乙', '1-3'], comment: '动态-角色乙', content: '当前聊天生成档案' };
+    disk.entries[deleteUid + 4] = { uid: deleteUid + 4, key: ['integration-chat', '角色丙', 'CWB:自动档案', '1-3'], comment: '动态-角色丙', content: '旧版键顺序的当前聊天生成档案' };
     cache = structuredClone(disk);
+    world.world_names.push('无关世界书');
     const lorebook = modules.get(resolve(root, 'lorebook.js')).namespace;
     const previewProgress = [];
+    worldbookReads.length = 0;
     const preview = await lorebook.getGeneratedContentPreview(item => previewProgress.push(item));
+    assert.deepEqual(worldbookReads, ['主世界书'], 'cleanup uses the primary chat record and does not read unrelated worldbooks');
     assert.ok(previewProgress.some(item => item.phase === 'scan' && item.current === item.total));
     assert.ok(preview.entries.some(e => e.marker === 'CWB:自动档案'));
     assert.ok(preview.entries.some(e => e.marker === 'CWB:故事时间线'));
@@ -263,6 +278,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.equal(deleteButton.prop('disabled'), false);
     assert.match(lastConfirmation, /原始\/手工条目/);
     assert.match(lastConfirmation, /其他聊天数据/);
+    assert.match(lastConfirmation, /动态-角色乙/);
+    assert.match(lastConfirmation, /动态-角色丙/);
     const deletedUids = preview.entries.map(entry => entry.uid);
     assert.ok(deletedUids.length > 0);
     assert.equal(deletedUids.some(uid => disk.entries[uid]), false, 'all previewed generated entries are removed');
