@@ -35,7 +35,7 @@ async function harness(events = [oldEvent]) {
     });
     const mocks = {
         '/scripts/tokenizers.js': { getTokenCountAsync: async text => text.length },
-        '/script.js': { getRequestHeaders: () => ({}), generateRaw: async options => { requests.push(options); duringAI(); return nextResponse; } },
+        '/script.js': { getRequestHeaders: () => ({}), generateRaw: async options => { requests.push(options); duringAI(); return typeof nextResponse === 'function' ? nextResponse(options) : nextResponse; } },
         '/scripts/extensions.js': { getContext: () => contextData, extension_settings: {} },
         '/scripts/world-info.js': { world_names: ['主世界书'], selected_world_info: [], world_info: {},
             loadWorldInfo: async () => structuredClone(cache),
@@ -76,7 +76,7 @@ test('compaction writes only selected profiles and reports verified token totals
     const preview = await h.lorebook.getProfileCompactionCandidates(h.settings);
     assert.equal(preview.candidates.length, 2);
     const selected = preview.candidates.find(item => item.uid === 1);
-    h.reply(JSON.stringify({ 剧情: ['2025-09-03｜甲揭露真相，终止合作'] }));
+    h.reply(JSON.stringify({ 角色档案: [{ id: selected.id, 姓名: selected.name, 剧情: ['2025-09-03｜甲揭露真相，终止合作'] }] }));
     const result = await h.core.compactRoleProfiles(h.settings, () => {}, { ...preview, candidates: [selected] });
     assert.equal(h.requests.length, 1);
     assert.equal(result.results.length, 1);
@@ -95,6 +95,87 @@ test('compaction rejects changed selection and an empty selection never invokes 
     assert.equal(empty.results.length, 0);
     h.data().entries[1].content = profile([newEvent]);
     await assert.rejects(h.core.compactRoleProfiles(h.settings, () => {}, preview), /档案已发生变化/);
+    assert.equal(h.requests.length, 0);
+});
+
+function seedCompactionProfiles(h, count) {
+    h.state.chatId = h.contextData.chatId;
+    h.data().entries[99] = h.data().entries[9];
+    delete h.data().entries[9];
+    for (let uid = 1; uid <= count; uid++) {
+        const name = uid <= 2 ? '同名角色' : `角色${uid}`;
+        h.data().entries[uid] = { uid, key: ['CWB:自动档案', owner, name], content: `[姓名]:${name}\n[角色已知信息.0]:决定拒绝旧同伴\n[剧情.0]:2025-09-01｜第${uid}份档案查到重要证据并与旧同伴对质\n[剧情.1]:2025-09-02｜第${uid}份档案决定解除合作关系` };
+    }
+}
+
+function compactBatchReply(options) {
+    const input = JSON.parse(options.prompt.at(-1).content).角色档案;
+    return { 角色档案: input.map(item => ({ id: item.id, 姓名: item.姓名, 剧情: [`2025-09-02｜第${JSON.parse(item.id)[1]}份档案查证后解除合作`] })).reverse() };
+}
+
+test('eleven selected profiles use three AI requests of five, five and one with per-role token totals', supported, async () => {
+    const h = await harness();
+    seedCompactionProfiles(h, 11);
+    const selection = await h.lorebook.getProfileCompactionCandidates(h.settings);
+    const sizes = [], progress = [];
+    h.reply(options => {
+        sizes.push(JSON.parse(options.prompt.at(-1).content).角色档案.length);
+        return JSON.stringify(compactBatchReply(options));
+    });
+    const result = await h.core.compactRoleProfiles(h.settings, update => progress.push(update), selection);
+    assert.deepEqual(sizes, [5, 5, 1]);
+    assert.equal(h.requests.length, 3);
+    assert.equal(result.results.length, 11);
+    assert.equal(result.before, result.results.reduce((sum, item) => sum + item.before, 0));
+    assert.equal(result.after, result.results.reduce((sum, item) => sum + item.after, 0));
+    assert.ok(result.after < result.before);
+    for (let uid = 1; uid <= 11; uid++) {
+        assert.ok(h.data().entries[uid].content.includes(`第${uid}份档案查证后解除合作`), 'reversed output and duplicate names still map to the correct UID');
+        assert.ok(h.data().entries[uid].content.includes('决定拒绝旧同伴'), 'other fields remain present');
+    }
+    assert.equal(progress.filter(update => update.phase === 'batch').length, 3);
+    assert.equal(h.data().entries[99].content, '手工资料保留');
+});
+
+test('duplicate IDs in a five-role result reject the complete batch before its first write', supported, async () => {
+    const h = await harness();
+    seedCompactionProfiles(h, 5);
+    const selection = await h.lorebook.getProfileCompactionCandidates(h.settings);
+    const before = structuredClone(h.data());
+    h.reply(options => {
+        const output = compactBatchReply(options);
+        output.角色档案[4] = output.角色档案[0];
+        return JSON.stringify(output);
+    });
+    await assert.rejects(h.core.compactRoleProfiles(h.settings, () => {}, selection), /角色标识或姓名不匹配/);
+    assert.deepEqual(h.data(), before);
+    assert.equal(h.requests.length, 1);
+});
+
+test('a malformed later batch preserves earlier verified results and all not-yet-written profiles', supported, async () => {
+    const h = await harness();
+    seedCompactionProfiles(h, 7);
+    const selection = await h.lorebook.getProfileCompactionCandidates(h.settings);
+    const originalSix = h.data().entries[6].content, originalSeven = h.data().entries[7].content;
+    let latestResults = [];
+    h.reply(options => {
+        const output = compactBatchReply(options);
+        if (h.requests.length === 2) output.角色档案.pop();
+        return JSON.stringify(output);
+    });
+    await assert.rejects(h.core.compactRoleProfiles(h.settings, update => { if (update.results) latestResults = update.results; }, selection), /缺少或多出角色/);
+    assert.equal(h.requests.length, 2);
+    assert.equal(latestResults.length, 5);
+    assert.equal(h.data().entries[6].content, originalSix);
+    assert.equal(h.data().entries[7].content, originalSeven);
+});
+
+test('selected profiles without plot events do not make an AI request', supported, async () => {
+    const h = await harness([]);
+    h.state.chatId = h.contextData.chatId;
+    const selection = await h.lorebook.getProfileCompactionCandidates(h.settings);
+    const result = await h.core.compactRoleProfiles(h.settings, () => {}, selection);
+    assert.equal(result.results.length, 1);
     assert.equal(h.requests.length, 0);
 });
 
