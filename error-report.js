@@ -1,4 +1,4 @@
-const REPORT_VERSION = '0.12.28';
+const REPORT_VERSION = '0.12.29';
 let latestReportJson = null;
 let latestReportName = null;
 
