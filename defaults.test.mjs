@@ -15,10 +15,13 @@ test('full and incremental defaults request the expanded profile fields and deta
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /旧档案4人.*最终为5人.*旧档案4\+人.*最终为5\+/s);
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /不得只选最近一两件.*不得漏掉/s);
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /有效的.*剧情全部保留/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /剧情默认只增不删/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /旧剧情条数不得减少/);
+    assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /后续变化作为新事件追加，不能覆盖前情/);
 });
 
 test('known information stores event implications, not event logs, with evidence-bounded inference', () => {
-    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.18/);
+    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.20/);
     assert.match(cwbCompleteDefaultSettings.cwb_char_card_prompt, /已知信息写关键事件背后的认知、态度、意愿或关系结论，不写事件流水/);
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /普通事实、单次情绪\/反应、临时偏好/);
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /一次含义不明的行为不得夸大为稳定偏好/);
