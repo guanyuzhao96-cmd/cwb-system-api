@@ -4,7 +4,7 @@ export async function openProfileCompactionDialog({ load, compact, escapeHtml: e
     if (document.querySelector('.cwb-compaction-dialog')) return;
     const dialog = document.createElement('dialog');
     dialog.className = 'cwb-compaction-dialog';
-    dialog.innerHTML = '<h3>选择要精简的角色档案</h3><p data-summary role="status">正在读取档案和 token 数…</p><div data-rows></div><p class="cwb-help">统计完整档案正文的 token 数，使用酒馆当前分词器。默认不勾选；仅精简所选档案的剧情栏目。</p><div class="cwb-secondary-actions"><button type="button" class="menu_button" data-all>全选</button><button type="button" class="menu_button" data-none>全不选</button><button type="button" class="menu_button" data-start disabled>开始精简</button><button type="button" class="menu_button" data-close>关闭</button></div>';
+    dialog.innerHTML = '<h3>选择要精简的角色档案</h3><p data-summary role="status">正在读取档案和 token 数…</p><div data-rows></div><p class="cwb-help">统计完整档案正文的 token 数，使用酒馆当前分词器。默认不勾选；每次 AI 请求处理最多5个角色，自动分批精简所选档案的剧情栏目。</p><div class="cwb-secondary-actions"><button type="button" class="menu_button" data-all>全选</button><button type="button" class="menu_button" data-none>全不选</button><button type="button" class="menu_button" data-start disabled>开始精简</button><button type="button" class="menu_button" data-close>关闭</button></div>';
     document.body.appendChild(dialog);
     const summary = dialog.querySelector('[data-summary]');
     const rows = dialog.querySelector('[data-rows]');
@@ -49,7 +49,9 @@ export async function openProfileCompactionDialog({ load, compact, escapeHtml: e
         };
         try {
             const result = await compact({ ...preview, candidates }, progress => {
-                summary.textContent = `正在精简 ${progress.current}/${progress.total}：${progress.name}`;
+                summary.textContent = progress.phase === 'batch'
+                    ? `正在精简第 ${progress.batch}/${progress.batches} 批（每批最多5个角色）：${progress.names.join('、')}`
+                    : `正在保存核验 ${progress.current}/${progress.total}：${progress.name}`;
                 showResults(progress.results);
             });
             showResults(result.results);
