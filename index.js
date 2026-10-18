@@ -117,9 +117,8 @@ function renderProfileInfoReview() {
     }
     const character = characters[profileInfoReviewIndex];
     const decided = character.facts.filter(fact => fact.decision).length;
-    const allDecided = decided === character.facts.length;
     const factCards = character.facts.map((fact, index) => {
-        const decisionLabel = fact.decision === 'keep' ? '已选择保留' : fact.decision === 'delete' ? '已删除' : '未选择，将删除';
+        const decisionLabel = fact.decision === 'keep' ? '已选择保留' : fact.decision === 'delete' ? '已删除' : '未选择保留';
         return `<article class="cwb-review-fact" data-decision="${fact.decision || 'pending'}">
             <div class="cwb-review-fact-head"><b>${escapeHtml(fact.category)} · 第 ${index + 1} 条</b><span>${decisionLabel}</span></div>
             <p>${escapeHtml(fact.value)}</p>
@@ -129,11 +128,12 @@ function renderProfileInfoReview() {
     area.html(`<div class="cwb-review-head"><strong>角色 ${profileInfoReviewIndex + 1}/${characters.length}：${escapeHtml(character.name)}</strong><span>${decided}/${character.facts.length} 条已审查</span></div>
         ${factCards}
         <button class="menu_button cwb-full-width cwb-danger" data-review-delete-unkept ${character.facts.some(fact => !fact.decision) ? '' : 'disabled'}>删除本角色未保留信息（${character.facts.filter(fact => !fact.decision).length} 条）</button>
-        <div class="cwb-review-nav"><button class="menu_button" data-review-nav="previous" ${profileInfoReviewIndex === 0 ? 'disabled' : ''}>上一位角色</button><button class="menu_button" data-review-nav="next" ${!allDecided ? 'disabled' : ''}>下一位角色</button></div>
-        <small class="cwb-help">总进度 ${reviewed}/${profileInfoReview.totalFacts} 条；只需选择要保留的内容，未选择项会在批量删除时一次移除。</small>`);
+        <div class="cwb-review-nav"><button class="menu_button" data-review-nav="previous" ${profileInfoReviewIndex === 0 ? 'disabled' : ''}>上一位角色</button><button class="menu_button" data-review-nav="next">下一位角色</button></div>
+        <small class="cwb-help">总进度 ${reviewed}/${profileInfoReview.totalFacts} 条；下一位角色仅跳过，不修改档案。点击删除按钮才移除当前角色未保留信息，核验成功后自动进入下一位。</small>`);
 }
 
 function assertActiveProfileReview() {
+    if (state.operationOwner === '批量删除未保留的角色信息') throw Error('正在删除并核验，请稍候。');
     refreshChatState();
     if (!profileInfoReview || state.chatId !== profileInfoReview.chatId) {
         profileInfoReview = null;
@@ -322,6 +322,8 @@ function bindUi() {
                 });
                 $('#cwb-status').text(`已删除并核验 ${result.deleted} 条未保留信息。`);
             } finally { release(); }
+            assertActiveProfileReview();
+            profileInfoReviewIndex++;
             renderProfileInfoReview();
         } catch (error) {
             renderProfileInfoReview();
@@ -335,8 +337,6 @@ function bindUi() {
             const action = $(this).attr('data-review-nav');
             if (action === 'previous') profileInfoReviewIndex = Math.max(0, profileInfoReviewIndex - 1);
             else if (action === 'next') {
-                const character = profileInfoReview.characters[profileInfoReviewIndex];
-                if (character.facts.some(fact => !fact.decision)) throw Error('请先决定当前角色的每一条信息，再进入下一位角色。');
                 profileInfoReviewIndex++;
             } else if (action === 'close') {
                 profileInfoReview = null;
