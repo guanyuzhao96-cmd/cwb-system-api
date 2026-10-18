@@ -21,7 +21,7 @@ test('full and incremental defaults request the expanded profile fields and deta
 });
 
 test('known information stores event implications, not event logs, with evidence-bounded inference', () => {
-    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.20/);
+    assert.match(PROFILE_PROMPT_RULE_MARKER, /v0\.12\.22/);
     assert.match(cwbCompleteDefaultSettings.cwb_char_card_prompt, /已知信息写关键事件背后的认知、态度、意愿或关系结论，不写事件流水/);
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /普通事实、单次情绪\/反应、临时偏好/);
     assert.match(cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt, /一次含义不明的行为不得夸大为稳定偏好/);
@@ -35,6 +35,9 @@ test('saved custom prompts retain their text and receive the current mandatory p
     assert.ok(updated.startsWith(old));
     assert.ok(updated.includes('【角色已知信息｜记角色从事件中形成的结论】'));
     assert.equal(ensureProfilePromptRules(updated), updated);
+    const appended = ensureProfilePromptRules(`${updated}\n用户追加要求：保留角色设定中的别名`);
+    assert.ok(appended.includes('用户追加要求：保留角色设定中的别名'));
+    assert.match(appended, /逐条原文保留全部旧剧情/);
 });
 
 test('old mandatory profile rules are replaced instead of stacked on saved prompts', () => {
