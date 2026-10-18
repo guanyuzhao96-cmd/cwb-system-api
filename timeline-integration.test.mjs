@@ -220,7 +220,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const beforeFinalRepeat = requests.length;
     await modules.get(resolve(root, 'core.js')).namespace.batchUpdate(batchSettings);
     assert.equal(requests.length, beforeFinalRepeat);
-    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '自动阈值新��情' })));
+    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '自动阈值新剧情' })));
     const beforeAuto = requests.length;
     modules.get(resolve(root, 'core.js')).namespace.maybeAutoUpdate({ ...batchSettings, enabled: true, autoUpdate: true });
     await new Promise(resolve => setTimeout(resolve, 1350));
@@ -440,7 +440,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     contextData.chatMetadata.world_info = '角色世界书';
     disk = { entries: {
         3: { uid: 3, comment: '手工同名条目', key: ['跨聊天角色'], disable: false, content: '手工内容不能覆盖' },
-        4: { uid: 4, comment: 'Amily2角色总集-Test - 2026-10-12@09h12m44s596ms - Branch #25-角色总览', key: ['Amily2角色总集', 'Test - 2026-10-12@09h12m44s596ms - Branch #25', '角色总览', '1-150'], disable: false, content: '[旧角色: (详细查看绿灯角色条目)]\n{{// 本条勿动，【前150楼角色世��书已更新完成】}}' },
+        4: { uid: 4, comment: 'Amily2角色总集-Test - 2026-10-12@09h12m44s596ms - Branch #25-角色总览', key: ['Amily2角色总集', 'Test - 2026-10-12@09h12m44s596ms - Branch #25', '角色总览', '1-150'], disable: false, content: '[旧角色: (详细查看绿灯角色条目)]\n{{// 本条勿动，【前150楼角色世界书已更新完成】}}' },
     } }; cache = structuredClone(disk);
     const cardSettings = { incremental: true, enabled: true, multiWorldbookRouting: false, worldbookTarget: 'primary', scanDepth: 6 };
     contextData.chatId = 'Test - 2026-10-12@09h12m44s596ms - Branch #25';
@@ -470,7 +470,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.equal(Object.values(disk.entries).filter(entry => entry.key?.includes('Amily2角色总集')).length, 1, 'same logical chat branch updates reuse one role overview record');
     assert.equal(Object.values(extraBooks.get('角色世界书').entries).filter(entry => entry.key?.some(key => key.startsWith('CWB:角色卡:')) && entry.key?.includes('CWB:自动档案')).length, 1, 'same logical chat branch updates reuse one dynamic profile');
     assert.ok(Object.values(disk.entries).find(entry => entry.key?.includes('Amily2角色总集')).key.includes(lorebook.getCardArchiveKey()), 'role overview ownership is tied to the character card');
-    await lorebook.verifyProfileContent(cardSettings, '跨聊天���色', extraBooks.get('角色世界书').entries[canonicalUid].content);
+    await lorebook.verifyProfileContent(cardSettings, '跨聊天角色', extraBooks.get('角色世界书').entries[canonicalUid].content);
     assert.ok((await lorebook.getProfileInfoReviewQueue()).characters.some(character => character.name === '跨聊天角色'), 'card-owned profile remains visible in information review');
     assert.ok((await lorebook.getProfileCountAuditQueue()).profiles.some(profile => profile.name === '跨聊天角色'), 'card-owned profile remains visible in count review');
     const generatedPreview = await lorebook.getGeneratedContentPreview();
