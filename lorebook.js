@@ -889,7 +889,7 @@ async function writeTimeline(content, startFloor, endFloor) {
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
     if (!existing.length && content === undefined) return [];
-    if (existing.length === 1 && content === undefined) {
+    if (existing.length === 1 && content === undefined && existing[0].content === mergeTimelineContent([existing[0].content])) {
         if (!isEnabled(existing[0]) || existing[0].constant !== true || existing[0].selective === true) {
             applyEntryPatch(existing[0], { enabled: true, type: 'constant' });
             await saveWorldInfo(bookName, data, true);
