@@ -12,7 +12,7 @@ import {
     world_names,
 } from '/scripts/world-info.js';
 import { state } from './state.js';
-import { countProfileTokens, profileSelectionKey } from './profile-compaction.mjs';
+import { countProfileTokens, profileSelectionKey, PROFILE_COMPACTION_BATCH_SIZE } from './profile-compaction.mjs';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
 import { directoryContent, duplicateLines, findRoutedBook, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
 import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges } from './update-tracker.mjs';
@@ -1537,7 +1537,7 @@ export async function getProfileCompactionCandidates(settings) {
     return { candidates, skipped, chatId: scopeChatId, cardKey };
 }
 
-export async function cleanupProfileFields(settings, { transformContent = null, onProgress = null, selection = null } = {}) {
+export async function cleanupProfileFields(settings, { transformContent = null, transformBatch = null, batchSize = PROFILE_COMPACTION_BATCH_SIZE, onProgress = null, selection = null } = {}) {
     const scan = await getProfileCompactionCandidates(settings);
     if (selection && (selection.chatId !== state.chatId || selection.cardKey !== getCardArchiveKey())) throw Error('角色卡或聊天已切换，请重新选择档案。');
     const selected = selection ? new Map(selection.candidates.map(item => [item.id, item])) : null;
@@ -1548,13 +1548,29 @@ export async function cleanupProfileFields(settings, { transformContent = null, 
     };
     let changed = 0;
     const results = [];
+    const size = Math.max(1, Math.min(PROFILE_COMPACTION_BATCH_SIZE, Math.trunc(Number(batchSize)) || PROFILE_COMPACTION_BATCH_SIZE));
+    let batchContents = new Map();
     for (let index = 0; index < candidates.length; index++) {
         const candidate = candidates[index];
         assertScope();
+        if (transformBatch && index % size === 0) {
+            const batch = candidates.slice(index, index + size);
+            onProgress?.({ phase: 'batch', current: index + 1, total: candidates.length,
+                batch: Math.floor(index / size) + 1, batches: Math.ceil(candidates.length / size), names: batch.map(item => item.name) });
+            const transformed = await transformBatch(batch);
+            assertScope();
+            if (!Array.isArray(transformed) || transformed.length !== batch.length || transformed.some(content => typeof content !== 'string')) throw Error('本批精简结果不完整，本批档案未写入。');
+            // Finish validating the entire API result before saving its first role.
+            batchContents = new Map(batch.map((item, offset) => {
+                const content = sanitizeProfileContent(transformed[offset]);
+                if (!content || profileName({ content }) !== item.name) throw Error('本批角色档案身份不匹配，本批档案未写入。');
+                return [item.id, content];
+            }));
+        }
         const before = await countProfileTokens(candidate.original);
         onProgress?.({ current: index + 1, total: candidates.length, name: profileName({ content: candidate.content }) });
-        let content = candidate.content;
-        if (transformContent) {
+        let content = transformBatch ? batchContents.get(candidate.id) : candidate.content;
+        if (!transformBatch && transformContent) {
             const transformed = await transformContent(content, { current: index + 1, total: candidates.length, name: profileName({ content }) });
             if (transformed !== null && transformed !== undefined) content = sanitizeProfileContent(transformed) ?? content;
         }
