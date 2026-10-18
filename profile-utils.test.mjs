@@ -1,6 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeProfileContent, reconcileProfileExperienceCount, replaceProfilePlot, hasProfileFacts, PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES } from './profile-utils.mjs';
+import { sanitizeProfileContent, reconcileProfileExperienceCount, replaceProfilePlot, hasProfileFacts, PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName } from './profile-utils.mjs';
+
+test('赵冠宇 is excluded as a standalone profile but remains eligible as another character plot subject', () => {
+    assert.equal(isExcludedProfileName('赵冠宇'), true);
+    assert.equal(isExcludedProfileName(' 赵冠宇 '), true);
+    assert.equal(isExcludedProfileName('赵思琪'), false);
+    assert.match(PROFILE_RULES, /不得生成或更新其独立角色档案/);
+    assert.match(PROFILE_RULES, /其他角色的重要剧情可将赵冠宇作为必要事件参与者或关系对象提及/);
+    assert.match(PROFILE_RULES, /不要求删除既有数据/);
+});
 
 test('profile sanitizer preserves the requested factual fields and removes unrelated data', () => {
     const source = `[--角色档案开始--]
