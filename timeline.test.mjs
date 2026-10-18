@@ -73,6 +73,26 @@ test('timeline and relationship references stay enabled and constant after save 
     assert.equal(h.data().entries[4].disable, true, 'blue entries from other chats must be turned off');
 });
 
+test('refresh repairs server-side disabled references despite stale cache and remains idempotent', async () => {
+    const h = harness({
+        0: { uid: 0, key: ['CWB:故事时间线', 'chat'], content: '时间线', disable: true, enabled: false, constant: false },
+        1: { uid: 1, key: ['CWB:角色关系汇总', 'chat'], content: '关系', disable: true, enabled: false, constant: false },
+        2: { uid: 2, key: ['CWB:角色关系汇总', 'other'], content: '其他聊天', disable: true, constant: false },
+    });
+    h.context.loadWorldInfo = async () => ({ entries: {} });
+    await h.context.manageChatEntries({ enabled: false, worldbookTarget: 'custom', customWorldbook: 'elsewhere' });
+    for (const uid of [0, 1]) {
+        assert.equal(h.data().entries[uid].disable, false);
+        assert.equal(h.data().entries[uid].enabled, true);
+        assert.equal(h.data().entries[uid].constant, true);
+        assert.equal(h.data().entries[uid].selective, false);
+    }
+    assert.equal(h.data().entries[2].disable, true);
+    const saves = h.saves();
+    await h.context.manageChatEntries({ enabled: true, worldbookTarget: 'primary' });
+    assert.equal(h.saves(), saves);
+});
+
 test('first save and retry keep one entry; failed migration preserves originals', async () => {
     const h = harness();
     await h.context.saveTimeline({}, '[时间线.0]: 日期未知｜甲｜事件', 0, 19);
