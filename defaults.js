@@ -84,7 +84,7 @@ export function migrateBuiltinProfilePrompt(value, kind) {
     return kind === 'fullPrompt' ? cwbCompleteDefaultSettings.cwb_char_card_prompt : cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt;
 }
 
-export const TIMELINE_PROMPT_RULE_MARKER = '【CWB时间线格式规则 v0.11.1】';
+export const TIMELINE_PROMPT_RULE_MARKER = '【CWB时间线格式规则 v0.12.27】';
 export const TIMELINE_CONCISION_RULES = `仅记录当前主线中影响后续剧情的关键变化、决定及后果、关系转折、冲突结果或秘密揭露；日常、细节、重复内容及任务/系统/操作信息省略。不同故事线不拼接；仅合并同一故事线中有因果关系的事件，不因日期相同合并无关事件。已有事件仅在实质变化或出现新结果时更新。按时间排序，日期不明写“日期未知”，不得猜测；姓名用可确认的全名，不得编造。每条一句，保留关键行为、因果和结果，删去枝节；日期只出现一次，不得单独列出出场角色。只输出日期、事件字段的 JSON；无重要进展输出空数组。`;
 const TIMELINE_INCREMENTAL_TASK = `你是主线时间线整理器。本次只处理【本次新增聊天】，结合【已有时间线】去重和判断变化，不生成角色档案或续写故事。
 只输出合法 JSON：{"时间线":[{"日期":"YYYY-MM-DD或日期未知","事件":"关键事件"}]}。无重要进展时输出：{"时间线":[],"无新增原因":"无重要剧情进展"}。`;
@@ -99,7 +99,7 @@ export function ensureTimelinePromptRules(prompt) {
     if (text.startsWith(oldDefaultStart) && oldDefaultEndAt >= 0) {
         text = `${TIMELINE_INCREMENTAL_TASK}\n${text.slice(oldDefaultEndAt + oldDefaultEnd.length).trim()}`.trim();
     }
-    return `${text}\n\n${TIMELINE_PROMPT_RULE_MARKER}\n${TIMELINE_CONCISION_RULES}`;
+    return `${text}\n\n${TIMELINE_PROMPT_RULE_MARKER}\n${TIMELINE_CONCISION_RULES}\n【事件整理与展示约定】先识别完整事件，再合并同一事件的起因、推进、转折和结果，一事件一条；同日无关事件分条。每条一句简短描述，保留必要因果、核心关系变化及结果，删除对白、微小动作、环境描写和重复背景；重要事件不遗漏，不限制条数。内部传输仍使用上述 JSON，不输出展示用编号或缩进；插件按日期分组，展示为“「2024.9.1」 1.事件A”，下一行对齐编号“2.事件B”。月份和日期不补零，同一天仅显示一次日期，每天从1重新连续编号，日期未知归入「日期未知」。示例日期和事件不得照抄。`;
 }
 
 export const DEFAULT_TIMELINE_INCREMENTAL_PROMPT = ensureTimelinePromptRules(TIMELINE_INCREMENTAL_TASK);
