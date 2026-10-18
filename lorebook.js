@@ -977,7 +977,7 @@ export async function recordChatUpdateRange(startIndex, endIndex, totalMessages,
             totalMessages: Math.max(0, Number(totalMessages) || 0),
             completed: mergeRanges([...oldCompleted, [startIndex, endIndex]]),
             duplicates: mergeRanges([...oldDuplicates, ...overlaps]),
-            latest: `${new Date().toLocaleString()}｜${startIndex}-${endIndex}楼｜${latest}`,
+            latest: `${new Date().toLocaleString()} 第${startIndex + 1}-${endIndex + 1}楼：${latest}`,
         },
         updatedAt: new Date().toISOString(),
     };
@@ -1263,16 +1263,26 @@ export async function getModuleProgress() {
     if (!bookName) throw Error('当前角色卡未绑定主世界书，无法读取模块进度。');
     const chatId = state.chatId.replace(/ imported/g, '');
     const data = await readWorldbookFromServer(bookName);
-    const { entry, state: saved } = findSavedUpdateState(data, chatId);
+    const { entry, state: saved, duplicates } = findSavedUpdateState(data, chatId);
     const legacy = moduleProgressFromLegacy(data, chatId);
     const identityKey = getStableChatIdentityKey();
-    if (saved && entry && identityKey && !getKeys(entry).includes(identityKey)) {
+    const oldTrackers = findLegacyUpdateRecords(data, chatId);
+    const hasLegacy = oldTrackers.length || Object.values(data.entries).some(item => getKeys(item).includes('CWB:模块进度') && getKeys(item).includes(chatId));
+    const combined = saved ? mergeModuleProgress(saved.modules ?? {}, legacy) : legacy;
+    const oldTracking = trackingFromLegacy(oldTrackers);
+    const tracking = saved?.tracking ? {
+        ...saved.tracking,
+        completed: mergeRanges([...(saved.tracking.completed ?? []), ...oldTracking.completed]),
+        duplicates: mergeRanges([...(saved.tracking.duplicates ?? []), ...oldTracking.duplicates]),
+    } : oldTracking;
+    const next = { ...(saved ?? {}), modules: combined, tracking };
+    if (hasLegacy || (saved && entry && ((identityKey && !getKeys(entry).includes(identityKey))
+        || duplicates.length || entry.content !== formatUpdateState(next)))) {
         // One-time migration: bind existing chat-ID progress to SillyTavern's
         // stable chat metadata so a later rename/replacement can still find it.
-        await persistUpdateState(bookName, chatId, data, saved);
+        await persistUpdateState(bookName, chatId, data, next);
     }
-    if (saved) return mergeModuleProgress(saved.modules ?? {}, legacy);
-    return legacy;
+    return combined;
 }
 
 export async function getProgressRecoveryCandidates() {
@@ -1289,7 +1299,7 @@ export async function getProgressRecoveryCandidates() {
         const sourceChatId = keys.find(key => key !== 'CWB:更新状态' && !String(key).startsWith('CWB:聊天身份:'));
         if (!sourceChatId || candidates.has(sourceChatId)) continue;
         let saved;
-        try { saved = JSON.parse(entry.content); } catch { continue; }
+        try { saved = parseUpdateState(entry.content); } catch { continue; }
         if (!saved || typeof saved !== 'object' || Array.isArray(saved)) continue;
         const modules = saved.modules ?? {};
         const ranges = Object.values(modules).flatMap(module => module?.completed ?? []);
@@ -1314,23 +1324,11 @@ export async function copyProgressFromChat(sourceChatId) {
     const source = Object.values(data.entries).find(entry => getKeys(entry).includes('CWB:更新状态') && getKeys(entry).includes(sourceChatId));
     if (!source) throw Error('找不到所选来源的进度存档；原始存档未修改。');
     let saved;
-    try { saved = JSON.parse(source.content); }
+    try { saved = parseUpdateState(source.content); }
     catch { throw Error('所选来源的进度存档损坏，未复制任何内容。'); }
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw Error('所选来源的进度存档格式无效，未复制任何内容。');
-    const target = createWorldInfoEntry(bookName, data);
-    if (!target) throw Error('无法创建当前聊天的进度副本。');
-    const identityKey = getStableChatIdentityKey();
-    applyEntryPatch(target, {
-        comment: `CWB插件更新状态-${chatId}`,
-        content: source.content,
-        keys: ['CWB:更新状态', chatId, ...(identityKey ? [identityKey] : [])],
-        enabled: false, type: 'selective', preventRecursion: true,
-    });
-    await saveWorldInfo(bookName, data, true);
-    const persisted = await readWorldbookFromServer(bookName);
-    const stored = Object.values(persisted.entries).find(entry => Number(entry.uid) === Number(target.uid));
-    if (!stored || stored.content !== source.content || !getKeys(stored).includes(chatId)) throw Error('进度副本保存后回读不一致；来源存档仍保留，请刷新后检查。');
-    return { bookName, sourceChatId, chatId, uid: Number(target.uid) };
+    const stored = await persistUpdateState(bookName, chatId, data, saved);
+    return { bookName, sourceChatId, chatId, uid: Number(stored.uid) };
 }
 
 export async function recordModuleResult(module, start, end, error = null) {
@@ -1390,6 +1388,70 @@ function parseTrackingStart(keys, fallback = 0) {
     return tag ? Number(tag[1]) : Math.max(0, Number(fallback) || 0);
 }
 
+const PROGRESS_SECTION_NAMES = { profiles: '角色档案', timeline: '时间线', relationships: '角色关系' };
+
+function progressRangesText(ranges) {
+    return mergeRanges(ranges ?? []).map(([a, b]) => a === b ? String(a + 1) : `${a + 1}-${b + 1}`).join('、') || '无';
+}
+
+function parseProgressRanges(text) {
+    if (text === '无' || text === '') return [];
+    if (typeof text !== 'string') throw Error('楼层范围必须填写文字，例如“1-30、41-60”。');
+    return mergeRanges(text.split(/[、，,]/).map(part => {
+        const match = part.trim().match(/^(\d+)\s*(?:[-—至]\s*(\d+))?$/);
+        const start = Number(match?.[1]), end = Number(match?.[2] ?? match?.[1]);
+        if (!match || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) throw Error('楼层范围无效，请填写“1-30、41-60”或“无”。');
+        return [start - 1, end - 1];
+    }));
+}
+
+function formatUpdateState(saved) {
+    const result = {
+        存档版本: 3,
+        楼层说明: '从1楼开始；修改各项“已保存楼层”即可调整进度，多个区间用顿号分隔，无记录填“无”。',
+    };
+    for (const [key, label] of Object.entries(PROGRESS_SECTION_NAMES)) {
+        const module = saved.modules?.[key] ?? {};
+        result[label] = { 已保存楼层: progressRangesText(module.completed), 失败楼层: progressRangesText(module.failed) };
+        if (module.latest) result[label].最近更新 = {
+            起始楼层: module.latest.start + 1, 结束楼层: module.latest.end + 1,
+            时间: module.latest.time ?? '', 错误: module.latest.error ?? null,
+        };
+    }
+    const tracking = saved.tracking ?? {};
+    result.更新记录 = {
+        起始追踪楼层: (tracking.startIndex ?? 0) + 1,
+        聊天总楼层: tracking.totalMessages ?? 0,
+        已保存楼层: progressRangesText(tracking.completed),
+        重复更新楼层: progressRangesText(tracking.duplicates),
+        最近更新: tracking.latest ?? '',
+    };
+    result.保存时间 = saved.updatedAt ?? '';
+    return JSON.stringify(result, null, 2);
+}
+
+function parseUpdateState(content) {
+    const parsed = JSON.parse(content);
+    if (parsed?.存档版本 !== 3) return parsed;
+    const modules = {};
+    for (const [key, label] of Object.entries(PROGRESS_SECTION_NAMES)) {
+        const row = parsed[label];
+        if (!row || !Object.hasOwn(row, '已保存楼层') || !Object.hasOwn(row, '失败楼层')) throw Error(`缺少${label}的楼层字段。`);
+        modules[key] = { completed: parseProgressRanges(row.已保存楼层), failed: parseProgressRanges(row.失败楼层) };
+        if (row.最近更新) modules[key].latest = {
+            start: row.最近更新.起始楼层 - 1, end: row.最近更新.结束楼层 - 1,
+            time: row.最近更新.时间, error: row.最近更新.错误,
+        };
+    }
+    const tracking = parsed.更新记录;
+    if (!tracking || !Number.isSafeInteger(tracking.起始追踪楼层) || tracking.起始追踪楼层 < 1
+        || !Number.isSafeInteger(tracking.聊天总楼层) || tracking.聊天总楼层 < 0) throw Error('更新记录楼层格式无效。');
+    return { version: 2, modules, updatedAt: parsed.保存时间, tracking: {
+        startIndex: tracking.起始追踪楼层 - 1, totalMessages: tracking.聊天总楼层,
+        completed: parseProgressRanges(tracking.已保存楼层), duplicates: parseProgressRanges(tracking.重复更新楼层), latest: tracking.最近更新 ?? '',
+    } };
+}
+
 function findSavedUpdateState(data, chatId) {
     const identityKey = getStableChatIdentityKey();
     const matches = Object.values(data?.entries ?? {}).filter(entry => {
@@ -1399,7 +1461,7 @@ function findSavedUpdateState(data, chatId) {
     if (!matches.length) return { entry: null, state: null, duplicates: [] };
     const states = matches.map(entry => {
         let saved;
-        try { saved = JSON.parse(entry.content); }
+        try { saved = parseUpdateState(entry.content); }
         catch { throw Error('更新状态存档损坏，无法确认进度；原始存档已保留，请先导出备份。'); }
         if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw Error('更新状态存档格式无效，原始存档已保留。');
         return saved;
@@ -1407,7 +1469,11 @@ function findSavedUpdateState(data, chatId) {
     const state = states.slice(1).reduce((merged, saved) => ({
         ...merged,
         ...saved,
-        modules: mergeModuleProgress(merged.modules ?? {}, saved.modules ?? {}),
+        modules: mergeModuleProgress(Object.fromEntries(Object.keys(MODULE_LABELS).map(key => [key, {
+            completed: mergeRanges([...(merged.modules?.[key]?.completed ?? []), ...(saved.modules?.[key]?.completed ?? [])]),
+            failed: mergeRanges([...(merged.modules?.[key]?.failed ?? []), ...(saved.modules?.[key]?.failed ?? [])]),
+            latest: saved.modules?.[key]?.latest ?? merged.modules?.[key]?.latest,
+        }])), {}),
         tracking: {
             ...(merged.tracking ?? {}), ...(saved.tracking ?? {}),
             completed: mergeRanges([...(merged.tracking?.completed ?? []), ...(saved.tracking?.completed ?? [])]),
@@ -1494,8 +1560,8 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
     const target = matches.find(entry => getKeys(entry).includes('CWB:更新状态')) || matches[0] || createWorldInfoEntry(bookName, data);
     if (!target) throw Error('无法创建统一更新状态条目。');
     const canonical = {
-        comment: `CWB插件更新状态-${chatId}`,
-        content: JSON.stringify({ version: 2, numbering: 'zero-based inclusive', ...nextState }),
+        comment: '插件更新进度',
+        content: formatUpdateState(nextState),
         keys: ['CWB:更新状态', chatId, ...(identityKey ? [identityKey] : [])],
         enabled: false,
         type: 'selective',
