@@ -1,5 +1,5 @@
 import { parseTimelineRecords, formatTimelineRecords } from './timeline-utils.mjs';
-import { sanitizeProfileContent } from './profile-utils.mjs';
+import { sanitizeProfileContent, preserveProfilePlotHistory, assertProfilePlotHistory, isExcludedProfileName } from './profile-utils.mjs';
 import { applyModuleResult, intersectRanges, mergeModuleProgress, MODULE_LABELS } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
 import { extension_settings, getContext } from '/scripts/extensions.js';
@@ -74,7 +74,7 @@ async function migrateProfileOwnershipToCard(settings, names = null) {
         ...await profileArchiveBooks(settings, getTargetWorldbook(settings)),
         ...routedBooks,
     ].filter(name => name && world_names.includes(name)))];
-    const rows = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName) }));
+    const rows = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName, { fresh: true }) }));
     const candidatesByName = new Map();
     for (const { bookName, entries } of rows) for (const entry of entries) {
         const keys = getKeys(entry);
@@ -110,7 +110,7 @@ async function migrateProfileOwnershipToCard(settings, names = null) {
         // be keys on a card-owned profile. Update the existing UID in place.
         if (!patches.length) continue;
         await patchEntries(bookName, patches);
-        const persisted = await getEntries(bookName);
+        const persisted = await getEntries(bookName, { fresh: true });
         for (const patch of patches) {
             const stored = persisted.find(entry => Number(entry.uid) === Number(patch.uid));
             if (!stored || JSON.stringify(getKeys(stored)) !== JSON.stringify(patch.keys)) {
@@ -215,7 +215,7 @@ async function findCardProfile(settings, name, marker, { protagonist = false } =
     const preferredBook = protagonist ? primary : await routeWorldbook(settings, name);
     const books = protagonist ? [primary].filter(Boolean) : await profileArchiveBooks(settings, preferredBook);
     const rows = await mapWithConcurrency(books, 4, async bookName => ({
-        bookName, entries: await getEntries(bookName),
+        bookName, entries: await getEntries(bookName, { fresh: true }),
     }));
     const candidates = rows.flatMap(({ bookName, entries }) => entries
         .filter(entry => getKeys(entry).includes(marker)
@@ -321,9 +321,9 @@ export async function routeSummary(settings = {}) {
     return Object.entries(routes).map(([book, route]) => `${book}: ${route.names.slice(0, 30).join('、') || '目录已生成，暂无角色'}`).join('\n') || '当前没有已生成的目录。';
 }
 
-export async function getEntries(bookName) {
+export async function getEntries(bookName, { fresh = false } = {}) {
     if (!bookName) return [];
-    const data = await loadWorldInfo(bookName);
+    const data = fresh ? await readWorldbookFromServer(bookName) : await loadWorldInfo(bookName);
     if (!data?.entries) return [];
     return Object.values(data.entries).map(entry => ({
         ...entry,
@@ -348,17 +348,18 @@ function applyEntryPatch(target, patch) {
 }
 
 export async function patchEntries(bookName, patches) {
-    const data = await loadWorldInfo(bookName);
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     for (const patch of patches) {
         const target = data.entries[patch.uid] ?? Object.values(data.entries).find(entry => Number(entry.uid) === Number(patch.uid));
-        if (target) applyEntryPatch(target, patch);
+        if (!target) throw new Error(`世界书《${bookName}》中的 UID ${patch.uid} 已不存在，停止覆盖。`);
+        applyEntryPatch(target, patch);
     }
     await saveWorldInfo(bookName, data, true);
 }
 
 export async function createEntries(bookName, entries) {
-    const data = await loadWorldInfo(bookName);
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     for (const entry of entries) {
         const target = createWorldInfoEntry(bookName, data);
@@ -369,7 +370,7 @@ export async function createEntries(bookName, entries) {
 }
 
 export async function deleteEntries(bookName, uids) {
-    const data = await loadWorldInfo(bookName);
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     for (const uid of uids) {
         delete data.entries[uid];
@@ -779,7 +780,44 @@ export async function deleteGeneratedContent(preview, onProgress) {
     return { deleted, byType };
 }
 
-export async function saveCharacterDescription(settings, characterName, content, startFloor, endFloor) {
+async function persistProfileWithHistory(bookName, existing, entryData, { returnReceipt = false } = {}) {
+    // This baseline is authoritative even when the prompt did not contain this
+    // character, incremental mode is off, or another update arrived during AI.
+    const data = await readWorldbookFromServer(bookName);
+    const owner = entryData.keys.find(key => key.startsWith('CWB:角色卡:'));
+    const marker = entryData.keys[0];
+    const name = entryData.keys.at(-1);
+    let target = existing && Object.values(data.entries).find(entry => Number(entry.uid) === Number(existing.uid));
+    if (existing && !target) throw Error(`角色 ${name} 的原档案 UID ${existing.uid} 已变化，停止覆盖，请重新读取。`);
+    target ??= Object.values(data.entries).find(entry => getKeys(entry).includes(owner)
+        && getKeys(entry).includes(marker) && profileName(entry) === name);
+    if (target && (profileName(target) !== name || !getKeys(target).includes(marker)
+        || getKeys(target).some(key => String(key).startsWith('CWB:角色卡:') && key !== owner))) {
+        throw Error(`角色 ${name} 的目标档案身份已变化，停止覆盖。`);
+    }
+    const baseline = target?.content || '';
+    if (baseline && !sanitizeProfileContent(baseline)) {
+        throw Error(`角色 ${name} 的旧档案格式无法安全识别，已保留原内容并停止覆盖。`);
+    }
+    const content = preserveProfilePlotHistory(entryData.content, baseline ? [baseline] : []);
+    const history = assertProfilePlotHistory(content, baseline ? [baseline] : []);
+    target ??= createWorldInfoEntry(bookName, data);
+    if (!target) throw Error(`角色 ${name} 无法创建档案条目。`);
+    applyEntryPatch(target, { ...entryData, content });
+    await saveWorldInfo(bookName, data, true);
+    const persisted = await readWorldbookFromServer(bookName);
+    const stored = Object.values(persisted.entries).find(entry => Number(entry.uid) === Number(target.uid));
+    if (!stored || stored.content !== content || !getKeys(stored).includes(owner) || !getKeys(stored).includes(marker)) {
+        const error = new Error(`角色 ${name} 的档案写入后回读不一致，未确认成功；请检查其他页面是否同时修改世界书。`);
+        error.cwbHistoryGuard = { phase: 'readback', previous: history.previous, final: history.final };
+        throw error;
+    }
+    assertProfilePlotHistory(stored.content, baseline ? [baseline] : []);
+    return returnReceipt ? { name, bookName, uid: Number(stored.uid), content, history } : name;
+}
+
+export async function saveCharacterDescription(settings, characterName, content, startFloor, endFloor, options = {}) {
+    if (isExcludedProfileName(characterName)) return null;
     const safeName = sanitizeName(characterName);
     const marker = 'CWB:自动档案';
     await migrateProfileOwnershipToCard(settings, [safeName]);
@@ -787,7 +825,7 @@ export async function saveCharacterDescription(settings, characterName, content,
     const existing = candidates[0];
     const bookName = existing?.bookName || preferredBook;
     if (!bookName) return null;
-    const entries = await getEntries(bookName);
+    const entries = await getEntries(bookName, { fresh: true });
     const current = existing && entries.find(entry => Number(entry.uid) === Number(existing.uid));
     const entryData = {
         comment: `动态-${safeName}`,
@@ -800,16 +838,17 @@ export async function saveCharacterDescription(settings, characterName, content,
         position: 4,
         role: 0,
     };
-    if (current) await patchEntries(bookName, [{ uid: current.uid, ...entryData }]);
-    else {
+    if (!current) {
         const depths = entries.filter(entry => getKeys(entry).includes(cardKey)).map(entry => Number(entry.depth)).filter(Number.isFinite);
-        await createEntries(bookName, [{ ...entryData, depth: Math.max(7000, ...depths) + 1 }]);
+        entryData.depth = Math.max(7000, ...depths) + 1;
     }
+    const saved = await persistProfileWithHistory(bookName, existing, entryData, options);
     if (candidates.length > 1) notify('warning', `角色“${safeName}”已有 ${candidates.length} 份动态档案；本次只更新《${bookName}》UID ${current?.uid ?? '新建条目'}，其他重复项保留，未合并或删除。`);
-    return safeName;
+    return saved;
 }
 
-export async function saveUserDescription(settings, userName, content, startFloor, endFloor) {
+export async function saveUserDescription(settings, userName, content, startFloor, endFloor, options = {}) {
+    if (isExcludedProfileName(userName)) return null;
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存主角档案。');
     const safeName = sanitizeName(userName || '主角');
@@ -826,10 +865,9 @@ export async function saveUserDescription(settings, userName, content, startFloo
         order: 10001,
         preventRecursion: true,
     };
-    if (existing) await patchEntries(existing.bookName, [{ uid: existing.uid, ...entryData }]);
-    else await createEntries(bookName, [entryData]);
+    const saved = await persistProfileWithHistory(existing?.bookName || bookName, existing, entryData, options);
     if (candidates.length > 1) notify('warning', `当前角色卡已有 ${candidates.length} 份主角动态档案；本次只更新《${existing.bookName}》UID ${existing.uid}，其他重复项保留，未合并或删除。`);
-    return safeName;
+    return saved;
 }
 
 function timelineKeys(entry) {
@@ -846,7 +884,7 @@ async function writeTimeline(content, startFloor, endFloor) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存故事时间线。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = structuredClone(await loadWorldInfo(bookName));
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
     if (!existing.length && content === undefined) return [];
@@ -1050,7 +1088,6 @@ async function updateRosterForBook(bookName, processedNames, startFloor, endFloo
 export async function getTriggeredOldProfiles(settings, messages) {
     await migrateProfileOwnershipToCard(settings);
     await migrateProfileOwnershipToCard(settings, [getContext()?.name1 || '主角']);
-    if (!settings.incremental) return [];
     const cardKey = getCardArchiveKey();
     const haystack = messages.map(message => `${message.name ?? ''}\n${message.message ?? ''}`).join('\n').toLowerCase();
     const preferredBook = getTargetWorldbook(settings);
@@ -1058,12 +1095,12 @@ export async function getTriggeredOldProfiles(settings, messages) {
     const profiles = [];
     const masterBook = getPrimaryWorldbook();
     if (masterBook) {
-        const masterEntries = await getEntries(masterBook);
+        const masterEntries = await getEntries(masterBook, { fresh: true });
         const userProfile = masterEntries.find(entry => getKeys(entry).includes('CWB:主角档案')
             && getKeys(entry).includes(cardKey));
         if (userProfile) profiles.push(userProfile.content);
     }
-    let entriesByBook = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName) }));
+    let entriesByBook = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName, { fresh: true }) }));
     const mentionedLegacyNames = [...new Set(entriesByBook.flatMap(({ entries }) => entries
         .filter(entry => getKeys(entry).includes('CWB:自动档案')
             && !getKeys(entry).some(key => String(key).startsWith('CWB:角色卡:'))
@@ -1072,7 +1109,7 @@ export async function getTriggeredOldProfiles(settings, messages) {
         .map(profileName)))];
     if (mentionedLegacyNames.length) {
         await migrateProfileOwnershipToCard(settings, mentionedLegacyNames);
-        entriesByBook = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName) }));
+        entriesByBook = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName, { fresh: true }) }));
     }
     const candidates = entriesByBook.flatMap(({ bookName, entries }) => entries.filter(entry => {
         const keys = getKeys(entry);
@@ -1199,7 +1236,7 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存角色关系。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = structuredClone(await loadWorldInfo(bookName));
+    const data = await readWorldbookFromServer(bookName);
     if (!data?.entries) throw new Error('无法读取主世界书。');
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId));
     const target = existing[0] || createWorldInfoEntry(bookName, data);
@@ -1310,8 +1347,15 @@ export async function recordModuleResult(module, start, end, error = null) {
     return modules;
 }
 
-export async function verifyProfileContent(settings, name, content, isUser = false) {
+export async function verifyProfileContent(settings, name, content, isUser = false, receipt = null) {
     const marker = isUser ? 'CWB:主角档案' : 'CWB:自动档案';
+    if (receipt) {
+        const data = await readWorldbookFromServer(receipt.bookName);
+        const stored = Object.values(data.entries).find(entry => Number(entry.uid) === Number(receipt.uid));
+        if (stored) assertProfilePlotHistory(stored.content, [content]);
+        if (stored?.content === content && getKeys(stored).includes(getCardArchiveKey()) && getKeys(stored).includes(marker)) return;
+        throw Error(`角色 ${name} 的档案在后续模块写入后发生变化，未确认更新成功。`);
+    }
     const { cardKey, preferredBook, candidates } = await findCardProfile(settings, sanitizeName(name), marker, { protagonist: isUser });
     const books = [...new Set([candidates[0]?.bookName, preferredBook].filter(Boolean))];
     for (const bookName of books) {
