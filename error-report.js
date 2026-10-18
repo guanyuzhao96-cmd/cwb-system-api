@@ -1,4 +1,4 @@
-const REPORT_VERSION = '0.12.4';
+const REPORT_VERSION = '0.12.22';
 let latestReportJson = null;
 let latestReportName = null;
 
@@ -7,6 +7,7 @@ function errorDetails(error) {
     return {
         name: String(error?.name || 'Error'),
         message: String(error?.message || error || '未知错误').slice(0, 2000),
+        historyGuard: error?.cwbHistoryGuard ?? undefined,
         causeName: cause?.name ? String(cause.name).slice(0, 120) : undefined,
         causeMessage: cause?.message ? String(cause.message).slice(0, 2000) : undefined,
         stack: error?.stack ? String(error.stack).slice(0, 5000) : undefined,
