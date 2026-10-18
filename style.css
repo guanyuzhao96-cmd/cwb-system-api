@@ -146,6 +146,12 @@
     .cwb-section > summary > span:not(.cwb-section-title) { flex-basis:100%; }
     .cwb-secondary-actions, .cwb-grid { grid-template-columns:minmax(0,1fr); }
 }
+.cwb-compaction-dialog { width:min(620px,94vw); max-height:85dvh; overflow:auto; box-sizing:border-box; border:1px solid var(--SmartThemeBorderColor,#777); border-radius:12px; padding:18px; color:var(--SmartThemeBodyColor,#eee); background:var(--SmartThemeBlurTintColor,#222); }
+.cwb-compaction-dialog::backdrop { background:#0009; }
+.cwb-compaction-dialog .cwb-compaction-row { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #8885; }
+.cwb-compaction-dialog .cwb-compaction-row > span:first-of-type { flex:1; min-width:0; overflow-wrap:anywhere; }
+.cwb-compaction-dialog small { display:block; opacity:.75; }
+.cwb-compaction-dialog .cwb-secondary-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 @media(prefers-reduced-motion:no-preference) {
     .cwb-panel .menu_button, .cwb-progress-tile { transition:background-color .15s,border-color .15s; }
 }

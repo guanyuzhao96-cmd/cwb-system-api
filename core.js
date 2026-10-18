@@ -36,12 +36,13 @@ import { formatRanges, overlappingRanges, missingRanges } from './update-tracker
 
 let autoTimer = null;
 
-export async function compactRoleProfiles(settings, onProgress = () => {}) {
+export async function compactRoleProfiles(settings, onProgress = () => {}, selection = null) {
     const release = acquireOperationLock(state, '角色档案剧情精简');
     state.repairing = true;
     try {
         refreshChatState();
         return await cleanupProfileFields(settings, {
+            selection,
             onProgress,
             transformContent: async (content, meta) => {
                 const profile = parseCustomFormat(content);

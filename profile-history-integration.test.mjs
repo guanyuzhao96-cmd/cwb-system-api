@@ -34,6 +34,7 @@ async function harness(events = [oldEvent]) {
         fetch: async () => ({ ok: true, json: async () => structuredClone(disk) }),
     });
     const mocks = {
+        '/scripts/tokenizers.js': { getTokenCountAsync: async text => text.length },
         '/script.js': { getRequestHeaders: () => ({}), generateRaw: async options => { requests.push(options); duringAI(); return nextResponse; } },
         '/scripts/extensions.js': { getContext: () => contextData, extension_settings: {} },
         '/scripts/world-info.js': { world_names: ['主世界书'], selected_world_info: [], world_info: {},
@@ -46,7 +47,14 @@ async function harness(events = [oldEvent]) {
         if (modules.has(id)) return modules.get(id);
         const mock = mocks[id];
         const mod = mock ? new vm.SyntheticModule(Object.keys(mock), function () { for (const [key, value] of Object.entries(mock)) this.setExport(key, value); }, { context: sandbox, identifier: id })
-            : new vm.SourceTextModule(readFileSync(id, 'utf8'), { context: sandbox, identifier: id });
+            : new vm.SourceTextModule(readFileSync(id, 'utf8'), { context: sandbox, identifier: id,
+                importModuleDynamically: async path => {
+                    const imported = await load(path);
+                    if (imported.status === 'unlinked') await imported.link(() => { throw Error('Unexpected tokenizer dependency'); });
+                    if (imported.status === 'linked') await imported.evaluate();
+                    return imported;
+                },
+            });
         modules.set(id, mod);
         return mod;
     }
@@ -59,6 +67,36 @@ async function harness(events = [oldEvent]) {
         state: modules.get(resolve(root, 'state.js')).namespace.state, settings, contextData, requests,
         data: () => disk, duringAI: fn => { duringAI = fn; }, reply: content => { nextResponse = content; } };
 }
+
+test('compaction writes only selected profiles and reports verified token totals', supported, async () => {
+    const h = await harness([oldEvent, newEvent]);
+    h.state.chatId = h.contextData.chatId;
+    h.data().entries[2] = { ...structuredClone(h.data().entries[1]), uid: 2, content: profile([newEvent]).replace('角色甲', '角色乙') };
+    const untouched = h.data().entries[2].content;
+    const preview = await h.lorebook.getProfileCompactionCandidates(h.settings);
+    assert.equal(preview.candidates.length, 2);
+    const selected = preview.candidates.find(item => item.uid === 1);
+    h.reply(JSON.stringify({ 剧情: ['2025-09-03｜甲揭露真相，终止合作'] }));
+    const result = await h.core.compactRoleProfiles(h.settings, () => {}, { ...preview, candidates: [selected] });
+    assert.equal(h.requests.length, 1);
+    assert.equal(result.results.length, 1);
+    assert.equal(result.before, selected.original.length);
+    assert.equal(result.after, h.data().entries[1].content.length);
+    assert.ok(result.after < result.before);
+    assert.equal(h.data().entries[2].content, untouched);
+    assert.equal(h.data().entries[9].content, '手工资料保留');
+});
+
+test('compaction rejects changed selection and an empty selection never invokes AI', supported, async () => {
+    const h = await harness();
+    h.state.chatId = h.contextData.chatId;
+    const preview = await h.lorebook.getProfileCompactionCandidates(h.settings);
+    const empty = await h.core.compactRoleProfiles(h.settings, () => {}, { ...preview, candidates: [] });
+    assert.equal(empty.results.length, 0);
+    h.data().entries[1].content = profile([newEvent]);
+    await assert.rejects(h.core.compactRoleProfiles(h.settings, () => {}, preview), /档案已发生变化/);
+    assert.equal(h.requests.length, 0);
+});
 
 test('save entry point preserves server history when no full name triggered an old profile', supported, async () => {
     const h = await harness();

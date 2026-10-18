@@ -12,6 +12,7 @@ import {
     world_names,
 } from '/scripts/world-info.js';
 import { state } from './state.js';
+import { countProfileTokens, profileSelectionKey } from './profile-compaction.mjs';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
 import { directoryContent, duplicateLines, findRoutedBook, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
 import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges } from './update-tracker.mjs';
@@ -1512,8 +1513,9 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
 }
 
 
-export async function cleanupProfileFields(settings, { transformContent = null, onProgress = null } = {}) {
-    const chatId = state.chatId.replace(/ imported/g, '');
+export async function getProfileCompactionCandidates(settings) {
+    const scopeChatId = state.chatId;
+    const chatId = scopeChatId.replace(/ imported/g, '');
     const primary = getPrimaryWorldbook();
     const cardKey = getCardArchiveKey();
     const books = await profileArchiveBooks(settings, getTargetWorldbook(settings));
@@ -1521,25 +1523,51 @@ export async function cleanupProfileFields(settings, { transformContent = null, 
     let skipped = 0;
     const candidates = [];
     for (const bookName of targets) {
-        const entries = await getEntries(bookName);
+        const entries = await getEntries(bookName, { fresh: true });
         for (const entry of entries) {
             const keys = getKeys(entry);
             if ((!keys.includes(chatId) && !keys.includes(cardKey)) || (!keys.includes('CWB:自动档案') && !keys.includes('CWB:主角档案'))) continue;
             const content = sanitizeProfileContent(entry.content);
             if (content === null) { skipped++; continue; }
-            candidates.push({ bookName, uid: entry.uid, original: entry.content, content });
+            candidates.push({ bookName, uid: entry.uid, original: entry.content, content,
+                id: profileSelectionKey(bookName, entry.uid), name: profileName(entry) || '未命名角色' });
         }
     }
+    if (scopeChatId !== state.chatId || cardKey !== getCardArchiveKey()) throw Error('读取期间切换了角色卡或聊天，请重新选择档案。');
+    return { candidates, skipped, chatId: scopeChatId, cardKey };
+}
+
+export async function cleanupProfileFields(settings, { transformContent = null, onProgress = null, selection = null } = {}) {
+    const scan = await getProfileCompactionCandidates(settings);
+    if (selection && (selection.chatId !== state.chatId || selection.cardKey !== getCardArchiveKey())) throw Error('角色卡或聊天已切换，请重新选择档案。');
+    const selected = selection ? new Map(selection.candidates.map(item => [item.id, item])) : null;
+    const candidates = scan.candidates.filter(item => !selected || selected.has(item.id));
+    if (selected && (candidates.length !== selected.size || candidates.some(item => item.original !== selected.get(item.id).original))) throw Error('选中的档案已发生变化，请重新打开选择窗口。');
+    const assertScope = () => {
+        if (scan.chatId !== state.chatId || scan.cardKey !== getCardArchiveKey()) throw Error('精简期间切换了角色卡或聊天，已停止写入。');
+    };
     let changed = 0;
+    const results = [];
     for (let index = 0; index < candidates.length; index++) {
         const candidate = candidates[index];
+        assertScope();
+        const before = await countProfileTokens(candidate.original);
         onProgress?.({ current: index + 1, total: candidates.length, name: profileName({ content: candidate.content }) });
         let content = candidate.content;
         if (transformContent) {
             const transformed = await transformContent(content, { current: index + 1, total: candidates.length, name: profileName({ content }) });
             if (transformed !== null && transformed !== undefined) content = sanitizeProfileContent(transformed) ?? content;
         }
-        if (content === candidate.original) continue;
+        const after = await countProfileTokens(content);
+        assertScope();
+        if (content === candidate.original) {
+            results.push({ ...candidate, before, after, changed: false });
+            onProgress?.({ current: index + 1, total: candidates.length, name: candidate.name, results: [...results] });
+            continue;
+        }
+        const fresh = await getEntries(candidate.bookName, { fresh: true });
+        if (fresh.find(entry => String(entry.uid) === String(candidate.uid))?.content !== candidate.original) throw Error(`角色 ${candidate.name} 的档案已被修改，已停止写入。`);
+        assertScope();
         const patches = [{ uid: candidate.uid, content }];
         await patchEntries(candidate.bookName, patches);
         const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: candidate.bookName }), cache: 'no-cache' });
@@ -1547,6 +1575,8 @@ export async function cleanupProfileFields(settings, { transformContent = null, 
         const stored = await response.json();
         if (stored?.entries?.[candidate.uid]?.content !== content) throw Error(`《${candidate.bookName}》UID ${candidate.uid} 精简档案回读不一致；停止后续处理。`);
         changed++;
+        results.push({ ...candidate, before, after, changed: true });
+        onProgress?.({ current: index + 1, total: candidates.length, name: candidate.name, results: [...results] });
     }
-    return { changed, skipped };
+    return { changed, skipped: scan.skipped, results, before: results.reduce((sum, item) => sum + item.before, 0), after: results.reduce((sum, item) => sum + item.after, 0) };
 }

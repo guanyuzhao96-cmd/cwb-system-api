@@ -15,6 +15,8 @@ import { convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, del
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { escapeHtml, notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
+import { getProfileCompactionCandidates } from './lorebook.js';
+import { openProfileCompactionDialog } from './profile-compaction-dialog.js';
 
 const defaults = {
     enabled: false,
@@ -483,13 +485,13 @@ function bindUi() {
         }
     });
     $('#cwb-cleanup-profiles').on('click', function () {
-        runButton($(this), '精简中…', async () => {
+        runButton($(this), '读取档案中…', async () => {
             refreshChatState();
-            const result = await compactRoleProfiles(settings(), ({ current, total, name }) => {
-                $('#cwb-status').text(`AI 精简角色剧情 ${current}/${total}：${name || '未命名角色'}…`);
-                $(this).text(`精简剧情 ${current}/${total}…`);
+            await openProfileCompactionDialog({
+                load: () => getProfileCompactionCandidates(settings()),
+                compact: (selection, onProgress) => compactRoleProfiles(settings(), onProgress, selection),
+                escapeHtml,
             });
-            $('#cwb-status').text(`精简完成：更新 ${result.changed} 条档案；未识别格式跳过 ${result.skipped} 条。已按时间合并同一剧情线并过滤琐事；其他栏目保持原样。`);
         });
     });
     $('#cwb-delete-generated').on('click', async function () {
