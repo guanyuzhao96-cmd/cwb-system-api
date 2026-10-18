@@ -28,12 +28,12 @@ test('profile sanitizer preserves the requested factual fields and removes unrel
     assert.match(cleaned, /发现赵冠宇说谎并保存证据/);
     assert.match(cleaned, /角色已知信息\.0/);
     assert.match(cleaned, /角色未知信息\.0/);
-    assert.match(cleaned, /性经历人员\.0/);
+    assert.match(cleaned, /性经历人员\]:林思雨/);
     assert.match(cleaned, /性经历人数]:3/, 'total count is not recalculated from a partial names list');
     assert.match(cleaned, /额外补充\.0/);
     assert.doesNotMatch(cleaned, /当前状态|长期目标|好感|与主角次数|人际关系|后宫成员|重要物品|已解锁能力/);
-    assert.match(cleaned, /性经历人员\.0]:林思雨/);
-    assert.doesNotMatch(cleaned, /性经历人员\.1/, 'duplicate partners are deduplicated');
+    assert.match(cleaned, /性经历人员\]:林思雨/);
+    assert.doesNotMatch(cleaned, /性经历人员\.\d+/, 'partners are stored in one field');
     assert.equal(hasProfileFacts(cleaned), true);
 });
 
@@ -45,8 +45,8 @@ test('profile rules require strong plot relevance and omit unrelated events', ()
     assert.match(PROFILE_RULES, /揭露会实质改变重要选择、核心关系、重大冲突或主线走向/);
     assert.match(PROFILE_RULES, /若角色得知后不会改变其行动、关系或关键剧情，就不要记录/);
     assert.match(PROFILE_RULES, /未成年、年龄不明.*一律不记/);
-    assert.match(PROFILE_RULES, /旧档案人数\+本轮新确认/);
-    assert.match(PROFILE_RULES, /旧档案4人.*结果必须为5人/);
+    assert.match(PROFILE_RULES, /旧档案人数\+新增不同对象数/);
+    assert.match(PROFILE_RULES, /旧档案4人.*结果为5/);
     assert.match(PROFILE_RULES, /完整最终档案快照，不得只输出变化片段/);
     assert.match(PROFILE_RULES, /不得只选最近一两件.*不得漏掉/s);
     assert.match(PROFILE_RULES, /每条最多128字/);
@@ -81,7 +81,7 @@ test('profile rules explicitly restrict known and unknown facts to plot-critical
 test('sanitizing a profile never replaces the stored experience total with list length', () => {
     const cleaned = sanitizeProfileContent('[--角色档案开始--]\n[姓名]:甲\n[性经历人员.0]:乙\n[性经历人数]:7\n[--角色档案结束--]');
     assert.match(cleaned, /性经历人数]:7/);
-    assert.match(cleaned, /性经历人员\.0]:乙/);
+    assert.match(cleaned, /性经历人员\]:乙/);
 });
 
 test('incremental experience count adds only newly named people to the old baseline', () => {
@@ -89,9 +89,9 @@ test('incremental experience count adds only newly named people to the old basel
     const incremental = '[--角色档案开始--]\n[档案类型]:角色\n[姓名]:甲\n[性经历人员.0]:丙\n[性经历人员.1]:丙\n[性经历人数]:99\n[剧情.0]:确认与丙发生关系\n[--角色档案结束--]';
     const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
     assert.match(reconciled, /性经历人数]:6/);
-    assert.match(reconciled, /性经历人员\.0]:乙/);
-    assert.match(reconciled, /性经历人员\.1]:丙/);
-    assert.doesNotMatch(reconciled, /性经历人员\.2/);
+    assert.match(reconciled, /性经历人员\]:乙、丙/);
+    assert.doesNotMatch(reconciled, /性经历人员\.\d+/);
+
 });
 
 test('incremental experience count does not increment for an already known partner', () => {
@@ -99,7 +99,7 @@ test('incremental experience count does not increment for an already known partn
     const incremental = '[--角色档案开始--]\n[姓名]:甲\n[性经历人员.0]:乙\n[性经历人数]:6\n[--角色档案结束--]';
     const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
     assert.match(reconciled, /性经历人数]:5/);
-    assert.equal((reconciled.match(/\[性经历人员\.\d+\]/g) ?? []).length, 1);
+    assert.equal((reconciled.match(/\[性经历人员\]/g) ?? []).length, 1);
 });
 
 test('incremental experience count deduplicates an existing partner when relationship details change', () => {
@@ -107,8 +107,8 @@ test('incremental experience count deduplicates an existing partner when relatio
     const incremental = '[--角色档案开始--]\n[姓名]:甲\n[性经历人员.0]:乙｜已确认性交\n[性经历人数]:5\n[剧情.0]:关系状态变化\n[--角色档案结束--]';
     const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
     assert.match(reconciled, /性经历人数]:4/);
-    assert.match(reconciled, /性经历人员\.0]:乙｜旧关系状态；已确认性交/);
-    assert.doesNotMatch(reconciled, /性经历人员\.1/);
+    assert.match(reconciled, /性经历人员\]:乙（旧关系状态；已确认性交）/);
+    assert.doesNotMatch(reconciled, /性经历人员\.\d+/);
 });
 
 test('profile sanitizer splits comma-separated facts but keeps whole plot events and one partner row', () => {
@@ -116,9 +116,19 @@ test('profile sanitizer splits comma-separated facts but keeps whole plot events
     const cleaned = sanitizeProfileContent(source);
     assert.match(cleaned, /角色已知信息\.0]:她信任乙/);
     assert.match(cleaned, /角色已知信息\.1]:愿意和乙维持秘密关系/);
-    assert.match(cleaned, /性经历人员\.0]:乙｜旧关系；新关系/);
-    assert.doesNotMatch(cleaned, /性经历人员\.1/);
+    assert.match(cleaned, /性经历人员\]:乙（旧关系；新关系）/);
+    assert.doesNotMatch(cleaned, /性经历人员\.\d+/);
     assert.match(cleaned, /剧情\.0]:2025-09-01｜她主动隐瞒关系，并在关键冲突中保护乙。/);
+});
+
+
+test('single-line partner format preserves lower-bound counts and adds only new distinct partners', () => {
+    const oldProfile = '[--角色档案开始--]\n[姓名]:甲\n[性经历人员]:陈默（男友）\n[性经历人数]:4+\n[--角色档案结束--]';
+    const incremental = '[--角色档案开始--]\n[姓名]:甲\n[性经历人员]:陈默（男友）、赵冠宇（高中暗恋对象）\n[性经历人数]:2\n[--角色档案结束--]';
+    const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
+    assert.match(reconciled, /性经历人员\]:陈默（男友）、赵冠宇（高中暗恋对象）/);
+    assert.match(reconciled, /性经历人数\]:5\+/);
+    assert.equal((reconciled.match(/\[性经历人员\]/g) ?? []).length, 1);
 });
 
 test('plot compaction changes only the plot field and rejects unsafe output', () => {
