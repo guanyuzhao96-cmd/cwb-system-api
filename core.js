@@ -1,4 +1,5 @@
-import { PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName, reconcileProfileExperienceCount, replaceProfilePlot, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
+import { PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName, reconcileProfileExperienceCount, readProfilePlotEvents, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
+import { PROFILE_COMPACTION_BATCH_SIZE, PROFILE_COMPACTION_BATCH_PROTOCOL, parseProfileCompactionBatch } from './profile-compaction.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
@@ -44,18 +45,17 @@ export async function compactRoleProfiles(settings, onProgress = () => {}, selec
         return await cleanupProfileFields(settings, {
             selection,
             onProgress,
-            transformContent: async (content, meta) => {
-                const profile = parseCustomFormat(content);
-                const events = Array.isArray(profile['剧情']) ? profile['剧情'].map(String) : profile['剧情'] ? [String(profile['剧情'])] : [];
-                if (!events.length) return content;
+            batchSize: PROFILE_COMPACTION_BATCH_SIZE,
+            transformBatch: async candidates => {
+                const active = candidates.filter(candidate => readProfilePlotEvents(candidate.content).length);
+                if (!active.length) return candidates.map(candidate => candidate.content);
                 const response = await callSystemApi([
                     { role: 'system', content: PROFILE_PLOT_COMPACTION_PROMPT },
-                    { role: 'user', content: `角色：${String(profile['姓名'] ?? meta.name ?? '未知角色')}\n现有剧情：\n${JSON.stringify(events)}` },
+                    { role: 'system', content: PROFILE_COMPACTION_BATCH_PROTOCOL },
+                    { role: 'user', content: JSON.stringify({ 角色档案: active.map(candidate => ({ id: candidate.id, 姓名: candidate.name, 剧情: readProfilePlotEvents(candidate.content) })) }) },
                 ], settings.responseLength);
-                const json = response.replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, '');
-                const parsed = JSON.parse(json);
-                if (!parsed || !Array.isArray(parsed['剧情']) || parsed['剧情'].some(item => typeof item !== 'string')) throw Error(`角色 ${meta.name} 的精简结果格式无效，原档案未写入。`);
-                return replaceProfilePlot(content, parsed['剧情']);
+                const transformed = new Map(parseProfileCompactionBatch(response, active).map((content, index) => [active[index].id, content]));
+                return candidates.map(candidate => transformed.get(candidate.id) ?? candidate.content);
             },
         });
     } finally {
