@@ -36,7 +36,7 @@ test('legacy entries merge atomically, retain UID, deduplicate and isolate other
     await h.context.getTimelineEntries();
     assert.equal(h.saves(), 1);
     assert.deepEqual(Object.keys(h.data().entries), ['0', '2']);
-    assert.equal(h.data().entries[0].content, '【主线时间线】\n[时间线.0]: 2025-01-01｜事件甲\n[时间线.1]: 2025-02-02｜事件乙\n    ↳ 事件丙');
+    assert.equal(h.data().entries[0].content, '【主线时间线】\n「2025.1.1」 1.事件甲\n「2025.2.2」 1.事件乙\n           2.事件丙');
     assert.ok(h.data().entries[0].key.includes('CWB:时间线楼层:41-60'));
     await h.context.saveTimeline({}, '【时间线楼层：21-40】\n（本范围已检查，无新增重要事件）', 20, 39);
     assert.ok(h.data().entries[0].key.includes('CWB:时间线楼层:1-60'));
@@ -79,7 +79,7 @@ test('first save and retry keep one entry; failed migration preserves originals'
     await h.context.saveTimeline({}, '[时间线.0]: 日期未知｜甲｜事件', 0, 19);
     assert.equal(Object.values(h.data().entries).filter(entry => entry.key.includes('CWB:故事时间线')).length, 1);
     assert.equal(h.data().entries[0].content.match(/日期未知/g).length, 1);
-    assert.ok(h.data().entries[0].content.includes('日期未知｜事件'));
+    assert.ok(h.data().entries[0].content.includes('「日期未知」 1.事件'));
     const failed = harness({ 0: entry(0, 'chat', '1-20', '旧资料'), 1: entry(1, 'chat', '21-40', '补充资料') });
     failed.fail();
     await assert.rejects(failed.context.getTimelineEntries(), /save failed/);
@@ -118,10 +118,31 @@ test('timeline parser keeps same-day events separate, omits people columns and n
     assert.deepEqual(JSON.parse(JSON.stringify(h.context.uniqueTimelineEntries(parsed, ['[时间线.0]: 2026-10-16｜甲、乙｜甲揭露秘密']))), ['2026-10-16｜乙承担后果']);
 });
 
+test('timeline groups dates numerically, restarts daily numbering and round-trips events intact', () => {
+    const records = [
+        { date: '2024-10-01', event: '事件C' },
+        { date: '2024-9-1', event: '事件A；结果保留' },
+        { date: '2024-09-01', event: '事件B' },
+        { date: '日期未知', event: '事件D' },
+    ];
+    const formatted = formatTimelineRecords(records, { header: '' }).trim();
+    assert.equal(formatted, '「2024.9.1」 1.事件A；结果保留\n           2.事件B\n「2024.10.1」 1.事件C\n「日期未知」 1.事件D');
+    assert.deepEqual(parseTimelineRecords(formatted), [
+        { date: '2024-09-01', event: '事件A；结果保留' },
+        { date: '2024-09-01', event: '事件B' },
+        { date: '2024-10-01', event: '事件C' },
+        { date: '日期未知', event: '事件D' },
+    ]);
+    const legacy = '[时间线.0]: 2024-09-01｜甲｜事件A\n    ↳ 事件B';
+    const updated = formatTimelineRecords(parseTimelineRecords([legacy, '「2024.9.1」 1.事件C']));
+    assert.equal(parseTimelineRecords(updated).length, 3);
+    assert.match(updated, /3\.事件C/);
+});
+
 test('timeline context stays bounded and same-day events retain separate records', () => {
     const records = Array.from({ length: 120 }, (_, i) => ({ date: '2026-10-16', event: `关键事件${i}` }));
     const formatted = formatTimelineRecords(records);
-    assert.equal((formatted.match(/2026-10-16/g) ?? []).length, 1);
+    assert.equal((formatted.match(/「2026.10.16」/g) ?? []).length, 1);
     assert.equal(parseTimelineRecords(formatted).length, 120);
     const context = compactTimelineContext(formatted, { maxChars: 1200, firstCount: 3, recentCount: 5 });
     assert.ok(context.length <= 1200);
