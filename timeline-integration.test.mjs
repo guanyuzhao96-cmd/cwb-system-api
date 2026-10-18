@@ -23,7 +23,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             prop(k, v) { if (v === undefined) return this.values[k]; this.values[k] = v; return this; },
             text(v) { if (v === undefined) return this.values.text; this.values.text = v; return this; },
             html(v) { if (v === undefined) return this.values.html; this.values.html = v; return this; },
-            attr() { return String(key).replace(/^#/, ''); }, on(e, ...args) { this.handlers[e] = args.at(-1); return this; },
+            attr() { return String(key).replace(/^#/, ''); }, on(e, ...args) { this.handlers[e] = args.at(-1); if (args.length > 1) this.handlers[`${e} ${args[0]}`] = args.at(-1); return this; },
             off() { return this; }, append() { return this; }, empty() { return this; }, toggle() { return this; }, remove() { return this; },
         });
         return nodes.get(key);
@@ -322,6 +322,57 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.match(batchSaved, /本轮确认的重要事实，保留测试C/);
     assert.doesNotMatch(batchSaved, /删除测试B|删除测试D/);
     assert.equal(batchResult.deleted, 2, 'batch delete removes all and only the unselected facts');
+    disk = structuredClone(reviewBaseline);
+    cache = structuredClone(disk);
+
+    // Exercise the actual review buttons: skip never writes; delete advances
+    // only after confirmed persistence, including the final character.
+    const reviewOwner = lorebook.getCardArchiveKey();
+    disk = { entries: {
+        1: { uid: 1, key: ['CWB:自动档案', reviewOwner, '审查甲'], content: '[姓名]:审查甲\n[角色已知信息.0]:应保留的重点\n[角色未知信息.0]:待删除的秘密\n[剧情.0]:原剧情保留' },
+        2: { uid: 2, key: ['CWB:自动档案', reviewOwner, '审查乙'], content: '[姓名]:审查乙\n[角色已知信息.0]:另一条信息\n[剧情.0]:另一段剧情保留' },
+    } }; cache = structuredClone(disk);
+    const untouchedReview = structuredClone(disk);
+    const reviewStart = $('#cwb-start-info-review');
+    reviewStart.handlers.click.call(reviewStart);
+    for (let i = 0; i < 100 && reviewStart.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
+    assert.equal(reviewStart.prop('disabled'), false);
+    const reviewArea = $('#cwb-info-review');
+    const nextCharacter = () => reviewArea.handlers['click [data-review-nav]'].call({ attr: () => 'next' });
+    const previousCharacter = () => reviewArea.handlers['click [data-review-nav]'].call({ attr: () => 'previous' });
+    assert.match(reviewArea.html(), /角色 1\/2：审查甲/);
+    assert.doesNotMatch(reviewArea.html().match(/<button[^>]*data-review-nav="next"[^>]*>/)[0], /disabled/);
+    nextCharacter();
+    assert.match(reviewArea.html(), /角色 2\/2：审查乙/);
+    assert.deepEqual(disk, untouchedReview, 'skipping a completely unreviewed character does not modify any entry');
+    previousCharacter();
+    const keepId = reviewArea.html().match(/data-fact-id="([^"]+)"/)[1];
+    await reviewArea.handlers['click [data-review-action]'].call({ attr: key => key === 'data-review-action' ? 'keep' : keepId });
+    nextCharacter();
+    assert.deepEqual(disk, untouchedReview, 'skipping after selecting keep also does not write');
+    previousCharacter();
+    const reviewDeleteButton = $('#review-delete-test');
+    const deleteUnkept = () => reviewArea.handlers['click [data-review-delete-unkept]'].call(reviewDeleteButton);
+    const savedConfirm = context.window.confirm;
+    context.window.confirm = () => false;
+    await deleteUnkept();
+    assert.match(reviewArea.html(), /角色 1\/2：审查甲/);
+    assert.deepEqual(disk, untouchedReview, 'cancelled deletion does not advance or write');
+    context.window.confirm = savedConfirm;
+    failWrite = true;
+    await deleteUnkept();
+    assert.match(reviewArea.html(), /角色 1\/2：审查甲/);
+    assert.deepEqual(disk, untouchedReview, 'failed persistence does not advance or change the server copy');
+    failWrite = false;
+    await deleteUnkept();
+    assert.match(reviewArea.html(), /角色 2\/2：审查乙/);
+    assert.match(disk.entries[1].content, /应保留的重点/);
+    assert.doesNotMatch(disk.entries[1].content, /待删除的秘密/);
+    assert.match(disk.entries[1].content, /原剧情保留/);
+    await deleteUnkept();
+    assert.match(reviewArea.html(), /审查完成/);
+    assert.match(disk.entries[2].content, /另一段剧情保留/);
+    assert.doesNotMatch(disk.entries[2].content, /另一条信息/);
     disk = structuredClone(reviewBaseline);
     cache = structuredClone(disk);
 
