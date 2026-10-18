@@ -1,4 +1,4 @@
-import { PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, reconcileProfileExperienceCount, replaceProfilePlot, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
+import { PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName, reconcileProfileExperienceCount, replaceProfilePlot, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
@@ -213,6 +213,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         const parsed = parseCustomFormat(block);
                         const type = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
                         const name = characterNameFromBlock(block);
+                        if (isExcludedProfileName(name)) return null;
                         if (!name || ['时间线', 'TIMELINE'].includes(type)) throw Error('角色档案姓名或档案类型不合法');
                         const cleaned = reconcileProfileExperienceCount(block, oldProfiles);
                         if (!cleaned || !hasProfileFacts(cleaned)) return null;
