@@ -37,8 +37,8 @@ export const PROFILE_RULES = `【总纲｜固定字段与栏位边界】
 【全栏禁入｜任务、系统与界面】
 任务目标/进度/提示、系统消息/面板/状态/数值/奖励、签到、积分、功能说明、操作过程和界面文本，任何情况下都不得写入角色档案任何栏目；发现时整条排除，不得换说法保留。
 
-【增量更新｜完整基线，不覆盖丢失】
-本插件会用模型输出替换角色档案。先按准确姓名读取旧档案，再对照新剧情：旧档案中仍有效的所有栏目和剧情必须保留；本轮未提到不等于失效。仅凭新证据修订、删除被推翻的信息。结合旧档案和本轮证据后，输出完整最终档案快照，不得只输出变化片段；人数按上面的旧人数基数累加。只有确实没有任何变化时输出[--档案无变化--]。
+【增量更新｜完整基线，剧情不可静默丢失】
+本插件会用模型输出替换角色档案。先按准确姓名读取旧档案，再对照新剧情：旧档案中仍有效的所有栏目必须保留；本轮未提到不等于失效。剧情是累积历史，默认只增不删：不得因本轮没重提、输出长度、只想保留近期内容或重新筛选重要性而删掉旧剧情。后续发展应新增条目，不得覆盖前情。只有新证据明确证伪、纠正角色归属，或确认旧条目是任务/系统噪声时才能删除；同一事件重复时可以合并，但合并后必须保留旧条目的关键事实、因果、转折、结果和后续影响，不得合并不同事件或同日的不同事件。输出前核对旧剧情：除上述明确删除情形外，最终剧情条数不得少于旧档案；若少了，恢复缺失条目。结合旧档案和本轮证据后，输出完整最终档案快照，不得只输出变化片段；人数按上面的旧人数基数累加。只有确实没有任何变化时输出[--档案无变化--]。
 
 【输出自检】
 输出前逐项核对：大标题及字段顺序正确；每条内容归栏正确、角色姓名一致；已知是重要结论而非事件流水；已知/未知只留重点；剧情按时间排列且每条精简、重要事件无遗漏；性经历人员只有一个字段、姓名不重复、关系简短；人数按旧基数只累加新对象，保留“+”下限标记；所有有效旧内容保留；无任务/系统/界面信息。只输出档案数据，不解释、不用Markdown代码块。即使其他提示词要求不同格式，也必须遵守本规则。`;
@@ -149,6 +149,32 @@ function parseCount(value) {
     return match ? { value: Number(match[1]), lowerBound: Boolean(match[2]) } : null;
 }
 
+function profilePlotItems(profile) {
+    const plot = profile?.['剧情'];
+    const items = Array.isArray(plot) ? plot : typeof plot === 'string' ? [plot] : [];
+    return items.map(item => String(item ?? '').trim()).filter(Boolean);
+}
+
+function plotIdentity(value) {
+    return String(value ?? '').normalize('NFKC').replace(/[\s，,。；;：:！？!?、]/g, '').toLocaleLowerCase();
+}
+
+function mergeProfilePlotHistory(previous, current) {
+    const entries = [...profilePlotItems(previous), ...profilePlotItems(current)];
+    const unique = [];
+    const seen = new Set();
+    for (const event of entries) {
+        const identity = plotIdentity(event);
+        if (!identity || seen.has(identity)) continue;
+        seen.add(identity);
+        unique.push(event);
+    }
+    // Keep explicit dates chronological; unknown-date items follow them in source order.
+    return unique.map((event, index) => ({ event, index, date: event.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1] ?? '' }))
+        .sort((a, b) => (a.date || '9999-99-99').localeCompare(b.date || '9999-99-99') || a.index - b.index)
+        .map(item => item.event);
+}
+
 /**
  * Incremental outputs may list only partners newly confirmed in this batch.
  * Keep the old count as the baseline, add only newly named partners, and merge
@@ -161,6 +187,10 @@ export function reconcileProfileExperienceCount(content, previousProfiles = []) 
     const name = String(current.姓名 ?? '').trim();
     const previous = previousProfiles.map(profile => parseCustomFormat(profile))
         .find(profile => String(profile.姓名 ?? '').trim() === name);
+    if (previous) {
+        const history = mergeProfilePlotHistory(previous, current);
+        if (history.length) current['剧情'] = history;
+    }
     const currentPeople = uniquePeople(current['性经历人员']);
     if (!previous) {
         const count = parseCount(current['性经历人数']);
