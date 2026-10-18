@@ -76,6 +76,9 @@ test('profile rules explicitly restrict known and unknown facts to plot-critical
     assert.match(PROFILE_RULES, /【角色已知信息｜.*【角色未知信息｜/s);
     assert.match(PROFILE_RULES, /普通日常、闲聊.*省略/);
     assert.match(PROFILE_RULES, /任何情况下都不得写入角色档案任何栏目/);
+    assert.match(PROFILE_RULES, /剧情是累积历史，默认只增不删/);
+    assert.match(PROFILE_RULES, /最终剧情条数不得少于旧档案/);
+    assert.match(PROFILE_RULES, /合并后必须保留旧条目的关键事实、因果、转折、结果和后续影响/);
 });
 
 test('sanitizing a profile never replaces the stored experience total with list length', () => {
@@ -92,6 +95,35 @@ test('incremental experience count adds only newly named people to the old basel
     assert.match(reconciled, /性经历人员\]:乙、丙/);
     assert.doesNotMatch(reconciled, /性经历人员\.\d+/);
 
+});
+
+test('incremental profile merge retains all prior plot history even when the model omits it', () => {
+    const oldProfile = `[--角色档案开始--]
+[档案类型]:角色
+[姓名]:甲
+[剧情.0]:2025-09-01｜甲发现乙隐瞒身份，决定暗中调查
+[剧情.1]:2025-09-03｜调查证实乙与丙早有约定，甲因此中止合作
+[--角色档案结束--]`;
+    const incremental = `[--角色档案开始--]
+[档案类型]:角色
+[姓名]:甲
+[角色已知信息.0]:甲已确认乙不可信
+[剧情.0]:2025-09-02｜甲找到乙伪造身份的证据
+[--角色档案结束--]`;
+    const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
+    assert.match(reconciled, /剧情\.0\]:2025-09-01/);
+    assert.match(reconciled, /剧情\.1\]:2025-09-02/);
+    assert.match(reconciled, /剧情\.2\]:2025-09-03/);
+    assert.match(reconciled, /甲发现乙隐瞒身份/);
+    assert.match(reconciled, /调查证实乙与丙早有约定/);
+});
+
+test('incremental plot merge deduplicates exact repeated history without dropping unrelated old events', () => {
+    const oldProfile = '[--角色档案开始--]\n[姓名]:甲\n[剧情.0]:2025-09-01｜甲发现乙说谎并保存证据\n[剧情.1]:2025-09-02｜甲与丙决裂\n[--角色档案结束--]';
+    const incremental = '[--角色档案开始--]\n[姓名]:甲\n[剧情.0]:2025-09-01｜甲发现乙说谎并保存证据\n[--角色档案结束--]';
+    const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
+    assert.equal((reconciled.match(/甲发现乙说谎并保存证据/g) ?? []).length, 1);
+    assert.match(reconciled, /甲与丙决裂/);
 });
 
 test('incremental experience count does not increment for an already known partner', () => {
