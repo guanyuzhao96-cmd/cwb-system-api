@@ -7,7 +7,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
-  "version": "0.12.28",
+  "version": "0.12.29",
   "description": "时间线按日期分组、每日编号，兼容旧记录和增量更新。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/Wx-2025/ST-Amily2-Chat-Optimisation"
