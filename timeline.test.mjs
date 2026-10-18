@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
-import { mergeRanges, parseTaggedRanges } from './update-tracker.mjs';
+import { mergeRanges, parseTaggedRanges, overlappingRanges } from './update-tracker.mjs';
 import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } from './timeline-utils.mjs';
 import { acquireOperationLock } from './state.js';
 
@@ -19,7 +19,7 @@ function harness(entries = {}) {
         parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,
         structuredClone, getRequestHeaders: () => ({}),
         fetch: async () => ({ ok: true, json: async () => structuredClone(data) }),
-        mergeRanges, parseTaggedRanges, state: { chatId: 'chat', operationOwner: null },
+        mergeRanges, parseTaggedRanges, overlappingRanges, state: { chatId: 'chat', operationOwner: null },
         getContext: () => ({ characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] }),
         loadWorldInfo: async () => structuredClone(data),
         saveWorldInfo: async (_, next) => { if (fail) throw Error('save failed'); data = structuredClone(next); saves++; },
@@ -91,6 +91,41 @@ test('refresh repairs server-side disabled references despite stale cache and re
     const saves = h.saves();
     await h.context.manageChatEntries({ enabled: true, worldbookTarget: 'primary' });
     assert.equal(h.saves(), saves);
+});
+
+test('Chinese progress migration keeps one UID, preserves gaps and failures, and reads manual floor edits', async () => {
+    const h = harness({
+        5: { uid: 5, key: ['CWB:更新状态', 'chat'], content: JSON.stringify({ version: 2, modules: { profiles: { completed: [[0, 29]], failed: [] } }, tracking: { startIndex: 0, totalMessages: 90, completed: [[0, 29]], duplicates: [] } }) },
+        6: { uid: 6, key: ['CWB:更新状态', 'chat'], content: JSON.stringify({ version: 2, modules: { profiles: { completed: [[40, 59]], failed: [[30, 39]] } } }) },
+        7: { uid: 7, key: ['CWB:更新状态', 'other'], content: '其他聊天内容不变' },
+    });
+    const progress = await h.context.getModuleProgress();
+    assert.deepEqual(JSON.parse(JSON.stringify(progress.profiles.completed)), [[0, 29], [40, 59]]);
+    assert.deepEqual(JSON.parse(JSON.stringify(progress.profiles.failed)), [[30, 39]]);
+    assert.deepEqual(Object.keys(h.data().entries), ['5', '7']);
+    assert.equal(h.data().entries[5].comment, '插件更新进度');
+    const content = JSON.parse(h.data().entries[5].content);
+    assert.equal(content.角色档案.已保存楼层, '1-30、41-60');
+    assert.equal(content.角色档案.失败楼层, '31-40');
+    content.角色档案.已保存楼层 = '1-20';
+    content.角色档案.失败楼层 = '无';
+    h.data().entries[5].content = JSON.stringify(content, null, 2);
+    const edited = await h.context.getModuleProgress();
+    assert.deepEqual(JSON.parse(JSON.stringify(edited.profiles.completed)), [[0, 19]]);
+    const saves = h.saves();
+    await h.context.getModuleProgress();
+    assert.equal(h.saves(), saves, 'unchanged refresh does not rewrite the entry');
+    await h.context.recordModuleResult('timeline', 0, 9);
+    await h.context.recordChatUpdateRange(0, 9, 90, '保存完成');
+    assert.deepEqual(Object.keys(h.data().entries), ['5', '7']);
+    assert.equal(JSON.parse(h.data().entries[5].content).时间线.已保存楼层, '1-10');
+    assert.equal(h.data().entries[7].content, '其他聊天内容不变');
+    const invalid = JSON.parse(h.data().entries[5].content);
+    invalid.时间线.已保存楼层 = '30-1';
+    h.data().entries[5].content = JSON.stringify(invalid);
+    const snapshot = JSON.stringify(h.data());
+    await assert.rejects(h.context.getModuleProgress(), /存档损坏/);
+    assert.equal(JSON.stringify(h.data()), snapshot);
 });
 
 test('first save and retry keep one entry; failed migration preserves originals', async () => {
