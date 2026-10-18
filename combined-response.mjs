@@ -1,7 +1,7 @@
 import { extractCharacterBlocks } from './utils.js';
 
 export const COMBINED_OUTPUT_PROTOCOL = `本次必须在同一条回复中输出三部分，输出格式以本条为准，覆盖前文要求独立时间线档案块的旧格式。
-第一部分：角色与主角档案，沿用原档案块格式；没有档案变化时明确输出[--档案无变化--]。
+第一部分：角色与主角档案，沿用原档案块格式；没有档案变化时明确输出[--档案无变化--]。若长度不足以保留旧剧情，输出[--档案输出超长--]，不得用无变化标记冒充成功。
 第二部分：
 [--时间线增量开始--]
 {"时间线":[{"日期":"日期未知","事件":"关键事件"}]}
@@ -14,6 +14,7 @@ export const COMBINED_OUTPUT_PROTOCOL = `本次必须在同一条回复中输出
 
 export function parseCombinedResponse(response) {
     const text = String(response ?? '');
+    if (text.includes('[--档案输出超长--]')) throw Error('角色档案输出长度不足，已停止写入并保留旧档案。');
     const section = (kind) => {
         const start = `[--${kind}增量开始--]`, end = `[--${kind}增量结束--]`;
         const parts = text.split(start);
@@ -46,7 +47,8 @@ export function parseCombinedParts(response) {
     const blocks = extractCharacterBlocks(text);
     const profileArea = text.split('[--时间线增量开始--]')[0].split('[--关系增量开始--]')[0];
     const begins = [...profileArea.matchAll(/\[--(?:角色档案开始|Amily2::CHAR_START)--]/g)].length;
-    const profiles = begins !== blocks.length ? { error: '角色档案区块被截断' } : blocks.length ? { value: blocks }
+    const profiles = profileArea.includes('[--档案输出超长--]') ? { error: '角色档案输出长度不足，已停止写入并保留旧档案' }
+        : begins !== blocks.length ? { error: '角色档案区块被截断' } : blocks.length ? { value: blocks }
         : profileArea.includes('[--档案无变化--]') ? { value: [] } : { error: '角色档案缺失且没有无变化标记' };
     return {
         profiles,
