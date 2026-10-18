@@ -154,11 +154,11 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
     if (!targets.length) throw Error('未选择更新模块。');
     const chatId = state.chatId;
     state.updating = true;
-    const names = [], failures = [], successes = [];
+    const names = [], failures = [], successes = [], savedProfiles = [];
     try {
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
         const selected = state.messages.slice(start, end + 1);
-        const oldProfiles = targets.includes('profiles') ? (await getTriggeredOldProfiles(settings, selected)).map(sanitizeProfileContent).filter(Boolean) : [];
+        const oldProfiles = targets.includes('profiles') ? await getTriggeredOldProfiles(settings, selected) : [];
         const oldTimeline = targets.includes('timeline') ? (await getTimelineEntries()).map(entry => entry.content).join('\n') : '';
         const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
         assertCurrentChat(chatId);
@@ -222,12 +222,12 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                     let userUpdated = false;
                     for (const { block, name, isUser } of prepared) {
                         assertCurrentChat(chatId);
-                        const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
+                        const options = { returnReceipt: true };
+                        const saved = isUser ? await saveUserDescription(settings, name, block, start, end, options) : await saveCharacterDescription(settings, name, block, start, end, options);
                         assertCurrentChat(chatId);
                         if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，缺失时先激活目标世界书并扫描生成目录。`);
-                        await verifyProfileContent(settings, name, block, isUser);
-                        assertCurrentChat(chatId);
-                        if (isUser) userUpdated = true; else names.push(saved);
+                        savedProfiles.push({ ...saved, isUser });
+                        if (isUser) userUpdated = true; else names.push(saved.name);
                     }
                     if (names.length) { assertCurrentChat(chatId); await updateRoster(settings, [...new Set(names)], start, end); assertCurrentChat(chatId); }
                     else if (userUpdated && settings.multiWorldbookRouting) { assertCurrentChat(chatId); await updateMasterDirectory(settings); assertCurrentChat(chatId); }
@@ -251,6 +251,22 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
             } catch (error) {
                 failures.push(`${MODULE_LABELS[module]}：${error.message}`);
                 try { if (currentChatId() === chatId && state.chatId === chatId) await recordModuleResult(module, start, end, error.message); }
+                catch (progressError) { failures.push(`进度未确认：${progressError.message}`); }
+            }
+        }
+        // Re-check after timeline, relationships and progress writes: those also
+        // save the entire book and must not undo a successful profile write.
+        if (savedProfiles.length) {
+            try {
+                for (const saved of savedProfiles) {
+                    assertCurrentChat(chatId);
+                    await verifyProfileContent(settings, saved.name, saved.content, saved.isUser, saved);
+                }
+            } catch (error) {
+                failures.push(`${MODULE_LABELS.profiles}：${error.message}`);
+                const index = successes.indexOf(MODULE_LABELS.profiles);
+                if (index >= 0) successes.splice(index, 1);
+                try { if (currentChatId() === chatId && state.chatId === chatId) await recordModuleResult('profiles', start, end, error.message); }
                 catch (progressError) { failures.push(`进度未确认：${progressError.message}`); }
             }
         }
