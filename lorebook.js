@@ -335,7 +335,10 @@ export async function getEntries(bookName, { fresh = false } = {}) {
 
 function applyEntryPatch(target, patch) {
     if ('keys' in patch) target.key = [...patch.keys];
-    if ('enabled' in patch) target.disable = !patch.enabled;
+    if ('enabled' in patch) {
+        target.disable = !patch.enabled;
+        if (Object.hasOwn(target, 'enabled')) target.enabled = Boolean(patch.enabled);
+    }
     if ('type' in patch) {
         target.constant = patch.type === 'constant';
         target.selective = patch.type !== 'constant';
@@ -890,7 +893,7 @@ async function writeTimeline(content, startFloor, endFloor) {
     const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
     if (!existing.length && content === undefined) return [];
     if (existing.length === 1 && content === undefined && existing[0].content === mergeTimelineContent([existing[0].content])) {
-        if (!isEnabled(existing[0]) || existing[0].constant !== true || existing[0].selective === true) {
+        if (!isEnabled(existing[0]) || existing[0].constant !== true || existing[0].selective !== false) {
             applyEntryPatch(existing[0], { enabled: true, type: 'constant' });
             await saveWorldInfo(bookName, data, true);
         }
@@ -1149,18 +1152,19 @@ export async function getLastUpdatedFloor(settings) {
 
 export async function manageChatEntries(settings) {
     const customTarget = settings.worldbookTarget === 'custom';
-    const books = customTarget ? [getPrimaryWorldbook()] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    // Timeline and relationship summaries are always saved in the primary worldbook.
+    const books = [...new Set([getPrimaryWorldbook(), ...(customTarget ? [] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)])])];
     if (state.chatId.startsWith('unknown_chat')) return;
     const chatId = state.chatId.replace(/ imported/g, '');
     for (const bookName of books.filter(Boolean)) {
-        const entries = await getEntries(bookName);
+        const entries = await getEntries(bookName, { fresh: true });
         const patches = [];
         for (const entry of entries) {
             const keys = getKeys(entry);
             if (isPluginReferenceEntry(entry)) {
                 if (isAlwaysOnReferenceEntry(entry)) {
                     if (keys.includes(chatId)) {
-                        if (!entry.enabled || entry.constant !== true || entry.selective === true) patches.push({ uid: entry.uid, enabled: true, type: 'constant' });
+                        if (!entry.enabled || entry.constant !== true || entry.selective !== false) patches.push({ uid: entry.uid, enabled: true, type: 'constant' });
                     } else if (entry.enabled || entry.constant === true) {
                         patches.push({ uid: entry.uid, enabled: false, type: 'selective' });
                     }
