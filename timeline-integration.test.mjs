@@ -254,11 +254,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.equal(migrated.length, 1);
     assert.equal(Object.values(disk.entries).some(e => e.key.includes('CWB:更新记录') || e.key.includes('CWB:模块进度')), false);
     const migratedState = JSON.parse(migrated[0].content);
-    assert.deepEqual(migratedState.modules.profiles.completed, [[0, 4]]);
-    assert.deepEqual(migratedState.modules.timeline.completed, [[0, 2]]);
-    assert.deepEqual(migratedState.modules.relationships.completed, [[0, 3]]);
-    assert.deepEqual(migratedState.tracking.completed, [[0, 7]]);
-    assert.deepEqual(migratedState.tracking.duplicates, [[3, 4]]);
+    assert.equal(migratedState.角色档案.已保存楼层, '1-5');
+    assert.equal(migratedState.时间线.已保存楼层, '1-3');
+    assert.equal(migratedState.角色关系.已保存楼层, '1-4');
+    assert.equal(migratedState.更新记录.已保存楼层, '1-8');
+    assert.equal(migratedState.更新记录.重复更新楼层, '4-5');
     disk = beforeMigration;
     cache = structuredClone(disk);
     contextData.chatId = 'integration-recovered';
