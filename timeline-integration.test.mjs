@@ -65,7 +65,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             if (!options.systemPrompt.includes('INTEGRATION_CUSTOM_TIMELINE')) return '本次没有角色档案变化';
             const input = options.prompt.map(x => x.content).join('\n');
             const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
-            return JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] });
+            return JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: failWrite ? '服务器拒写时的新事件' : `新增事件${latest}` }] : [] });
         },
     };
     const extensions = { extension_settings, getContext: () => contextData,
@@ -423,7 +423,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     cache = structuredClone(disk);
     failWrite = true;
     contextData.chat.push({ mes: '新增事件一。新增事件二。新增事件三。' });
-    // Force a visibly different response, so readback must detect failed persistence.
+    // The mock emits a genuinely new event on failure; stale cache contents no
+    // longer control a server-based write, so cache clearing alone is irrelevant.
     cache.entries = {};
     await click();
     assert.ok($('#cwb-status').text().includes('回读与本次写入不一致'));
