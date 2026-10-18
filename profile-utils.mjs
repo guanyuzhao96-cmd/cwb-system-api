@@ -38,13 +38,13 @@ export const PROFILE_RULES = `【总纲｜固定字段与栏位边界】
 仅记录对后续理解/扮演持续重要，且已知、未知、人员、剧情栏均未覆盖的事实。不得重复事件、放普通生活或临时情绪，不确定时省略。
 
 【剧情｜逐条记录完整且重要的事件】
-必须检查本次范围所有楼层，记录每个角色直接参与、亲自获知或承受后果的所有强相关重要事件；不得只选最近一两件，不得漏掉配角发起但实质影响该角色的剧情，不设条数上限。格式“日期｜关键行为/遭遇 + 必要因果 + 结果/持续影响”，按时间升序；一条一个完整事件，重复叙述合并，不同事件分开。每条最多128字，不能为了简短删关键行为、转折、因果或后果。剧情写发生了什么，不要改写成已知结论。普通日常、闲聊、无后续影响的情绪和枝节省略。
+本段仅用于本轮新增事件；旧剧情按下文强约束原文保留，不重新筛选。必须检查本次范围所有楼层，记录每个角色直接参与、亲自获知或承受后果的所有强相关重要事件；不得只选最近一两件，不得漏掉配角发起但实质影响该角色的剧情，不设条数上限。格式“日期｜关键行为/遭遇 + 必要因果 + 结果/持续影响”，按时间升序；一条一个完整事件，重复叙述合并，不同事件分开。每条最多128字，不能为了简短删关键行为、转折、因果或后果。剧情写发生了什么，不要改写成已知结论。普通日常、闲聊、无后续影响的情绪和枝节省略。
 
 【全栏禁入｜任务、系统与界面】
-任务目标/进度/提示、系统消息/面板/状态/数值/奖励、签到、积分、功能说明、操作过程和界面文本，任何情况下都不得写入角色档案任何栏目；发现时整条排除，不得换说法保留。
+本轮新提取内容中的任务目标/进度/提示、系统消息/面板/状态/数值/奖励、签到、积分、功能说明、操作过程和界面文本，任何情况下都不得写入角色档案任何栏目；发现时整条排除，不得换说法保留。此筛选仅用于新增内容，旧剧情不得因出现这些词而整条自动删除；旧数据清理只能由用户主动执行专门的整理操作。
 
 【增量更新｜完整基线，剧情不可静默丢失】
-本插件会用模型输出替换角色档案。先按准确姓名读取旧档案，再对照新剧情：旧档案中仍有效的所有栏目必须保留；本轮未提到不等于失效。剧情是累积历史，默认只增不删：不得因本轮没重提、输出长度、只想保留近期内容或重新筛选重要性而删掉旧剧情。后续发展应新增条目，不得覆盖前情。只有新证据明确证伪、纠正角色归属，或确认旧条目是任务/系统噪声时才能删除；同一事件重复时可以合并，但合并后必须保留旧条目的关键事实、因果、转折、结果和后续影响，不得合并不同事件或同日的不同事件。输出前核对旧剧情：除上述明确删除情形外，最终剧情条数不得少于旧档案；若少了，恢复缺失条目。结合旧档案和本轮证据后，输出完整最终档案快照，不得只输出变化片段；人数按上面的旧人数基数累加。只有确实没有任何变化时输出[--档案无变化--]。
+本插件会用模型输出更新角色档案。先按准确姓名读取旧档案，再对照新剧情：旧档案中仍有效的其他栏目必须保留；本轮未提到不等于失效。剧情是累积历史，默认只增不删，并施加最高优先级约束：普通更新必须逐条原文保留全部旧剧情，只能追加新事件；不得重写、缩短、合并或删除旧剧情。即使旧条目较长、含禁入关键词、被新证据纠正或看似重复，也不能在普通更新中移除；纠错以追加后续说明表达，历史精简只能由用户主动执行专门的整理操作。新增剧情的128字限制不得反向截断旧剧情。逐条核对旧事件文本及其关键事实、因果、转折、结果和后续影响，不能仅比较条数；最终剧情条数不得少于旧档案。若输出长度不足，输出[--档案输出超长--]，禁止返回删减旧历史的部分档案或用无变化标记冒充成功。以上约束覆盖其他提示词中的精简、筛选或合并要求。结合旧档案和本轮证据后，输出完整最终档案快照，不得只输出变化片段；人数按上面的旧人数基数累加。只有确实没有任何变化时输出[--档案无变化--]。
 
 【输出自检】
 输出前逐项核对：大标题及字段顺序正确；每条内容归栏正确、角色姓名一致；已知是重要结论而非事件流水；已知/未知只留重点；剧情按时间排列且每条精简、重要事件无遗漏；性经历人员只有一个字段、姓名不重复、关系简短；人数按旧基数只累加新对象，保留“+”下限标记；所有有效旧内容保留；无任务/系统/界面信息。只输出档案数据，不解释、不用Markdown代码块。即使其他提示词要求不同格式，也必须遵守本规则。`;
@@ -155,18 +155,34 @@ function parseCount(value) {
     return match ? { value: Number(match[1]), lowerBound: Boolean(match[2]) } : null;
 }
 
-function profilePlotItems(profile) {
-    const plot = profile?.['剧情'];
-    const items = Array.isArray(plot) ? plot : typeof plot === 'string' ? [plot] : [];
-    return items.map(item => String(item ?? '').trim()).filter(Boolean);
+// Read from raw lines, not parseCustomFormat: duplicate numeric keys otherwise
+// overwrite earlier events, and historical text must not pass keyword filters.
+export function readProfilePlotEvents(content) {
+    const events = [];
+    let current = null;
+    for (const line of String(content ?? '').split(/\r?\n/)) {
+        const event = line.match(/^\s*\[剧情(?:\.\d+)?\]\s*[:：]\s*(.*)$/);
+        if (event) {
+            current = event[1];
+            events.push(current);
+        } else if (/^\s*\[剧情(?:[.\]\s]|$)/.test(line)) {
+            throw new Error('剧情字段格式无法安全识别，停止覆盖旧档案。');
+        } else if (/^\s*\[/.test(line)) {
+            current = null;
+        } else if (current !== null && line.trim()) {
+            current += `\n${line}`;
+            events[events.length - 1] = current;
+        }
+    }
+    return events.map(event => event.trim()).filter(Boolean);
 }
 
 function plotIdentity(value) {
-    return String(value ?? '').normalize('NFKC').replace(/[\s，,。；;：:！？!?、]/g, '').toLocaleLowerCase();
+    return String(value ?? '').normalize('NFKC').replace(/\s+/g, '');
 }
 
-function mergeProfilePlotHistory(previous, current) {
-    const entries = [...profilePlotItems(previous), ...profilePlotItems(current)];
+export function preserveProfilePlotHistory(content, previousProfiles = []) {
+    const entries = [...previousProfiles.flatMap(readProfilePlotEvents), ...readProfilePlotEvents(content)];
     const unique = [];
     const seen = new Set();
     for (const event of entries) {
@@ -176,9 +192,35 @@ function mergeProfilePlotHistory(previous, current) {
         unique.push(event);
     }
     // Keep explicit dates chronological; unknown-date items follow them in source order.
-    return unique.map((event, index) => ({ event, index, date: event.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1] ?? '' }))
+    const history = unique.map((event, index) => ({ event, index, date: event.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1] ?? '' }))
         .sort((a, b) => (a.date || '9999-99-99').localeCompare(b.date || '9999-99-99') || a.index - b.index)
         .map(item => item.event);
+    // Replace only this column; preserve raw old event text, including continuation
+    // lines and fields not understood by today's profile parser.
+    const lines = [];
+    let inPlot = false;
+    for (const line of String(content ?? '').split(/\r?\n/)) {
+        if (/^\s*\[剧情(?:\.\d+)?\]\s*[:：]/.test(line)) { inPlot = true; continue; }
+        if (inPlot && !/^\s*\[/.test(line)) continue;
+        inPlot = false;
+        if (/^\s*\[--(?:角色档案结束|Amily2::CHAR_END)--?\]/.test(line)) continue;
+        lines.push(line);
+    }
+    while (lines.length && !lines.at(-1).trim()) lines.pop();
+    if (!lines.some(line => line.trim() === '[--角色档案开始--]')) lines.unshift('[--角色档案开始--]');
+    return [...lines, ...history.map((event, index) => `[剧情.${index}]:${event}`), '[--角色档案结束--]'].join('\n');
+}
+
+export function assertProfilePlotHistory(content, previousProfiles = []) {
+    const actual = new Set(readProfilePlotEvents(content).map(plotIdentity));
+    const expected = [...new Set(previousProfiles.flatMap(readProfilePlotEvents).map(plotIdentity))];
+    const missing = expected.filter(event => !actual.has(event));
+    if (missing.length) {
+        const error = new Error(`旧剧情保留校验失败：应保留 ${expected.length} 条，缺失 ${missing.length} 条，已停止确认写入。`);
+        error.cwbHistoryGuard = { expected: expected.length, actual: actual.size, missing: missing.length };
+        throw error;
+    }
+    return { previous: expected.length, final: actual.size };
 }
 
 /**
@@ -191,19 +233,20 @@ export function reconcileProfileExperienceCount(content, previousProfiles = []) 
     if (!sanitized) return null;
     const current = parseCustomFormat(sanitized);
     const name = String(current.姓名 ?? '').trim();
-    const previous = previousProfiles.map(profile => parseCustomFormat(profile))
-        .find(profile => String(profile.姓名 ?? '').trim() === name);
-    if (previous) {
-        const history = mergeProfilePlotHistory(previous, current);
-        if (history.length) current['剧情'] = history;
-    }
+    const matchingProfiles = previousProfiles.filter(profile => String(parseCustomFormat(profile).姓名 ?? '').normalize('NFKC').replace(/\s+/g, '') === name.normalize('NFKC').replace(/\s+/g, ''));
+    const previous = matchingProfiles.length ? parseCustomFormat(matchingProfiles[0]) : null;
+    const finalize = () => {
+        const result = preserveProfilePlotHistory(buildCustomFormat(current), matchingProfiles);
+        assertProfilePlotHistory(result, matchingProfiles);
+        return result;
+    };
     const currentPeople = uniquePeople(current['性经历人员']);
     if (!previous) {
         const count = parseCount(current['性经历人数']);
         const resolved = count === null ? { value: currentPeople.length, lowerBound: false } : { value: Math.max(count.value, currentPeople.length), lowerBound: count.lowerBound };
         if (resolved.value > 0 || current['性经历人数'] !== undefined) current['性经历人数'] = `${resolved.value}${resolved.lowerBound ? '+' : ''}`;
         if (currentPeople.length) current['性经历人员'] = formatPeopleField(currentPeople);
-        return buildCustomFormat(current);
+        return finalize();
     }
 
     const previousPeople = uniquePeople(previous['性经历人员']);
@@ -213,7 +256,7 @@ export function reconcileProfileExperienceCount(content, previousProfiles = []) 
     const mergedPeople = uniquePeople([...previousPeople, ...currentPeople]);
     if (mergedPeople.length) current['性经历人员'] = formatPeopleField(mergedPeople);
     current['性经历人数'] = `${previousCount.value + newPeople.length}${previousCount.lowerBound ? '+' : ''}`;
-    return buildCustomFormat(current);
+    return finalize();
 }
 
 export function hasProfileFacts(content) {
