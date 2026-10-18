@@ -97,7 +97,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         assert.ok(extension_settings.cwb_system_api[key].includes('性经历人数'));
     }
     assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.startsWith('旧自定义时间线提示词'));
-    assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('同一天仅将属于同一故事线的关键进展合并为一条'));
+    assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('仅合并同一故事线中有因果关系的事件'));
+    assert.ok(extension_settings.cwb_system_api.timelineIncrementalPrompt.includes('不因日期相同合并无关事件'));
     $('#cwb-system-settings').handlers.click.call({ attr: () => 'timeline' });
     assert.equal(document.getElementById('cwb-progress-details').open, true);
     assert.equal(document.getElementById('cwb-detail-timeline').scrolled, true);
@@ -141,7 +142,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const savedProfile = Object.values(disk.entries).find(e => e.key.includes('CWB:主角档案')).content;
     assert.match(savedProfile, /角色已知信息\.0/);
     assert.match(savedProfile, /角色未知信息\.0/);
-    assert.match(savedProfile, /性经历人员\.0/);
+    assert.match(savedProfile, /性经历人员\]:/);
     assert.match(savedProfile, /性经历人数]:1/);
     assert.match(savedProfile, /额外补充\.0/);
     assert.ok(Object.values(disk.entries).find(e => e.key.includes('CWB:角色关系汇总')).content.includes('B ↔ C：互相讨厌'));
