@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeProfileContent, reconcileProfileExperienceCount, replaceProfilePlot, hasProfileFacts, PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName } from './profile-utils.mjs';
+import { sanitizeProfileContent, reconcileProfileExperienceCount, replaceProfilePlot, hasProfileFacts, PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName, readProfilePlotEvents, preserveProfilePlotHistory, assertProfilePlotHistory } from './profile-utils.mjs';
 
 test('赵冠宇 is excluded as a standalone profile but remains eligible as another character plot subject', () => {
     assert.equal(isExcludedProfileName('赵冠宇'), true);
@@ -87,7 +87,7 @@ test('profile rules explicitly restrict known and unknown facts to plot-critical
     assert.match(PROFILE_RULES, /任何情况下都不得写入角色档案任何栏目/);
     assert.match(PROFILE_RULES, /剧情是累积历史，默认只增不删/);
     assert.match(PROFILE_RULES, /最终剧情条数不得少于旧档案/);
-    assert.match(PROFILE_RULES, /合并后必须保留旧条目的关键事实、因果、转折、结果和后续影响/);
+    assert.match(PROFILE_RULES, /不得重写、缩短、合并或删除旧剧情/);
 });
 
 test('sanitizing a profile never replaces the stored experience total with list length', () => {
@@ -133,6 +133,35 @@ test('incremental plot merge deduplicates exact repeated history without droppin
     const reconciled = reconcileProfileExperienceCount(incremental, [oldProfile]);
     assert.equal((reconciled.match(/甲发现乙说谎并保存证据/g) ?? []).length, 1);
     assert.match(reconciled, /甲与丙决裂/);
+});
+
+test('raw historical extraction preserves repeated indices, multiline events and fullwidth colons', () => {
+    const previous = '[--角色档案开始--]\n[姓名]:甲\n[剧情.0]:2025-09-01｜她接受协助调查的任务，发现核心证据\n补充关键因果和结果\n[剧情.0]：2025-09-02｜证据导致同伴关系破裂\n[--角色档案结束--]';
+    const result = reconcileProfileExperienceCount('[--角色档案开始--]\n[姓名]:甲\n[角色已知信息.0]:同伴不可信\n[--角色档案结束--]', [previous]);
+    assert.deepEqual(readProfilePlotEvents(result), readProfilePlotEvents(previous));
+    assert.equal(readProfilePlotEvents(result).length, 2);
+    assert.match(result, /补充关键因果和结果/);
+    assert.deepEqual(assertProfilePlotHistory(result, [previous]), { previous: 2, final: 2 });
+});
+
+test('history guard detects event replacement even if the number of events is unchanged', () => {
+    const previous = '[姓名]:甲\n[剧情.0]:2025-09-01｜她保存了决定性的证据';
+    const replacement = '[姓名]:甲\n[剧情.0]:2025-09-01｜她与同伴恢复合作';
+    assert.throws(() => assertProfilePlotHistory(replacement, [previous]), /缺失 1 条/);
+    const result = preserveProfilePlotHistory(replacement, [previous]);
+    assert.equal(readProfilePlotEvents(result).length, 2);
+    assert.equal((result.match(/\[--角色档案结束--\]/g) ?? []).length, 1);
+});
+
+test('long historical events are retained verbatim and do not get re-filtered as new output', () => {
+    const event = `2025-09-01｜${'关键线索与后果'.repeat(30)}`;
+    const previous = `[姓名]:甲\n[剧情.0]:${event}`;
+    const result = reconcileProfileExperienceCount('[姓名]:甲\n[角色已知信息.0]:发现同伴背叛', [previous]);
+    assert.ok(readProfilePlotEvents(result).includes(event));
+});
+
+test('unrecognized historical plot fields stop preservation instead of silently discarding data', () => {
+    assert.throws(() => preserveProfilePlotHistory('[姓名]:甲\n[剧情.0]:新事件', ['[姓名]:甲\n[剧情.旧]:重要旧事件']), /格式无法安全识别/);
 });
 
 test('incremental experience count does not increment for an already known partner', () => {
