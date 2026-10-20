@@ -14,7 +14,7 @@ import {
 import { state } from './state.js';
 import { countProfileTokens, profileSelectionKey, PROFILE_COMPACTION_BATCH_SIZE } from './profile-compaction.mjs';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
-import { directoryContent, duplicateLines, findRoutedBook, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
+import { directoryContent, duplicateLines, findRoutedBook, namesFromDirectory, namesFromRoleEntries, planDirectorySources } from './directory-utils.mjs';
 import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges } from './update-tracker.mjs';
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
@@ -273,10 +273,10 @@ export async function generateWorldbookDirectories(onProgress = () => {}) {
             occurrences.get(name).push(...sourceEntries.map(entry => ({ bookName, ...entry })));
         }
     }
-    const duplicates = new Map([...occurrences].filter(([, entries]) => entries.length > 1));
+    const { duplicates, namesByBook } = planDirectorySources(occurrences);
     const generated = [];
     for (const plan of plans) {
-        const names = plan.names.filter(name => !duplicates.has(name));
+        const names = plan.names.filter(name => namesByBook.get(plan.bookName)?.has(name));
         const data = {
             comment: `CWB目录｜${plan.bookName}`,
             content: directoryContent(names),
