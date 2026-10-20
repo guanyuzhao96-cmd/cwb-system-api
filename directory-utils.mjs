@@ -16,7 +16,7 @@ export function namesFromDirectory(content) {
 export function likelyPersonName(value) {
     const name = String(value ?? '').trim()
         .replace(/^["'“‘【\[]+|["'”’】\]]+$/g, '')
-        .replace(/^(?:动态|角色档案|人物档案|角色)[-—_｜:： ]+/u, '')
+        .replace(/^(?:动态|静态|角色档案|人物档案|角色)[-—_｜:： ]+/u, '')
         .trim();
     const lower = name.toLocaleLowerCase();
     const ignored = new Set([
@@ -59,7 +59,10 @@ export function namesFromRoleEntries(entries) {
         }
         for (const name of entryNames) {
             if (!occurrences.has(name)) occurrences.set(name, []);
-            occurrences.get(name).push({ comment: String(entry.comment ?? entry.title ?? '（无标题）') });
+            const comment = String(entry.comment ?? entry.title ?? '（无标题）');
+            const profileType = keysOf(entry).some(key => ['CWB:自动档案', 'CWB:主角档案'].includes(String(key)))
+                || /^动态[-—_｜:： ]/u.test(comment.trim()) ? 'dynamic' : 'static';
+            occurrences.get(name).push({ comment, profileType });
         }
     }
     return occurrences;
@@ -67,6 +70,26 @@ export function namesFromRoleEntries(entries) {
 
 export function directoryContent(names) {
     return `【小故事线目录】\n${names.length ? names.map(name => `姓名: "${name}"`).join('\n') : '（暂无可自动识别的角色）'}`;
+}
+
+export function planDirectorySources(occurrences) {
+    const duplicates = new Map(), namesByBook = new Map();
+    for (const [name, entries] of occurrences) {
+        const statics = entries.filter(entry => entry.profileType !== 'dynamic');
+        const dynamics = entries.filter(entry => entry.profileType === 'dynamic');
+        const repeated = [statics, dynamics].filter(group => group.length > 1).flat();
+        if (repeated.length) {
+            duplicates.set(name, repeated);
+            continue;
+        }
+        // A generated dynamic archive is an update destination, while the static
+        // profile supplies the source book for routing. Prefer the latter.
+        for (const entry of statics.length ? statics : dynamics) {
+            if (!namesByBook.has(entry.bookName)) namesByBook.set(entry.bookName, new Set());
+            namesByBook.get(entry.bookName).add(name);
+        }
+    }
+    return { duplicates, namesByBook };
 }
 
 export function duplicateLines(duplicates) {
