@@ -227,7 +227,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     await new Promise(resolve => setTimeout(resolve, 1350));
     assert.equal(requests.length - beforeAuto, 1, 'automatic threshold update uses one combined call and skips completed floors');
     const progressStore = modules.get(resolve(root, 'lorebook.js')).namespace;
-    const identityTag = 'CWB:聊天身份:stable-integration-chat';
+    const identityTag = 'CWB:角色卡:test-card.png';
     assert.ok(Object.values(disk.entries).some(entry => entry.key.includes('CWB:更新状态') && entry.key.includes(identityTag)));
     contextData.chatId = 'integration-chat-renamed';
     modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-chat-renamed';
@@ -238,7 +238,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     // Legacy whole-chat tracking and module progress should converge into one
     // chat-scoped record without losing disjoint module or duplicate ranges.
     const beforeMigration = structuredClone(disk);
-    const migrationUid = Math.max(-1, ...Object.keys(disk.entries).map(Number)) + 1;
+    disk = { entries: {} }; cache = structuredClone(disk);
+    const migrationUid = 0;
     disk.entries[migrationUid] = { uid: migrationUid, key: ['CWB:更新记录', 'migration-chat', 'CWB:总结楼层:0-7', 'CWB:追踪起点:0', 'CWB:重复总结楼层:3-4'], content: '最近一次：旧版更新' };
     disk.entries[migrationUid + 1] = { uid: migrationUid + 1, key: ['CWB:模块进度', 'migration-chat'], content: JSON.stringify({ version: 1, modules: {
             profiles: { completed: [[0, 4]], failed: [] },
@@ -250,7 +251,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     contextData.chatMetadata = { integrity: 'migration-integrity' };
     modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'migration-chat';
     await modules.get(resolve(root, 'lorebook.js')).namespace.recordModuleResult('relationships', 2, 3);
-    const migrated = Object.values(disk.entries).filter(e => e.key.includes('CWB:更新状态') && e.key.includes('migration-chat'));
+    const migrated = Object.values(disk.entries).filter(e => e.key.includes('CWB:更新状态') && e.key.includes(identityTag));
     assert.equal(migrated.length, 1);
     assert.equal(Object.values(disk.entries).some(e => e.key.includes('CWB:更新记录') || e.key.includes('CWB:模块进度')), false);
     const migratedState = JSON.parse(migrated[0].content);
@@ -265,10 +266,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     contextData.chatMetadata = { integrity: 'new-integrity' };
     modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-recovered';
     const recoveryCandidates = await progressStore.getProgressRecoveryCandidates();
-    assert.ok(recoveryCandidates.some(item => item.chatId === 'integration-chat'), 'unmatched prior progress is offered as an explicit recovery candidate');
-    await progressStore.copyProgressFromChat('integration-chat');
-    assert.ok(Object.values(disk.entries).some(entry => entry.key.includes('CWB:更新状态') && entry.key.includes('integration-chat')), 'source progress remains intact after recovery');
-    assert.ok(Object.values(disk.entries).some(entry => entry.key.includes('CWB:更新状态') && entry.key.includes('integration-recovered')), 'recovered progress is copied under the current chat ID');
+    assert.equal(recoveryCandidates.length, 0, 'same card automatically reuses its progress despite a new chat ID and integrity');
+    const reused = await progressStore.getModuleProgress();
+    assert.ok(reused.timeline.completed.length > 0);
+    assert.equal(Object.values(disk.entries).filter(entry => entry.key.includes('CWB:更新状态')).length, 1);
+    assert.ok(Object.values(disk.entries).every(entry => !entry.key.includes('integration-recovered')));
     contextData.chatId = 'integration-chat';
     contextData.chatMetadata = { integrity: 'stable-integration-chat' };
     modules.get(resolve(root, 'state.js')).namespace.state.chatId = 'integration-chat';
@@ -418,7 +420,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
 
     const deleteUid = Math.max(-1, ...Object.keys(disk.entries).map(Number)) + 1;
     disk.entries[deleteUid] = { uid: deleteUid, key: ['手工条目', 'integration-chat'], comment: '手写资料', content: '必须保留' };
-    disk.entries[deleteUid + 1] = { uid: deleteUid + 1, key: ['CWB:自动档案', 'other-chat', '角色甲', '1-3'], comment: '动态-角色甲', content: '其他聊天资料' };
+    disk.entries[deleteUid + 1] = { uid: deleteUid + 1, key: ['CWB:自动档案', 'CWB:角色卡:foreign-card.png', '角色甲', '1-3'], comment: '动态-角色甲', content: '其他聊天资料' };
     disk.entries[deleteUid + 2] = { uid: deleteUid + 2, key: ['CWB:世界书目录'], comment: '全局目录', content: '全局目录必须保留' };
     disk.entries[deleteUid + 3] = { uid: deleteUid + 3, key: ['CWB:自动档案', 'integration-chat', '角色乙', '1-3'], comment: '动态-角色乙', content: '当前聊天生成档案' };
     disk.entries[deleteUid + 4] = { uid: deleteUid + 4, key: ['integration-chat', '角色丙', 'CWB:自动档案', '1-3'], comment: '动态-角色丙', content: '旧版键顺序的当前聊天生成档案' };
@@ -427,7 +429,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const previewProgress = [];
     worldbookReads.length = 0;
     const preview = await lorebook.getGeneratedContentPreview(item => previewProgress.push(item));
-    assert.deepEqual(worldbookReads, ['主世界书'], 'cleanup uses the primary chat record and does not read unrelated worldbooks');
+    assert.ok(worldbookReads.length > 0 && worldbookReads.every(name => name === '主世界书'), 'migration verifies only the current primary book, not unrelated worldbooks');
     assert.ok(previewProgress.some(item => item.phase === 'scan' && item.current === item.total));
     assert.ok(preview.entries.some(e => e.marker === 'CWB:自动档案'));
     assert.ok(preview.entries.some(e => e.marker === 'CWB:故事时间线'));
@@ -457,7 +459,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     for (let i = 0; i < 100 && deleteButton.prop('disabled'); i++) await new Promise(r => setTimeout(r, 5));
     assert.equal(deleteButton.prop('disabled'), false);
     assert.match(lastConfirmation, /原始\/手工条目/);
-    assert.match(lastConfirmation, /其他聊天数据/);
+    assert.match(lastConfirmation, /其他角色卡数据/);
     assert.match(lastConfirmation, /动态-角色乙/);
     assert.match(lastConfirmation, /动态-角色丙/);
     const deletedUids = preview.entries.map(entry => entry.uid);

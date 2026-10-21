@@ -10,6 +10,7 @@ import { createErrorReport } from './error-report.js';
 import { state, acquireOperationLock } from './state.js';
 import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } from './timeline-utils.mjs';
 import {
+    getCardArchiveKey,
     getLastUpdatedFloor,
     getModuleProgress,
     getProgressRecoveryCandidates,
@@ -70,11 +71,12 @@ function currentChatId() {
 }
 
 function assertCurrentChat(chatId) {
-    if (state.chatId !== chatId || currentChatId() !== chatId) throw new Error('生成期间切换了聊天，本次停止写入；请在目标聊天重新更新。');
+    if (state.chatId !== chatId || currentChatId() !== chatId || state.cardKey !== getCardArchiveKey()) throw new Error('生成期间切换了聊天，本次停止写入；请在目标聊天重新更新。');
 }
 
 export function refreshChatState() {
     const context = getContext();
+    state.cardKey = getCardArchiveKey();
     state.chatId = context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId || 'unknown_chat';
     state.messages = (context?.chat ?? []).map((message, index) => ({
         ...message,
@@ -113,7 +115,7 @@ export async function refreshModuleProgress() {
         recoveryCandidates.length ? `找回其他聊天的进度（${recoveryCandidates.length} 条候选）` : '找回其他聊天的进度',
     );
     $('#cwb-progress-error').text(recoveryCandidates.length
-        ? `当前聊天 ID 没有匹配到进度存档；发现 ${recoveryCandidates.length} 条其他聊天存档。请选择正确来源恢复，原存档不会被删除。`
+        ? `当前角色卡没有匹配到进度存档；发现 ${recoveryCandidates.length} 条其他聊天存档。请选择正确来源恢复，原存档不会被删除。`
         : '');
     for (const module of Object.keys(MODULE_LABELS)) {
         const status = moduleStatus(progress, module, state.messages.length);
@@ -513,7 +515,7 @@ export async function batchUpdate(settings, onProgress) {
 }
 
 export async function onChatChanged(settings) {
-    // Worldbook state is chat-scoped. Let any in-flight save finish its chat check
+    // Archives are card-owned. Let an in-flight request finish its source-chat check
     // before refreshing or migrating entries for the newly selected chat.
     let waited = 0;
     while (state.operationOwner && waited < 60000) {

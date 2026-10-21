@@ -30,7 +30,6 @@ const GENERATED_ENTRY_TYPES = [
     ['CWB:更新记录', '旧版更新记录'], ['CWB:模块进度', '旧版模块进度'],
     ['Amily2角色总集', '角色总览'],
 ];
-const CARD_SCOPED_ENTRY_TYPES = new Set(['CWB:自动档案', 'CWB:主角档案', 'CWB:角色档案目录', 'Amily2角色总集']);
 
 export function getPrimaryWorldbook() {
     const context = getContext();
@@ -55,8 +54,67 @@ export function getCardArchiveKey() {
     return `CWB:角色卡:${encodeURIComponent(String(identity))}`;
 }
 
+
+// Chats provide the input messages, but never own the generated archives.
+function isCurrentCardArchive(entry) {
+    const keys = getKeys(entry);
+    const cardKey = getCardArchiveKey();
+    return keys.includes(cardKey) && !keys.some(key => String(key).startsWith('CWB:角色卡:') && key !== cardKey);
+}
+
+async function readCardArchiveData(bookName) {
+    let data = await readWorldbookFromServer(bookName);
+    const cardKey = getCardArchiveKey();
+    const context = getContext();
+    const current = context?.characters?.[context.characterId];
+    const sharedPrimary = (context?.characters ?? []).some(character => character !== current
+        && (character?.avatar || character?.name) !== (current?.avatar || current?.name)
+        && (character?.data?.extensions?.world || character?.extensions?.world) === bookName);
+    const chatId = state.chatId.replace(/ imported/g, '');
+    const patches = [];
+    for (const entry of Object.values(data.entries)) {
+        const keys = getKeys(entry);
+        const marker = GENERATED_ENTRY_TYPES.find(([type]) => keys.includes(type))?.[0];
+        if (!marker || keys.some(key => String(key).startsWith('CWB:角色卡:') && key !== cardKey)) continue;
+        // Unowned historical entries in an exclusive primary book belong to this
+        // card even after the source chat was deleted. A shared book is ambiguous:
+        // migrate only the currently identified legacy chat, never another card.
+        if (sharedPrimary && !hasLegacyChatOwner(keys, chatId)) continue;
+        const semanticKeys = keys.filter(key => String(key).startsWith('CWB:')
+            && !String(key).startsWith('CWB:角色卡:') && !String(key).startsWith('CWB:聊天身份:'));
+        const roleName = ['CWB:自动档案', 'CWB:主角档案'].includes(marker) ? profileName(entry) : null;
+        const nextKeys = [...new Set([marker, cardKey, ...semanticKeys, ...(roleName ? [roleName] : [])])];
+        if (JSON.stringify(keys) === JSON.stringify(nextKeys)) continue;
+        const legacyKeys = [...(entry.cwbLegacyOwnerKeys ?? keys)];
+        applyEntryPatch(entry, { keys: nextKeys });
+        // Keep original keys for recovery/provenance without using them as owners.
+        entry.cwbLegacyOwnerKeys = legacyKeys;
+        patches.push({ uid: entry.uid, keys: nextKeys, content: entry.content });
+    }
+    if (!patches.length) return data;
+    if (cardKey !== getCardArchiveKey()) throw Error('读取期间角色卡已切换，未写入迁移数据。');
+    await saveWorldInfo(bookName, data, true);
+    data = await readWorldbookFromServer(bookName);
+    if (cardKey !== getCardArchiveKey()) throw Error('迁移期间角色卡已切换，已停止后续操作。');
+    for (const patch of patches) {
+        const stored = Object.values(data.entries).find(entry => Number(entry.uid) === Number(patch.uid));
+        if (!stored || stored.content !== patch.content || JSON.stringify(getKeys(stored)) !== JSON.stringify(patch.keys)) {
+            throw Error(`世界书《${bookName}》UID ${patch.uid} 的角色卡归属迁移未通过回读核验。`);
+        }
+    }
+    return data;
+}
+
+export async function getCardArchiveEntries(bookName) {
+    if (bookName === getPrimaryWorldbook()) {
+        const data = await readCardArchiveData(bookName);
+        return Object.values(data.entries).filter(isCurrentCardArchive).map(entry => ({ ...entry, keys: getKeys(entry), enabled: isEnabled(entry) }));
+    }
+    return (await getEntries(bookName, { fresh: true })).filter(isCurrentCardArchive);
+}
+
 function profileKeyMatchesCurrentOwner(keys) {
-    return keys.includes(getCardArchiveKey()) || keys.includes(state.chatId.replace(/ imported/g, ''));
+    return isCurrentCardArchive({ key: keys });
 }
 
 function hasLegacyChatOwner(keys, chatId) {
@@ -69,11 +127,18 @@ async function migrateProfileOwnershipToCard(settings, names = null) {
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!chatId || chatId.startsWith('unknown_chat')) return 0;
     const cardKey = getCardArchiveKey();
+    const primary = getPrimaryWorldbook();
+    const primaryData = primary ? await readCardArchiveData(primary) : { entries: {} };
+    const linkedOwners = new Set(Object.values(primaryData.entries).filter(entry => isCurrentCardArchive(entry)
+        && getKeys(entry).some(key => ['CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:角色档案目录'].includes(key)))
+        .flatMap(entry => entry.cwbLegacyOwnerKeys ?? [])
+        .filter(key => !String(key).startsWith('CWB:') && !['故事时间线', '角色关系'].includes(key) && !/^\d+-\d+$/.test(key)));
     const allowedNames = names ? new Set(names.map(name => sanitizeName(name)).filter(Boolean)) : null;
     const routedBooks = allowedNames ? await Promise.all([...allowedNames].map(name => routeWorldbook(settings, name))) : [];
     const books = [...new Set([
         ...await profileArchiveBooks(settings, getTargetWorldbook(settings)),
         ...routedBooks,
+        ...referencedProfileBooks(primaryData),
     ].filter(name => name && world_names.includes(name)))];
     const rows = await mapWithConcurrency(books, 4, async bookName => ({ bookName, entries: await getEntries(bookName, { fresh: true }) }));
     const candidatesByName = new Map();
@@ -88,7 +153,8 @@ async function migrateProfileOwnershipToCard(settings, names = null) {
         const cardOwned = keys.includes(cardKey);
         const currentChatOwned = hasLegacyChatOwner(keys, chatId);
         const explicitlyMatchedRole = allowedNames?.has(name) ?? false;
-        if (!cardOwned && !currentChatOwned && !explicitlyMatchedRole) continue;
+        const linkedChatOwned = [...linkedOwners].some(owner => hasLegacyChatOwner(keys, owner));
+        if (!cardOwned && !currentChatOwned && !linkedChatOwned && !explicitlyMatchedRole) continue;
         if (!candidatesByName.has(name)) candidatesByName.set(name, []);
         candidatesByName.get(name).push({ bookName, entry, marker, name, cardOwned });
     }
@@ -401,7 +467,8 @@ function referencedProfileBooks(primaryData, chatId = null) {
     const books = new Set();
     for (const entry of Object.values(primaryData?.entries ?? {})) {
         const keys = getKeys(entry);
-        if (!keys.includes('CWB:角色档案目录') || (chatId && !keys.includes(chatId))) continue;
+        if (keys.some(key => String(key).startsWith('CWB:角色卡:') && key !== getCardArchiveKey())) continue;
+        if (!keys.includes('CWB:角色档案目录') || (chatId && !keys.includes(chatId) && !isCurrentCardArchive(entry))) continue;
         // The plugin's per-chat directory already records where routed profiles live.
         // Trust only names that still exist in Tavern's worldbook list.
         for (const match of String(entry.content ?? '').matchAll(/世界书《([^》]+)》/g)) {
@@ -419,7 +486,7 @@ async function scanGeneratedContent(phase, onProgress) {
     if (!primary) throw Error('当前角色卡没有主世界书，无法安全定位本聊天的生成记录。');
     // Read the master once, then follow its per-chat profile directory. This avoids
     // fetching every worldbook in Tavern when the plugin already knows the targets.
-    const primaryData = await readWorldbookFromServer(primary);
+    const primaryData = await readCardArchiveData(primary);
     const configured = extension_settings?.cwb_system_api;
     const configuredTarget = configured?.worldbookTarget === 'custom' ? configured.customWorldbook : null;
     const cardKey = getCardArchiveKey();
@@ -446,7 +513,7 @@ async function scanGeneratedContent(phase, onProgress) {
             // Older plugin versions and manually reordered Tavern keys may keep
             // the chat ID and marker in a different order. Match both by value.
             const type = GENERATED_ENTRY_TYPES.find(([marker]) => keys.includes(marker)
-                && (keys.includes(chatId) || CARD_SCOPED_ENTRY_TYPES.has(marker) && keys.includes(cardKey)));
+                && isCurrentCardArchive(entry));
             if (!type) continue;
             snapshot.entries.push({
                 bookName: snapshot.bookName, uid: Number(entry.uid), marker: type[0], label: type[1],
@@ -758,7 +825,7 @@ export async function deleteGeneratedContent(preview, onProgress) {
             const keys = getKeys(entry);
             const target = targets.find(item => item.uid === Number(entry.uid));
             return uidSet.has(Number(entry.uid)) && Boolean(target && keys.includes(target.marker)
-                && (keys.includes(chatId) || CARD_SCOPED_ENTRY_TYPES.has(target.marker) && keys.includes(getCardArchiveKey())));
+                && isCurrentCardArchive(entry));
         });
         if (toDelete.length !== targets.length) throw Error(`世界书《${bookName}》条目核对失败，未继续删除该世界书内容。`);
         for (const entry of toDelete) {
@@ -775,7 +842,7 @@ export async function deleteGeneratedContent(preview, onProgress) {
             const target = targets.find(item => item.uid === Number(entry.uid));
             const keys = getKeys(entry);
             return Boolean(target && keys.includes(target.marker)
-                && (keys.includes(chatId) || CARD_SCOPED_ENTRY_TYPES.has(target.marker) && keys.includes(getCardArchiveKey())));
+                && isCurrentCardArchive(entry));
         });
         if (remaining) throw Error(`世界书《${bookName}》删除后回读仍发现目标条目；请刷新后检查。`);
         deleted += toDelete.length;
@@ -888,9 +955,9 @@ async function writeTimeline(content, startFloor, endFloor) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存故事时间线。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await readWorldbookFromServer(bookName);
+    const data = await readCardArchiveData(bookName);
     if (!data?.entries) throw new Error(`无法读取世界书《${bookName}》。`);
-    const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && getKeys(entry).includes(chatId));
+    const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:故事时间线') && isCurrentCardArchive(entry));
     if (!existing.length && content === undefined) return [];
     if (existing.length === 1 && content === undefined && existing[0].content === mergeTimelineContent([existing[0].content])) {
         if (!isEnabled(existing[0]) || existing[0].constant !== true || existing[0].selective !== false) {
@@ -904,9 +971,9 @@ async function writeTimeline(content, startFloor, endFloor) {
     const target = existing[0] || createWorldInfoEntry(bookName, data);
     if (!target) throw new Error('创建世界书条目 UID 失败。');
     applyEntryPatch(target, {
-        comment: `CWB故事时间线-${chatId}`,
+        comment: 'CWB故事时间线',
         content: mergeTimelineContent([...existing.map(entry => entry.content), content]),
-        keys: ['CWB:故事时间线', chatId, '故事时间线', ...mergeRanges(ranges).map(([start, end]) => `CWB:时间线楼层:${start}-${end}`)],
+        keys: ['CWB:故事时间线', getCardArchiveKey(), '故事时间线', ...mergeRanges(ranges).map(([start, end]) => `CWB:时间线楼层:${start}-${end}`)],
         enabled: true, type: 'constant', position: 0, order: 10000, preventRecursion: true,
     });
     const removed = new Set(existing.slice(1));
@@ -935,7 +1002,7 @@ export async function getChatUpdateTracking(totalMessages = 0) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) return null;
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await readWorldbookFromServer(bookName);
+    const data = await readCardArchiveData(bookName);
     const { entry, state: saved } = findSavedUpdateState(data, chatId);
     const legacy = saved ? [] : findLegacyUpdateRecords(data, chatId);
     const legacyTracking = trackingFromLegacy(legacy, totalMessages);
@@ -958,7 +1025,7 @@ export async function recordChatUpdateRange(startIndex, endIndex, totalMessages,
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存全聊天更新记录。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await readWorldbookFromServer(bookName);
+    const data = await readCardArchiveData(bookName);
     const { state: saved } = findSavedUpdateState(data, chatId);
     const oldTrackers = findLegacyUpdateRecords(data, chatId);
     const oldTracking = trackingFromLegacy(oldTrackers, initialTrackingStart);
@@ -1139,7 +1206,7 @@ export async function getLastUpdatedFloor(settings) {
     let latest = 0;
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
-        const roster = entries.find(entry => getKeys(entry).includes('Amily2角色总集') && getKeys(entry).includes(chatId));
+        const roster = entries.find(entry => getKeys(entry).includes('Amily2角色总集') && isCurrentCardArchive(entry));
         const match = String(roster?.content ?? '').match(/【前(\d+)楼角色世界书已更新完成】/);
         if (match) latest = Math.max(latest, Number(match[1]));
         else {
@@ -1151,6 +1218,11 @@ export async function getLastUpdatedFloor(settings) {
 }
 
 export async function manageChatEntries(settings) {
+    const primary = getPrimaryWorldbook();
+    if (primary) {
+        await readCardArchiveData(primary);
+        await migrateProfileOwnershipToCard(settings);
+    }
     const customTarget = settings.worldbookTarget === 'custom';
     // Timeline and relationship summaries are always saved in the primary worldbook.
     const books = [...new Set([getPrimaryWorldbook(), ...(customTarget ? [] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)])])];
@@ -1163,7 +1235,7 @@ export async function manageChatEntries(settings) {
             const keys = getKeys(entry);
             if (isPluginReferenceEntry(entry)) {
                 if (isAlwaysOnReferenceEntry(entry)) {
-                    if (keys.includes(chatId)) {
+                    if (isCurrentCardArchive(entry)) {
                         if (!entry.enabled || entry.constant !== true || entry.selective !== false) patches.push({ uid: entry.uid, enabled: true, type: 'constant' });
                     } else if (entry.enabled || entry.constant === true) {
                         patches.push({ uid: entry.uid, enabled: false, type: 'selective' });
@@ -1178,8 +1250,8 @@ export async function manageChatEntries(settings) {
                 continue;
             }
             if (customTarget || settings.enabled === false) continue;
-            if (!keys.includes('Amily2角色总集') && !keys.includes(chatId) && !keys.includes(state.chatId)) continue;
-            const shouldEnable = keys.includes(chatId) || keys.includes(state.chatId);
+            if (!keys.includes('Amily2角色总集') && !keys.includes(chatId) && !keys.includes(state.chatId) && !isCurrentCardArchive(entry)) continue;
+            const shouldEnable = isCurrentCardArchive(entry);
             if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
         }
         if (patches.length) await patchEntries(bookName, patches);
@@ -1224,16 +1296,16 @@ export async function getRelationshipSummary() {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法读取角色关系。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const entries = await getEntries(bookName);
-    return entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId)).map(entry => entry.content).join('\n');
+    const entries = Object.values((await readCardArchiveData(bookName)).entries);
+    return entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && isCurrentCardArchive(entry)).map(entry => entry.content).join('\n');
 }
 
 export async function getRelationshipRanges() {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const entries = await getEntries(bookName);
-    return mergeRanges(entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId))
+    const entries = Object.values((await readCardArchiveData(bookName)).entries);
+    return mergeRanges(entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && isCurrentCardArchive(entry))
         .flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:关系楼层:')));
 }
 
@@ -1241,13 +1313,13 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存角色关系。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await readWorldbookFromServer(bookName);
+    const data = await readCardArchiveData(bookName);
     if (!data?.entries) throw new Error('无法读取主世界书。');
-    const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && getKeys(entry).includes(chatId));
+    const existing = Object.values(data.entries).filter(entry => getKeys(entry).includes('CWB:角色关系汇总') && isCurrentCardArchive(entry));
     const target = existing[0] || createWorldInfoEntry(bookName, data);
     if (!target) throw new Error('创建角色关系条目失败。');
     const ranges = mergeRanges([...existing.flatMap(entry => parseTaggedRanges(getKeys(entry), 'CWB:关系楼层:')), [startIndex, endIndex]]);
-    applyEntryPatch(target, { comment: `CWB角色关系汇总-${chatId}`, content, keys: ['CWB:角色关系汇总', chatId, '角色关系', ...ranges.map(([start, end]) => `CWB:关系楼层:${start}-${end}`)], enabled: true, type: 'constant', position: 0, order: 9998, preventRecursion: true });
+    applyEntryPatch(target, { comment: 'CWB角色关系汇总', content, keys: ['CWB:角色关系汇总', getCardArchiveKey(), '角色关系', ...ranges.map(([start, end]) => `CWB:关系楼层:${start}-${end}`)], enabled: true, type: 'constant', position: 0, order: 9998, preventRecursion: true });
     const duplicates = new Set(existing.slice(1));
     for (const key of Object.keys(data.entries)) if (duplicates.has(data.entries[key])) delete data.entries[key];
     await saveWorldInfo(bookName, data, true);
@@ -1262,12 +1334,12 @@ export async function getModuleProgress() {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw Error('当前角色卡未绑定主世界书，无法读取模块进度。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await readWorldbookFromServer(bookName);
+    const data = await readCardArchiveData(bookName);
     const { entry, state: saved, duplicates } = findSavedUpdateState(data, chatId);
     const legacy = moduleProgressFromLegacy(data, chatId);
-    const identityKey = getStableChatIdentityKey();
+    const identityKey = getArchiveIdentityKey();
     const oldTrackers = findLegacyUpdateRecords(data, chatId);
-    const hasLegacy = oldTrackers.length || Object.values(data.entries).some(item => getKeys(item).includes('CWB:模块进度') && getKeys(item).includes(chatId));
+    const hasLegacy = oldTrackers.length || Object.values(data.entries).some(item => getKeys(item).includes('CWB:模块进度') && isCurrentCardArchive(item));
     const combined = saved ? mergeModuleProgress(saved.modules ?? {}, legacy) : legacy;
     const oldTracking = trackingFromLegacy(oldTrackers);
     const tracking = saved?.tracking ? {
@@ -1278,8 +1350,7 @@ export async function getModuleProgress() {
     const next = { ...(saved ?? {}), modules: combined, tracking };
     if (hasLegacy || (saved && entry && ((identityKey && !getKeys(entry).includes(identityKey))
         || duplicates.length || entry.content !== formatUpdateState(next)))) {
-        // One-time migration: bind existing chat-ID progress to SillyTavern's
-        // stable chat metadata so a later rename/replacement can still find it.
+        // Consolidate migrated progress under the character-card owner.
         await persistUpdateState(bookName, chatId, data, next);
     }
     return combined;
@@ -1289,12 +1360,13 @@ export async function getProgressRecoveryCandidates() {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw Error('当前角色卡未绑定主世界书，无法查找旧进度。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await readWorldbookFromServer(bookName);
-    const identityKey = getStableChatIdentityKey();
+    const data = await readCardArchiveData(bookName);
+    const identityKey = getArchiveIdentityKey();
     if (findSavedUpdateState(data, chatId).state) return [];
     const candidates = new Map();
     for (const entry of Object.values(data.entries)) {
         const keys = getKeys(entry);
+        if (keys.some(key => String(key).startsWith('CWB:角色卡:'))) continue;
         if (!keys.includes('CWB:更新状态') || keys.includes(chatId) || (identityKey && keys.includes(identityKey))) continue;
         const sourceChatId = keys.find(key => key !== 'CWB:更新状态' && !String(key).startsWith('CWB:聊天身份:'));
         if (!sourceChatId || candidates.has(sourceChatId)) continue;
@@ -1318,11 +1390,11 @@ export async function copyProgressFromChat(sourceChatId) {
     if (!bookName) throw Error('当前角色卡未绑定主世界书，无法找回进度。');
     const chatId = state.chatId.replace(/ imported/g, '');
     if (!chatId || chatId.startsWith('unknown_chat') || !sourceChatId || sourceChatId === chatId) throw Error('当前或来源聊天 ID 无效，未复制进度。');
-    const data = await readWorldbookFromServer(bookName);
+    const data = await readCardArchiveData(bookName);
     const existing = findSavedUpdateState(data, chatId);
-    if (existing.state) throw Error('当前聊天已经有进度存档；为防止覆盖，未复制其他聊天记录。');
+    if (existing.state) throw Error('当前角色卡已经有进度存档；无需从其他聊天复制。');
     const source = Object.values(data.entries).find(entry => getKeys(entry).includes('CWB:更新状态') && getKeys(entry).includes(sourceChatId));
-    if (!source) throw Error('找不到所选来源的进度存档；原始存档未修改。');
+    if (!source || getKeys(source).some(key => String(key).startsWith('CWB:角色卡:') && key !== getCardArchiveKey())) throw Error('找不到可归属当前角色卡的旧进度；未修改其他角色卡。');
     let saved;
     try { saved = parseUpdateState(source.content); }
     catch { throw Error('所选来源的进度存档损坏，未复制任何内容。'); }
@@ -1335,7 +1407,7 @@ export async function recordModuleResult(module, start, end, error = null) {
     const bookName = getPrimaryWorldbook();
     if (!bookName) throw Error('当前角色卡未绑定主世界书，无法保存模块进度。');
     const chatId = state.chatId.replace(/ imported/g, '');
-    const data = await readWorldbookFromServer(bookName);
+    const data = await readCardArchiveData(bookName);
     const { state: saved } = findSavedUpdateState(data, chatId);
     const previous = mergeModuleProgress(saved?.modules ?? legacyModuleProgress(data, chatId), moduleProgressFromLegacy(data, chatId));
     const modules = applyModuleResult(previous, module, start, end, error);
@@ -1372,7 +1444,7 @@ export async function verifyProfileContent(settings, name, content, isUser = fal
 
 
 function legacyModuleProgress(data, chatId) {
-    const entries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes(chatId));
+    const entries = Object.values(data?.entries ?? {}).filter(isCurrentCardArchive);
     const trackers = entries.filter(entry => getKeys(entry).includes('CWB:更新记录'));
     // v0.9.8 wrote this explicit confirmation only after all three sections saved.
     if (!trackers.some(entry => String(entry.content ?? '').includes('三个模块均成功，AI调用1次'))) return {};
@@ -1453,10 +1525,10 @@ function parseUpdateState(content) {
 }
 
 function findSavedUpdateState(data, chatId) {
-    const identityKey = getStableChatIdentityKey();
+    const identityKey = getArchiveIdentityKey();
     const matches = Object.values(data?.entries ?? {}).filter(entry => {
         const keys = getKeys(entry);
-        return keys.includes('CWB:更新状态') && (keys.includes(chatId) || (identityKey && keys.includes(identityKey)));
+        return keys.includes('CWB:更新状态') && isCurrentCardArchive(entry);
     });
     if (!matches.length) return { entry: null, state: null, duplicates: [] };
     const states = matches.map(entry => {
@@ -1485,17 +1557,12 @@ function findSavedUpdateState(data, chatId) {
     return { entry: matches[0], state, duplicates: matches.slice(1) };
 }
 
-function getStableChatIdentityKey() {
-    const metadata = getContext()?.chatMetadata;
-    const integrity = String(metadata?.integrity ?? '').trim();
-    // SillyTavern branches may inherit their parent's integrity ID; keep those
-    // scoped to their own chat filename to avoid sharing progress across branches.
-    if (!integrity || metadata?.main_chat) return null;
-    return `CWB:聊天身份:${integrity}`;
+function getArchiveIdentityKey() {
+    return getCardArchiveKey();
 }
 
 function findLegacyUpdateRecords(data, chatId) {
-    return Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:更新记录') && getKeys(entry).includes(chatId));
+    return Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:更新记录') && isCurrentCardArchive(entry));
 }
 
 function trackingFromLegacy(entries = [], fallbackStart = 0) {
@@ -1513,7 +1580,7 @@ function trackingFromLegacy(entries = [], fallbackStart = 0) {
 
 function moduleProgressFromLegacy(data, chatId) {
     const current = legacyModuleProgress(data, chatId);
-    const oldEntries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:模块进度') && getKeys(entry).includes(chatId));
+    const oldEntries = Object.values(data?.entries ?? {}).filter(entry => getKeys(entry).includes('CWB:模块进度') && isCurrentCardArchive(entry));
     if (!oldEntries.length) return current;
     try {
         const parsed = oldEntries.map(entry => JSON.parse(entry.content).modules ?? {});
@@ -1551,10 +1618,10 @@ async function readWorldbookFromServer(bookName) {
 }
 
 async function persistUpdateState(bookName, chatId, data, nextState) {
-    const identityKey = getStableChatIdentityKey();
+    const identityKey = getArchiveIdentityKey();
     const matches = Object.values(data.entries).filter(entry => {
         const keys = getKeys(entry);
-        const belongsToChat = keys.includes(chatId) || (identityKey && keys.includes(identityKey));
+        const belongsToChat = isCurrentCardArchive(entry);
         return belongsToChat && (keys.includes('CWB:更新状态') || keys.includes('CWB:更新记录') || keys.includes('CWB:模块进度'));
     });
     const target = matches.find(entry => getKeys(entry).includes('CWB:更新状态')) || matches[0] || createWorldInfoEntry(bookName, data);
@@ -1562,7 +1629,7 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
     const canonical = {
         comment: '插件更新进度',
         content: formatUpdateState(nextState),
-        keys: ['CWB:更新状态', chatId, ...(identityKey ? [identityKey] : [])],
+        keys: ['CWB:更新状态', identityKey],
         enabled: false,
         type: 'selective',
         preventRecursion: true,
@@ -1576,7 +1643,7 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
     await saveWorldInfo(bookName, data, true);
     const persisted = await readWorldbookFromServer(bookName);
     const stored = Object.values(persisted.entries).find(entry => Number(entry.uid) === Number(target.uid));
-    if (!stored || stored.content !== canonical.content || !getKeys(stored).includes('CWB:更新状态')) {
+    if (!stored || stored.content !== canonical.content || !getKeys(stored).includes('CWB:更新状态') || !isCurrentCardArchive(stored)) {
         throw Error('统一更新状态保存后回读不一致；进度未确认，请刷新后检查。');
     }
     return stored;
@@ -1584,6 +1651,7 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
 
 
 export async function getProfileCompactionCandidates(settings) {
+    await migrateProfileOwnershipToCard(settings);
     const scopeChatId = state.chatId;
     const chatId = scopeChatId.replace(/ imported/g, '');
     const primary = getPrimaryWorldbook();
@@ -1596,7 +1664,7 @@ export async function getProfileCompactionCandidates(settings) {
         const entries = await getEntries(bookName, { fresh: true });
         for (const entry of entries) {
             const keys = getKeys(entry);
-            if ((!keys.includes(chatId) && !keys.includes(cardKey)) || (!keys.includes('CWB:自动档案') && !keys.includes('CWB:主角档案'))) continue;
+            if (!isCurrentCardArchive(entry) || (!keys.includes('CWB:自动档案') && !keys.includes('CWB:主角档案'))) continue;
             const content = sanitizeProfileContent(entry.content);
             if (content === null) { skipped++; continue; }
             candidates.push({ bookName, uid: entry.uid, original: entry.content, content,

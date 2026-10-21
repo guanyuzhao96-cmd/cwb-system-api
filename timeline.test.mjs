@@ -10,6 +10,7 @@ import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profil
 import { mergeRanges, parseTaggedRanges, overlappingRanges } from './update-tracker.mjs';
 import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } from './timeline-utils.mjs';
 import { acquireOperationLock } from './state.js';
+import { sanitizeName, parseCustomFormat } from './utils.js';
 
 function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
@@ -17,10 +18,10 @@ function harness(entries = {}) {
         MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,
-        structuredClone, getRequestHeaders: () => ({}),
+        structuredClone, sanitizeName, parseCustomFormat, world_names: ['main'], selected_world_info: [], world_info: {}, getRequestHeaders: () => ({}),
         fetch: async () => ({ ok: true, json: async () => structuredClone(data) }),
         mergeRanges, parseTaggedRanges, overlappingRanges, state: { chatId: 'chat', operationOwner: null },
-        getContext: () => ({ characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] }),
+        getContext: () => ({ characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }] }),
         loadWorldInfo: async () => structuredClone(data),
         saveWorldInfo: async (_, next) => { if (fail) throw Error('save failed'); data = structuredClone(next); saves++; },
         createWorldInfoEntry: (_, next) => { const uid = Math.max(-1, ...Object.keys(next.entries).map(Number)) + 1; return next.entries[uid] = { uid }; },
@@ -32,9 +33,9 @@ function harness(entries = {}) {
 const entry = (uid, chat, range, content) => ({ uid, key: ['CWB:故事时间线', chat, `CWB:时间线楼层:${range}`], content });
 
 test('legacy entries merge atomically, retain UID, deduplicate and isolate other chats', async () => {
-    const h = harness({ 0: entry(0, 'chat', '1-20', '[时间线.0]: 2025-02-02｜甲｜事件乙'), 1: entry(1, 'chat', '41-60', '[时间线.0]: 2025-01-01｜甲｜事件甲\n[时间线.1]: 2025-02-02｜甲｜事件乙\n[时间线.2]: 2025-02-02｜乙｜事件丙'), 2: entry(2, 'other', '1-10', 'other') });
+    const h = harness({ 0: entry(0, 'chat', '1-20', '[时间线.0]: 2025-02-02｜甲｜事件乙'), 1: entry(1, 'chat', '41-60', '[时间线.0]: 2025-01-01｜甲｜事件甲\n[时间线.1]: 2025-02-02｜甲｜事件乙\n[时间线.2]: 2025-02-02｜乙｜事件丙'), 2: entry(2, 'CWB:角色卡:foreign.png', '1-10', 'other') });
     await h.context.getTimelineEntries();
-    assert.equal(h.saves(), 1);
+    assert.equal(h.saves(), 2);
     assert.deepEqual(Object.keys(h.data().entries), ['0', '2']);
     assert.equal(h.data().entries[0].content, '【主线时间线】\n「2025.1.1」 1.事件甲\n「2025.2.2」 1.事件乙\n           2.事件丙');
     assert.ok(h.data().entries[0].key.includes('CWB:时间线楼层:41-60'));
@@ -55,7 +56,7 @@ test('timeline and relationship references stay enabled and constant after save 
         1: { uid: 1, key: ['CWB:角色关系汇总', 'chat'], content: '旧关系', disable: false },
         2: { uid: 2, key: ['CWB:角色档案目录', 'chat'], content: '目录', disable: false },
         3: { uid: 3, key: ['CWB:自动档案', 'chat', '角色甲'], content: '档案', disable: false },
-        4: { uid: 4, key: ['CWB:故事时间线', 'other'], content: '其他聊天时间线', disable: false, constant: true, selective: false },
+        4: { uid: 4, key: ['CWB:故事时间线', 'CWB:角色卡:foreign.png'], content: '其他聊天时间线', disable: false, constant: true, selective: false },
     });
     h.context.listWorldbooks = () => ['main'];
     await h.context.saveRelationshipSummary('甲 ↔ 乙：同学', 0, 10);
@@ -77,7 +78,7 @@ test('refresh repairs server-side disabled references despite stale cache and re
     const h = harness({
         0: { uid: 0, key: ['CWB:故事时间线', 'chat'], content: '时间线', disable: true, enabled: false, constant: false },
         1: { uid: 1, key: ['CWB:角色关系汇总', 'chat'], content: '关系', disable: true, enabled: false, constant: false },
-        2: { uid: 2, key: ['CWB:角色关系汇总', 'other'], content: '其他聊天', disable: true, constant: false },
+        2: { uid: 2, key: ['CWB:角色关系汇总', 'CWB:角色卡:foreign.png'], content: '其他聊天', disable: true, constant: false },
     });
     h.context.loadWorldInfo = async () => ({ entries: {} });
     await h.context.manageChatEntries({ enabled: false, worldbookTarget: 'custom', customWorldbook: 'elsewhere' });
@@ -97,7 +98,7 @@ test('Chinese progress migration keeps one UID, preserves gaps and failures, and
     const h = harness({
         5: { uid: 5, key: ['CWB:更新状态', 'chat'], content: JSON.stringify({ version: 2, modules: { profiles: { completed: [[0, 29]], failed: [] } }, tracking: { startIndex: 0, totalMessages: 90, completed: [[0, 29]], duplicates: [] } }) },
         6: { uid: 6, key: ['CWB:更新状态', 'chat'], content: JSON.stringify({ version: 2, modules: { profiles: { completed: [[40, 59]], failed: [[30, 39]] } } }) },
-        7: { uid: 7, key: ['CWB:更新状态', 'other'], content: '其他聊天内容不变' },
+        7: { uid: 7, key: ['CWB:更新状态', 'CWB:角色卡:foreign.png'], content: '其他聊天内容不变' },
     });
     const progress = await h.context.getModuleProgress();
     assert.deepEqual(JSON.parse(JSON.stringify(progress.profiles.completed)), [[0, 29], [40, 59]]);
@@ -144,7 +145,7 @@ test('first save and retry keep one entry; failed migration preserves originals'
 test('refresh fills only the gap between disjoint ranges and repeats without API calls', async () => {
     const h = harness({ 0: entry(0, 'chat', '1-20', '2025-01-01｜甲｜事件甲'), 1: entry(1, 'chat', '41-60', '2025-03-01｜甲｜事件丙') });
     let calls = 0;
-    h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: 60 }, () => ({ mes: '正文' })), characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] });
+    h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: 60 }, () => ({ mes: '正文' })), characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }] });
     h.context.$ = () => ({ text() {} });
     h.context.callSystemApi = async messages => {
         calls++;
@@ -208,7 +209,7 @@ test('timeline context stays bounded and same-day events retain separate records
 
 test('chat switch during a timeline request prevents cross-chat writes and releases the operation lock', async () => {
     const h = harness();
-    let active = { chatId: 'chat', chat: [{ mes: '旧聊天事件' }], characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] };
+    let active = { chatId: 'chat', chat: [{ mes: '旧聊天事件' }], characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }] };
     h.context.getContext = () => active;
     h.context.$ = () => ({ text() {} });
     let finish;
@@ -228,7 +229,7 @@ test('chat switch during a timeline request prevents cross-chat writes and relea
 test('consecutive new rounds append to one entry; covered empty results can recover', async () => {
     const h = harness();
     let count = 20, calls = 0, empty = false;
-    h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: count }, () => ({ mes: '正文' })), characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }] });
+    h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: count }, () => ({ mes: '正文' })), characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }] });
     h.context.$ = () => ({ text() {} });
     h.context.callSystemApi = async () => { calls++; return JSON.stringify({ 时间线: empty ? [] : [`2025-01-${String(count / 20).padStart(2, '0')}｜甲｜事件${count}`] }); };
     vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
@@ -253,7 +254,7 @@ test('consecutive new rounds append to one entry; covered empty results can reco
 
 test('unified no-profile update still saves timeline and relationships with exactly one AI call', async () => {
     const h = harness();
-    h.context.getContext = () => ({ chatId: 'chat', characterId: 0, characters: [{ data: { extensions: { world: 'main' } } }], name1: '用户', chat: [{ mes: '新事件' }] });
+    h.context.getContext = () => ({ chatId: 'chat', characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }], name1: '用户', chat: [{ mes: '新事件' }] });
     let calls = 0, timelineWrites = 0, relationshipWrites = 0;
     Object.assign(h.context, {
         $: () => ({ text() {} }), getTargetWorldbook: () => 'main',

@@ -1,18 +1,12 @@
-import { state } from './state.js';
-import { deleteEntries, getEntries, getTargetWorldbook, patchEntries } from './lorebook.js';
+import { deleteEntries, getCardArchiveEntries, getCardArchiveKey, getTargetWorldbook, patchEntries } from './lorebook.js';
 import { escapeHtml, notify, parseCustomFormat } from './utils.js';
 
-function currentEntries(entries) {
-    const chatId = state.chatId.replace(/ imported/g, '');
-    return entries.filter(entry => Array.isArray(entry.keys)
-        && entry.keys.includes(chatId)
-        && !entry.keys.includes('Amily2角色总集'));
-}
 
 export async function openViewer(settings) {
     const bookName = getTargetWorldbook(settings);
     if (!bookName) return notify('warning', '未找到目标世界书。');
-    const entries = currentEntries(await getEntries(bookName));
+    const owner = getCardArchiveKey();
+    const entries = (await getCardArchiveEntries(bookName)).filter(entry => entry.keys.includes('CWB:自动档案') || entry.keys.includes('CWB:主角档案'));
     $('#cwb-viewer-modal').remove();
     const cards = entries.length ? entries.map(entry => {
         const parsed = parseCustomFormat(entry.content);
@@ -25,7 +19,7 @@ export async function openViewer(settings) {
                 <button class="menu_button redWarningBG cwb-delete-profile"><i class="fa-solid fa-trash"></i> 删除</button>
             </div>
         </details>`;
-    }).join('') : '<div class="cwb-note">当前聊天还没有角色档案。</div>';
+    }).join('') : '<div class="cwb-note">当前角色卡还没有角色档案。</div>';
     $('body').append(`<div id="cwb-viewer-modal" class="cwb-modal">
         <div class="cwb-modal-box">
             <div class="cwb-modal-head"><b>角色档案 · ${escapeHtml(bookName)}</b><button class="menu_button cwb-close-viewer">关闭</button></div>
@@ -40,6 +34,7 @@ export async function openViewer(settings) {
         const card = $(this).closest('.cwb-card');
         const uid = Number(card.data('uid'));
         try {
+            if (owner !== getCardArchiveKey()) throw Error('角色卡已切换，请重新打开档案。');
             await patchEntries(bookName, [{ uid, content: card.find('.cwb-profile-content').val() }]);
             notify('success', '角色档案已保存。');
         } catch (error) { notify('error', `保存失败：${error.message}`); }
@@ -49,6 +44,7 @@ export async function openViewer(settings) {
         const uid = Number(card.data('uid'));
         if (!confirm(`确定删除 UID ${uid} 的角色档案吗？`)) return;
         try {
+            if (owner !== getCardArchiveKey()) throw Error('角色卡已切换，请重新打开档案。');
             await deleteEntries(bookName, [uid]);
             card.remove();
             notify('success', '角色档案已删除。');

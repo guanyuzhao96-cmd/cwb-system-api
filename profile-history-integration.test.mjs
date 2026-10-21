@@ -242,3 +242,75 @@ test('output overflow is a failure, not a no-change success', supported, async (
     assert.equal(progress.profiles.completed.length, 0);
     assert.equal(progress.profiles.failed.length, 1);
 });
+
+
+test('every primary archive migrates in place and survives a completely different chat identity', supported, async () => {
+    const h = await harness();
+    h.core.refreshChatState();
+    const ledger = JSON.stringify({ version: 2, modules: {
+        profiles: { completed: [[0, 29]], failed: [] },
+        timeline: { completed: [[0, 19]], failed: [[20, 29]] },
+        relationships: { completed: [[0, 29]], failed: [] },
+    }, tracking: { startIndex: 0, totalMessages: 30, completed: [[0, 19]], duplicates: [] } });
+    const rows = [
+        ['CWB:故事时间线', '[时间线.0]:2025-09-01｜甲｜原聊天关键事件'],
+        ['CWB:角色关系汇总', '甲 ↔ 乙：同学'],
+        ['CWB:更新状态', ledger],
+        ['CWB:角色档案目录', '档案目录原文'],
+        ['Amily2角色总集', '角色总览原文'],
+        ['CWB:主角档案', '[姓名]:主角\n[剧情.0]:主角原经历'],
+    ];
+    for (let i = 0; i < rows.length; i++) h.data().entries[20 + i] = {
+        uid: 20 + i, key: [rows[i][0], 'deleted-old-chat'], content: rows[i][1], disable: true,
+    };
+    h.data().entries[50] = { uid: 50, key: ['CWB:角色关系汇总', 'CWB:角色卡:foreign.png'], content: '其他卡关系', disable: true };
+    const foreign = structuredClone(h.data().entries[50]);
+    await h.lorebook.manageChatEntries(h.settings);
+    for (let i = 0; i < rows.length; i++) {
+        const saved = h.data().entries[20 + i];
+        assert.equal(saved.content, rows[i][1], 'ownership migration retains the original content and UID');
+        assert.ok(saved.key.includes(owner));
+        assert.ok(!saved.key.includes('deleted-old-chat'));
+        assert.ok(saved.cwbLegacyOwnerKeys.includes('deleted-old-chat'));
+    }
+    assert.deepEqual(h.data().entries[50], foreign);
+    const before = await h.lorebook.getModuleProgress();
+    h.contextData.chatId = 'entirely-new-chat - Branch #99';
+    h.contextData.chatMetadata = { integrity: 'brand-new-integrity', main_chat: 'different-source' };
+    h.core.refreshChatState();
+    await h.lorebook.manageChatEntries(h.settings);
+    const after = await h.lorebook.getModuleProgress();
+    assert.equal(JSON.stringify(after), JSON.stringify(before));
+    assert.match(await h.lorebook.getRelationshipSummary(), /甲 ↔ 乙：同学/);
+    const timelines = await h.lorebook.getTimelineEntries();
+    assert.equal(timelines.length, 1);
+    assert.equal(timelines[0].uid, 20);
+    for (const uid of [20, 21]) assert.equal(h.data().entries[uid].disable, false);
+    await h.lorebook.saveRelationshipSummary('甲 ↔ 乙：朋友', 30, 39);
+    assert.equal(h.data().entries[21].content, '甲 ↔ 乙：朋友');
+    assert.equal(Object.values(h.data().entries).filter(e => e.key.includes('CWB:角色关系汇总') && e.key.includes(owner)).length, 1);
+    assert.ok((await h.lorebook.getCardArchiveEntries('主世界书')).some(e => e.uid === 1));
+    h.contextData.characters[0].avatar = 'different-card.png';
+    h.core.refreshChatState();
+    assert.equal(JSON.stringify(await h.lorebook.getModuleProgress()), '{}');
+    assert.equal(await h.lorebook.getRelationshipSummary(), '');
+    assert.equal((await h.lorebook.getTimelineEntries()).length, 0);
+});
+
+test('shared worldbooks never auto-adopt another unidentified legacy chat', supported, async () => {
+    const h = await harness();
+    h.core.refreshChatState();
+    h.contextData.characters.push({ name: '另一张卡', avatar: 'other.png', data: { extensions: { world: '主世界书' } } });
+    h.data().entries[20] = { uid: 20, key: ['CWB:角色关系汇总', 'unknown-old-chat'], content: '无法确定归属的关系' };
+    const original = structuredClone(h.data().entries[20]);
+    assert.equal(await h.lorebook.getRelationshipSummary(), '');
+    assert.deepEqual(h.data().entries[20], original);
+});
+
+test('switching cards with the same chat filename during AI generation blocks archive writes', supported, async () => {
+    const h = await harness();
+    h.duringAI(() => { h.contextData.characters[0].avatar = 'other-card.png'; });
+    await assert.rejects(h.core.updateRange(h.settings, 0, 0, { silent: true }), /切换了聊天/);
+    assert.equal(h.data().entries[1].content, profile([oldEvent]));
+    assert.equal(h.state.operationOwner, null);
+});

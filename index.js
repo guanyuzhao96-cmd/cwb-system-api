@@ -357,7 +357,7 @@ function bindUi() {
                 profileCountAudit = { stage: 'select', chatId: queue.chatId, queue };
                 profileCountAuditSelected = new Set();
                 renderProfileCountAudit();
-                $('#cwb-status').text(`已读取 ${queue.total} 条当前聊天插件档案；请勾选要核对的条目。`);
+                $('#cwb-status').text(`已读取 ${queue.total} 条当前角色卡插件档案；请勾选要核对的条目。`);
             } finally { release(); }
         });
     });
@@ -501,30 +501,30 @@ function bindUi() {
             const labels = { scan: '扫描世界书', verify: '复核条目', delete: '删除条目', readback: '核验保存' };
             button.text(`${labels[phase] ?? '处理中'} ${current}/${total}…`);
         };
-        button.prop('disabled', true).text('正在核对当前聊天条目…');
+        button.prop('disabled', true).text('正在核对当前角色卡条目…');
         let release;
         try {
-            release = acquireOperationLock(state, '删除当前聊天生成条目');
+            release = acquireOperationLock(state, '删除当前角色卡生成条目');
             refreshChatState();
             const preview = await getGeneratedContentPreview(showDeleteProgress);
             if (!preview.entries.length) {
-                $('#cwb-status').text('当前聊天没有可清理的插件生成条目。');
-                notify('info', '当前聊天没有可清理的插件生成条目。');
+                $('#cwb-status').text('当前角色卡没有可清理的插件生成条目。');
+                notify('info', '当前角色卡没有可清理的插件生成条目。');
                 return;
             }
             const details = preview.entries.map(entry => {
                 const name = entry.comment || `${entry.label}（UID ${entry.uid}）`;
                 return `《${entry.bookName}》｜${name}｜${entry.label}｜UID ${entry.uid}`;
             }).join('\n');
-            const message = `即将删除当前聊天的 ${preview.entries.length} 条插件生成内容：\n\n${details}\n\n仅删除条目键中明确标记为当前聊天的数据。原始/手工条目、全局目录、其他聊天数据和插件设置不会删除。此操作不可撤销。\n\n确认删除？`;
+            const message = `即将删除当前角色卡的 ${preview.entries.length} 条插件生成内容：\n\n${details}\n\n仅删除条目键中明确标记为当前角色卡的数据。原始/手工条目、全局目录、其他角色卡数据和插件设置不会删除。此操作不可撤销。\n\n确认删除？`;
             if (!window.confirm(message)) return;
             button.text('正在删除并核验…');
             const result = await deleteGeneratedContent(preview, showDeleteProgress);
             const summary = Object.entries(result.byType).map(([type, count]) => `${type} ${count} 条`).join('、') || '无';
-            $('#cwb-status').text(`已删除当前聊天的 ${result.deleted} 条生成内容：${summary}。`);
+            $('#cwb-status').text(`已删除当前角色卡的 ${result.deleted} 条生成内容：${summary}。`);
             button.text('删除完成，刷新进度…');
             await refreshModuleProgress().catch(error => $('#cwb-progress-error').text(`进度读取失败：${error.message}`));
-            notify('success', `已安全清理 ${result.deleted} 条当前聊天生成内容。`);
+            notify('success', `已安全清理 ${result.deleted} 条当前角色卡生成内容。`);
         } catch (error) {
             console.error('[CWB] 清理生成条目失败', error);
             $('#cwb-status').text(`删除未完成：${error.message}`);
