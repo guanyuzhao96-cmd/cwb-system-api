@@ -6,7 +6,7 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.32</span><h2>聊天世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.33</span><h2>聊天世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前角色卡进度</div>
@@ -72,6 +72,8 @@
                     </div>
                     <div class="cwb-subsection">
                         <h3>整理生成内容</h3>
+                        <button id="cwb-convert-format" class="menu_button cwb-full-width">全部资料升级到最新格式</button>
+                        <p class="cwb-help">预览并勾选角色档案、主角档案、关系、时间线、目录、总览及进度；备份后按原 UID 升级，不调用 AI。</p>
                         <button id="cwb-scan-card-profile-migration" class="menu_button cwb-full-width">扫描所有旧版资料归属</button>
                 <p class="cwb-help">扫描全部世界书中的角色档案、主角档案、时间线、角色关系、目录、总览与更新进度。核对列表属于当前角色卡后，再确认迁移。转换后这些资料由角色卡共用，切换聊天继续读取；保留正文与 UID，已绑定其他角色卡的条目跳过。</p>
                         <pre id="cwb-card-profile-migration-preview" class="cwb-route-status" hidden></pre>

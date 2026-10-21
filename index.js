@@ -17,6 +17,8 @@ import { escapeHtml, notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
 import { getProfileCompactionCandidates } from './lorebook.js';
 import { openProfileCompactionDialog } from './profile-compaction-dialog.js';
+import { previewArchiveFormatUpgrade, applyArchiveFormatUpgrade } from './lorebook.js';
+import { openArchiveUpgradeDialog } from './archive-upgrade-ui.js';
 
 const defaults = {
     enabled: false,
@@ -576,9 +578,18 @@ function bindUi() {
     });
     $('#cwb-open-viewer').on('click', () => openViewer(settings()));
     $('#cwb-convert-format').on('click', function () {
-        runButton($(this), '转换中…', async () => {
-            const release = acquireOperationLock(state, '旧格式转换');
-            try { return await convertLegacyEntries(settings()); }
+        runButton($(this), '扫描资料格式…', async () => {
+            const release = acquireOperationLock(state, '全部资料格式扫描');
+            try {
+                const preview = await previewArchiveFormatUpgrade(settings(), update => {
+                    $('#cwb-status').text(`扫描资料格式 ${update.current}/${update.total}：《${update.bookName}》`);
+                });
+                openArchiveUpgradeDialog(preview, async (ids, options) => {
+                    const unlock = acquireOperationLock(state, '全部资料格式升级');
+                    try { return await applyArchiveFormatUpgrade(preview, ids, options); }
+                    finally { unlock(); }
+                });
+            }
             finally { release(); }
         });
     });

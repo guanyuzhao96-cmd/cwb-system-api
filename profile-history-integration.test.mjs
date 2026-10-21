@@ -68,6 +68,66 @@ async function harness(events = [oldEvent]) {
         data: () => disk, duringAI: fn => { duringAI = fn; }, reply: content => { nextResponse = content; } };
 }
 
+test('format upgrade previews all archive types, preserves originals and is repeatable', supported, async () => {
+    const h = await harness();
+    const fixtures = [
+        ['CWB:主角档案', '[姓名]:主角\n[剧情.0]:旧剧情\n[自定义]:原信息'],
+        ['CWB:故事时间线', '2025-09-01｜甲发现真相'],
+        ['CWB:角色关系汇总', '甲 -> 乙：同伴\n旧版关系说明'],
+        ['CWB:角色档案目录', '角色乙：主世界书'],
+        ['Amily2角色总集', '角色乙：旧总览'],
+        ['CWB:更新状态', JSON.stringify({ version: 2, modules: { profiles: { completed: [[0, 2], [5, 7]], failed: [[3, 4]] } }, tracking: { completed: [[0, 7]] } })],
+        ['CWB:更新记录', '1-8'],
+        ['CWB:模块进度', JSON.stringify({ modules: { timeline: { completed: [[0, 7]] } } })],
+        ['CWB:世界书目录', '主世界书：原目录'],
+    ];
+    for (const [index, [marker, content]] of fixtures.entries()) h.data().entries[20 + index] = {
+        uid: 20 + index, key: [marker, 'old-chat'], comment: `旧资料${index}`, content,
+    };
+    h.data().entries[40] = { uid: 40, key: ['CWB:自动档案', 'CWB:角色卡:other.png'], content: '[姓名]:其他卡' };
+    const original = structuredClone(h.data());
+    const preview = await h.lorebook.previewArchiveFormatUpgrade(h.settings);
+    assert.deepEqual(h.data(), original);
+    assert.equal(preview.foreignSkipped, 1);
+    assert.equal(preview.candidates.length, 10);
+    assert.ok(preview.candidates.every(item => !item.error), JSON.stringify(preview.candidates.map(item => item.error)));
+    let backup;
+    const result = await h.lorebook.applyArchiveFormatUpgrade(preview, preview.candidates.map(item => item.id), {
+        beforeWrite: value => { assert.deepEqual(h.data(), original); backup = value; },
+    });
+    assert.equal(result.converted, 10);
+    assert.equal(backup.entries.length, 10);
+    for (const item of preview.candidates) {
+        const stored = h.data().entries[item.uid];
+        assert.equal(stored.uid, item.uid);
+        assert.deepEqual(stored.cwbFormatUpgradeBackup.entry, original.entries[item.uid]);
+        if (item.marker !== 'CWB:世界书目录') assert.ok(stored.key.includes(owner));
+        assert.ok(!stored.key.includes('old-chat'));
+    }
+    assert.match(h.data().entries[25].content, /1-3、6-8/);
+    assert.deepEqual(h.data().entries[9], original.entries[9]);
+    assert.deepEqual(h.data().entries[40], original.entries[40]);
+    assert.equal(h.requests.length, 0);
+    const again = await h.lorebook.previewArchiveFormatUpgrade(h.settings);
+    assert.ok(again.candidates.every(item => !item.changed && !item.error));
+});
+
+test('format upgrade refuses stale previews and card switches before writing', supported, async () => {
+    const h = await harness();
+    const preview = await h.lorebook.previewArchiveFormatUpgrade(h.settings);
+    h.data().entries[1].content += '\n[备注]:预览后的编辑';
+    const edited = structuredClone(h.data());
+    let backedUp = false;
+    await assert.rejects(h.lorebook.applyArchiveFormatUpgrade(preview, [preview.candidates[0].id], {
+        beforeWrite: () => { backedUp = true; },
+    }), /发生变化/);
+    assert.equal(backedUp, false);
+    assert.deepEqual(h.data(), edited);
+    h.contextData.characters[0].avatar = 'other.png';
+    await assert.rejects(h.lorebook.applyArchiveFormatUpgrade(preview, [preview.candidates[0].id]), /角色卡/);
+    assert.deepEqual(h.data(), edited);
+});
+
 test('compaction writes only selected profiles and reports verified token totals', supported, async () => {
     const h = await harness([oldEvent, newEvent]);
     h.state.chatId = h.contextData.chatId;

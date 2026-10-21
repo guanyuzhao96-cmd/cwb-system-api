@@ -155,3 +155,10 @@
 @media(prefers-reduced-motion:no-preference) {
     .cwb-panel .menu_button, .cwb-progress-tile { transition:background-color .15s,border-color .15s; }
 }
+.cwb-upgrade-list { display: grid; gap: 10px; margin: 12px 0; }
+.cwb-upgrade-item { border: 1px solid var(--SmartThemeBorderColor, #7775); border-radius: 10px; padding: 10px; }
+.cwb-upgrade-item > label { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; }
+.cwb-upgrade-item label span { min-width: 0; overflow-wrap: anywhere; }
+.cwb-upgrade-item small { display: block; opacity: .75; margin-top: 4px; }
+.cwb-upgrade-item details { margin-top: 8px; }
+.cwb-upgrade-item pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; }

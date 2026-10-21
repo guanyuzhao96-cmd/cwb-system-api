@@ -16,6 +16,8 @@ import { countProfileTokens, profileSelectionKey, PROFILE_COMPACTION_BATCH_SIZE 
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
 import { directoryContent, duplicateLines, findRoutedBook, namesFromDirectory, namesFromRoleEntries, planDirectorySources } from './directory-utils.mjs';
 import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges } from './update-tracker.mjs';
+import { ARCHIVE_FORMAT_VERSION, ARCHIVE_UPGRADE_TYPES, upgradeArchiveContent } from './archive-upgrade.mjs';
+import { PLUGIN_VERSION } from './version.mjs';
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
 const isEnabled = entry => entry?.enabled !== false && entry?.disable !== true;
@@ -1505,6 +1507,7 @@ function formatUpdateState(saved) {
         最近更新: tracking.latest ?? '',
     };
     result.保存时间 = saved.updatedAt ?? '';
+    if (saved.legacyFields && Object.keys(saved.legacyFields).length) result.旧版扩展字段 = saved.legacyFields;
     return JSON.stringify(result, null, 2);
 }
 
@@ -1524,7 +1527,7 @@ function parseUpdateState(content) {
     const tracking = parsed.更新记录;
     if (!tracking || !Number.isSafeInteger(tracking.起始追踪楼层) || tracking.起始追踪楼层 < 1
         || !Number.isSafeInteger(tracking.聊天总楼层) || tracking.聊天总楼层 < 0) throw Error('更新记录楼层格式无效。');
-    return { version: 2, modules, updatedAt: parsed.保存时间, tracking: {
+    return { version: 2, modules, updatedAt: parsed.保存时间, legacyFields: parsed.旧版扩展字段, tracking: {
         startIndex: tracking.起始追踪楼层 - 1, totalMessages: tracking.聊天总楼层,
         completed: parseProgressRanges(tracking.已保存楼层), duplicates: parseProgressRanges(tracking.重复更新楼层), latest: tracking.最近更新 ?? '',
     } };
@@ -1655,6 +1658,140 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
     return stored;
 }
 
+
+function upgradeProgressContent(entry, marker) {
+    let saved;
+    if (marker === 'CWB:更新记录' && !String(entry.content ?? '').trim().startsWith('{')) {
+        saved = { version: 2, modules: {}, tracking: trackingFromLegacy([entry]) };
+    } else {
+        saved = parseUpdateState(entry.content);
+        if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw Error('无法识别旧更新进度');
+        if (!saved.modules && !saved.tracking) throw Error('旧进度缺少可识别的模块或楼层记录');
+        const known = ['version', 'modules', 'tracking', 'updatedAt', 'legacyFields'];
+        const extras = Object.fromEntries(Object.entries(saved).filter(([key]) => !known.includes(key)));
+        saved = { ...saved, legacyFields: { ...(saved.legacyFields ?? {}), ...extras } };
+        saved.tracking ??= trackingFromLegacy([]);
+        saved.modules ??= {};
+    }
+    if (typeof saved.modules !== 'object' || Array.isArray(saved.modules)
+        || typeof saved.tracking !== 'object' || !saved.tracking || Array.isArray(saved.tracking)) throw Error('旧进度的数据结构无效');
+    for (const row of Object.values(saved.modules)) if (!row || typeof row !== 'object' || Array.isArray(row)) throw Error('旧进度的模块数据无效');
+    for (const row of [...Object.values(saved.modules), saved.tracking]) for (const key of ['completed', 'failed', 'duplicates']) {
+        if (row?.[key] !== undefined && (!Array.isArray(row[key]) || row[key].some(range => !Array.isArray(range)
+            || range.length !== 2 || !range.every(Number.isSafeInteger) || range[0] < 0 || range[1] < range[0]))) {
+            throw Error('旧进度包含无效楼层，需核对后再升级');
+        }
+    }
+    const content = formatUpdateState(saved);
+    parseUpdateState(content);
+    return content;
+}
+
+/** Read-only preview; unowned archives require explicit selection. */
+export async function previewArchiveFormatUpgrade(settings, onProgress = () => {}) {
+    const cardKey = getCardArchiveKey();
+    const primary = getPrimaryWorldbook();
+    if (!primary) throw Error('请先选择绑定主世界书的角色卡');
+    const context = getContext();
+    const character = context.characters?.[context.characterId];
+    const shared = (context.characters ?? []).some(item => item !== character
+        && (item.avatar || item.name) !== (character?.avatar || character?.name)
+        && (item.data?.extensions?.world || item.extensions?.world) === primary);
+    const books = listWorldbooks();
+    let completed = 0, foreignSkipped = 0;
+    const snapshots = await mapWithConcurrency(books, 4, async bookName => {
+        const data = await readWorldbookFromServer(bookName);
+        onProgress({ phase: 'scan', current: ++completed, total: books.length, bookName });
+        return { bookName, data };
+    });
+    if (getCardArchiveKey() !== cardKey) throw Error('扫描期间角色卡已切换，请重新扫描');
+    const candidates = [];
+    for (const { bookName, data } of snapshots) for (const entry of Object.values(data.entries)) {
+        const keys = getKeys(entry);
+        const type = ARCHIVE_UPGRADE_TYPES.find(([marker]) => keys.includes(marker));
+        if (!type) continue;
+        if (keys.some(key => String(key).startsWith('CWB:角色卡:') && key !== cardKey)) { foreignSkipped++; continue; }
+        const [marker, label] = type;
+        const globalDirectory = marker === 'CWB:世界书目录';
+        const owned = keys.includes(cardKey);
+        const candidate = {
+            id: profileSelectionKey(bookName, entry.uid), bookName, uid: Number(entry.uid), marker, label,
+            title: String(entry.comment || label), original: structuredClone(entry),
+            needsOwnerConfirmation: !owned && !globalDirectory && (bookName !== primary || shared),
+        };
+        try {
+            const content = upgradeArchiveContent(entry, marker, { formatProgress: upgradeProgressContent });
+            const targetMarker = ['CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度'].includes(marker) ? 'CWB:更新状态' : marker;
+            const next = structuredClone(entry);
+            const nextKeys = globalDirectory ? ['CWB:世界书目录'] : cardArchiveKeys({ ...entry, content }, targetMarker, cardKey)
+                .filter(key => !['CWB:更新记录', 'CWB:模块进度'].includes(key));
+            applyEntryPatch(next, { content, keys: nextKeys, preventRecursion: true });
+            if (Object.hasOwn(next, 'keys')) next.keys = [...nextKeys];
+            const active = ['CWB:自动档案', 'CWB:主角档案', 'CWB:故事时间线', 'CWB:角色关系汇总', 'Amily2角色总集'].includes(marker);
+            const constant = ['CWB:故事时间线', 'CWB:角色关系汇总', 'Amily2角色总集'].includes(marker);
+            applyEntryPatch(next, { enabled: active, type: constant ? 'constant' : 'selective' });
+            if (['CWB:自动档案', 'CWB:主角档案'].includes(marker)) next.comment = `动态-${parseCustomFormat(content).姓名}`;
+            else if (targetMarker === 'CWB:更新状态') next.comment = '插件更新进度';
+            else if (marker === 'CWB:故事时间线') next.comment = 'CWB故事时间线';
+            else if (marker === 'CWB:角色关系汇总') next.comment = 'CWB角色关系汇总';
+            next.cwbArchiveFormat = ARCHIVE_FORMAT_VERSION;
+            candidate.next = next;
+            candidate.changed = JSON.stringify(entry) !== JSON.stringify(next);
+            candidate.defaultSelected = candidate.changed && !candidate.needsOwnerConfirmation && (!globalDirectory || bookName === primary);
+        } catch (error) { candidate.error = error.message; }
+        candidates.push(candidate);
+    }
+    return { cardKey, version: ARCHIVE_FORMAT_VERSION, candidates, booksScanned: books.length, foreignSkipped };
+}
+
+/** Upgrade selected entries, checking snapshots and verifying backups on the server. */
+export async function applyArchiveFormatUpgrade(preview, selectedIds, { onProgress = () => {}, beforeWrite = () => {} } = {}) {
+    if (!preview || preview.cardKey !== getCardArchiveKey() || preview.version !== ARCHIVE_FORMAT_VERSION) throw Error('角色卡或升级版本已变化，请重新扫描');
+    const ids = new Set(selectedIds ?? []);
+    const selected = preview.candidates.filter(item => ids.has(item.id));
+    if (!selected.length || selected.length !== ids.size || selected.some(item => item.error || !item.changed || !item.next)) throw Error('请选择可升级的资料条目');
+    const groups = new Map();
+    for (const item of selected) (groups.get(item.bookName) ?? groups.set(item.bookName, []).get(item.bookName)).push(item);
+    const verifyOriginals = (data, items) => {
+        for (const item of items) {
+            const original = Object.values(data.entries).find(entry => Number(entry.uid) === item.uid);
+            if (!original || JSON.stringify(original) !== JSON.stringify(item.original)) throw Error(`《${item.bookName}》UID ${item.uid} 在预览后发生变化，请重新扫描`);
+        }
+    };
+    for (const [bookName, items] of groups) verifyOriginals(await readWorldbookFromServer(bookName), items);
+    if (preview.cardKey !== getCardArchiveKey()) throw Error('复核期间角色卡已切换，尚未升级任何条目');
+    const backup = { type: 'CWB资料格式升级备份', pluginVersion: PLUGIN_VERSION, formatVersion: ARCHIVE_FORMAT_VERSION,
+        createdAt: new Date().toISOString(), cardKey: preview.cardKey,
+        entries: selected.map(item => ({ bookName: item.bookName, entry: structuredClone(item.original) })) };
+    await beforeWrite(backup);
+    let converted = 0;
+    const byType = {};
+    for (const [bookName, items] of groups) {
+        if (preview.cardKey !== getCardArchiveKey()) throw Error(`角色卡已切换，已停止；本次已核验 ${converted} 条`);
+        const data = await readWorldbookFromServer(bookName);
+        verifyOriginals(data, items);
+        if (preview.cardKey !== getCardArchiveKey()) throw Error(`读取期间角色卡已切换，已停止；本次已核验 ${converted} 条`);
+        const expected = [];
+        for (const item of items) {
+            const key = Object.keys(data.entries).find(key => Number(data.entries[key].uid) === item.uid);
+            const next = structuredClone(item.next);
+            next.cwbFormatUpgradeBackup ??= { createdAt: backup.createdAt, pluginVersion: PLUGIN_VERSION, entry: structuredClone(item.original) };
+            data.entries[key] = next;
+            expected.push({ item, next });
+        }
+        await saveWorldInfo(bookName, data, true);
+        const persisted = await readWorldbookFromServer(bookName);
+        for (const { item, next } of expected) {
+            const stored = Object.values(persisted.entries).find(entry => Number(entry.uid) === item.uid);
+            if (!stored || JSON.stringify(stored) !== JSON.stringify(next)) throw Error(`《${bookName}》UID ${item.uid} 升级回读不一致；已核验 ${converted} 条，请保留备份并重新扫描`);
+            converted++;
+            byType[item.label] = (byType[item.label] ?? 0) + 1;
+            onProgress({ phase: 'write', current: converted, total: selected.length, bookName });
+        }
+    }
+    state.routeCache = null;
+    return { converted, byType, booksChanged: groups.size };
+}
 
 export async function getProfileCompactionCandidates(settings) {
     await migrateProfileOwnershipToCard(settings);
