@@ -1,7 +1,7 @@
 import { PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName, reconcileProfileExperienceCount, readProfilePlotEvents, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { PROFILE_COMPACTION_BATCH_SIZE, PROFILE_COMPACTION_BATCH_PROTOCOL, parseProfileCompactionBatch } from './profile-compaction.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
-import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
+import { COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, inspectCombinedResponse, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
@@ -173,7 +173,16 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
         messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
+        // Reassert the format after the potentially long source material, within
+        // the same request; no hidden repair/retry generation is performed.
+        messages.push({ role: 'user', content: COMBINED_OUTPUT_REMINDER });
         const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
+        const requestBreakdown = {
+            oldProfilesCharacters: oldProfiles.join('\n').length,
+            chatCharacters: formatMessages(selected).length,
+            previousRelationshipsCharacters: oldRelationships.length,
+            promptAndOtherCharacters: requestChars - oldProfiles.join('\n').length - formatMessages(selected).length - oldRelationships.length,
+        };
         setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：AI 请求中，输入约 ${requestChars} 字符…`);
         let response;
         const requestStartedAt = Date.now();
@@ -198,6 +207,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                 totalChatFloors: state.messages.length,
                 requestCharacters: requestChars,
                 requestDurationMs: Date.now() - requestStartedAt,
+                requestBreakdown,
             };
             createErrorReport(reportedError, reportedError.cwbDiagnostics);
             reportedError.cwbReportGenerated = true;
@@ -206,6 +216,8 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         assertCurrentChat(chatId);
         const parts = parseCombinedParts(response);
         $('#cwb-timeline-debug').text(`统一更新：AI 1 次，第 ${start + 1}-${end + 1} 楼\n${response}`);
+        const responseLog = document.getElementById('cwb-response-log');
+        if (responseLog) responseLog.hidden = false;
         for (const module of targets) {
             try {
                 assertCurrentChat(chatId);
@@ -277,19 +289,25 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
             assertCurrentChat(chatId);
             await recordChatUpdateRange(start, end, state.messages.length, '三个模块均成功，AI调用1次', 0);
         }
-        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
+        const responseInvalid = targets.some(module => parts[module].error);
+        const responseHint = failures.length && responseInvalid
+            ? `；AI 返回 ${response.length} 字符，请展开“查看本次 AI 原始回复”核对格式` : '';
+        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}${responseHint}`;
         setStatus(message);
         if (failures.length) {
             const failedModules = targets.filter(module => failures.some(failure => failure.startsWith(`${MODULE_LABELS[module]}：`)));
             const reportError = new Error(message);
             reportError.cwbDiagnostics = {
-                stage: failures.some(failure => failure.includes('未出现在可用目录')) ? 'profile_worldbook_routing' : 'module_save',
+                stage: responseInvalid ? 'response_validation' : failures.some(failure => failure.includes('未出现在可用目录')) ? 'profile_worldbook_routing' : 'module_save',
                 modules: failedModules.map(module => MODULE_LABELS[module]),
                 startFloor: start + 1,
                 endFloor: end + 1,
                 batchFloors: end - start + 1,
                 totalChatFloors: state.messages.length,
                 requestCharacters: requestChars || null,
+                requestDurationMs: Date.now() - requestStartedAt,
+                responseDiagnostics: inspectCombinedResponse(response),
+                requestBreakdown,
             };
             createErrorReport(reportError, reportError.cwbDiagnostics);
             reportError.cwbReportGenerated = true;

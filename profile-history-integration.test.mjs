@@ -314,3 +314,63 @@ test('switching cards with the same chat filename during AI generation blocks ar
     assert.equal(h.data().entries[1].content, profile([oldEvent]));
     assert.equal(h.state.operationOwner, null);
 });
+
+test('explicit migration covers archives, timeline, relationships, directory and progress from any old chat', supported, async () => {
+    const h = await harness();
+    h.core.refreshChatState();
+    const markers = ['CWB:自动档案', 'CWB:主角档案', 'CWB:故事时间线', 'CWB:角色关系汇总',
+        'CWB:角色档案目录', 'CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度', 'Amily2角色总集'];
+    for (let i = 0; i < markers.length; i++) h.data().entries[20 + i] = {
+        uid: 20 + i, key: [markers[i], 'deleted-chat-file', 'CWB:聊天身份:old-integrity'],
+        comment: `旧资料${i}`, content: i < 2 ? `[姓名]:角色乙\n[剧情.0]:旧剧情${i}` : `原资料${i}`,
+    };
+    const originals = structuredClone(h.data());
+    const preview = await h.lorebook.previewChatBoundProfilesForCardMigration(h.settings);
+    assert.equal(preview.candidates.length, markers.length);
+    h.contextData.chatId = 'new-chat-without-source-file';
+    h.core.refreshChatState();
+    const result = await h.lorebook.migrateChatBoundProfilesToCard(h.settings, preview);
+    assert.equal(result.migrated, markers.length);
+    for (let i = 0; i < markers.length; i++) {
+        const stored = h.data().entries[20 + i];
+        assert.equal(stored.uid, 20 + i);
+        assert.equal(stored.content, originals.entries[20 + i].content);
+        assert.ok(stored.key.includes(owner));
+        assert.ok(!stored.key.includes('deleted-chat-file'));
+        assert.ok(!stored.key.some(key => key.startsWith('CWB:聊天身份:')));
+    }
+    assert.deepEqual(h.data().entries[9], originals.entries[9]);
+    assert.equal((await h.lorebook.previewChatBoundProfilesForCardMigration(h.settings)).candidates.length, 0);
+});
+
+test('card archives and enabled references can be read without an existing chat file', supported, async () => {
+    const h = await harness();
+    h.contextData.chatId = '';
+    h.state.chatId = 'unknown_chat_init';
+    h.data().entries[20] = { uid: 20, key: ['CWB:角色关系汇总', owner], content: '甲 ↔ 乙：同学', disable: true };
+    await h.lorebook.manageChatEntries(h.settings);
+    assert.equal(h.data().entries[20].disable, false);
+    assert.match(await h.lorebook.getRelationshipSummary(), /甲 ↔ 乙/);
+    assert.ok((await h.lorebook.getCardArchiveEntries('主世界书')).some(entry => entry.uid === 1));
+});
+
+test('reply-format failures record structural evidence and never confirm missing modules', supported, async () => {
+    const h = await harness();
+    const privateReply = 'PRIVATE_UNSTRUCTURED_MODEL_REPLY';
+    h.reply(privateReply);
+    let failure;
+    try { await h.core.updateRange(h.settings, 0, 0, { silent: true }); }
+    catch (error) { failure = error; }
+    assert.ok(failure);
+    assert.equal(h.requests.length, 1);
+    assert.equal(failure.cwbDiagnostics.stage, 'response_validation');
+    assert.equal(failure.cwbDiagnostics.responseDiagnostics.responseCharacters, privateReply.length);
+    assert.equal(failure.cwbDiagnostics.responseDiagnostics.format, 'unrecognized');
+    assert.ok(!JSON.stringify(failure.cwbDiagnostics).includes(privateReply));
+    const progress = await h.lorebook.getModuleProgress();
+    for (const module of ['profiles', 'timeline', 'relationships']) {
+        assert.equal(JSON.stringify(progress[module].completed), '[]');
+        assert.equal(JSON.stringify(progress[module].failed), '[[0,0]]');
+    }
+    assert.equal(h.data().entries[1].content, profile([oldEvent]));
+});

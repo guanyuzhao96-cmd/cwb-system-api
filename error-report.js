@@ -1,4 +1,4 @@
-const REPORT_VERSION = '0.12.30';
+import { PLUGIN_VERSION } from './version.mjs';
 let latestReportJson = null;
 let latestReportName = null;
 
@@ -19,7 +19,7 @@ export function createErrorReport(error, details = {}) {
         reportType: 'CWB 插件错误诊断报告',
         reportVersion: 1,
         generatedAt: new Date().toISOString(),
-        pluginVersion: REPORT_VERSION,
+        pluginVersion: PLUGIN_VERSION,
         environment: {
             userAgent: globalThis.navigator?.userAgent || 'unknown',
             language: globalThis.navigator?.language || 'unknown',
@@ -34,6 +34,8 @@ export function createErrorReport(error, details = {}) {
             totalChatFloors: Number.isFinite(details.totalChatFloors) ? details.totalChatFloors : null,
             requestCharacters: Number.isFinite(details.requestCharacters) ? details.requestCharacters : null,
             requestDurationMs: Number.isFinite(details.requestDurationMs) ? details.requestDurationMs : null,
+            responseDiagnostics: details.responseDiagnostics ?? null,
+            requestBreakdown: details.requestBreakdown ?? null,
         },
         error: errorDetails(error),
         privacy: '报告不包含聊天正文、完整提示词、世界书条目内容或聊天标识。',

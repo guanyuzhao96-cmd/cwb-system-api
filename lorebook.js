@@ -62,6 +62,15 @@ function isCurrentCardArchive(entry) {
     return keys.includes(cardKey) && !keys.some(key => String(key).startsWith('CWB:角色卡:') && key !== cardKey);
 }
 
+function cardArchiveKeys(entry, marker, cardKey) {
+    const semanticKeys = getKeys(entry).filter(key => (String(key).startsWith('CWB:')
+        && !String(key).startsWith('CWB:角色卡:') && !String(key).startsWith('CWB:聊天身份:'))
+        || ['故事时间线', '角色关系', '角色总览'].includes(key)
+        || marker === 'Amily2角色总集' && /^\d+-\d+$/.test(String(key)));
+    const roleName = ['CWB:自动档案', 'CWB:主角档案'].includes(marker) ? profileName(entry) : null;
+    return [...new Set([marker, cardKey, ...semanticKeys, ...(roleName ? [roleName] : [])])];
+}
+
 async function readCardArchiveData(bookName) {
     let data = await readWorldbookFromServer(bookName);
     const cardKey = getCardArchiveKey();
@@ -80,10 +89,7 @@ async function readCardArchiveData(bookName) {
         // card even after the source chat was deleted. A shared book is ambiguous:
         // migrate only the currently identified legacy chat, never another card.
         if (sharedPrimary && !hasLegacyChatOwner(keys, chatId)) continue;
-        const semanticKeys = keys.filter(key => String(key).startsWith('CWB:')
-            && !String(key).startsWith('CWB:角色卡:') && !String(key).startsWith('CWB:聊天身份:'));
-        const roleName = ['CWB:自动档案', 'CWB:主角档案'].includes(marker) ? profileName(entry) : null;
-        const nextKeys = [...new Set([marker, cardKey, ...semanticKeys, ...(roleName ? [roleName] : [])])];
+        const nextKeys = cardArchiveKeys(entry, marker, cardKey);
         if (JSON.stringify(keys) === JSON.stringify(nextKeys)) continue;
         const legacyKeys = [...(entry.cwbLegacyOwnerKeys ?? keys)];
         applyEntryPatch(entry, { keys: nextKeys });
@@ -125,7 +131,6 @@ function hasLegacyChatOwner(keys, chatId) {
 
 async function migrateProfileOwnershipToCard(settings, names = null) {
     const chatId = state.chatId.replace(/ imported/g, '');
-    if (!chatId || chatId.startsWith('unknown_chat')) return 0;
     const cardKey = getCardArchiveKey();
     const primary = getPrimaryWorldbook();
     const primaryData = primary ? await readCardArchiveData(primary) : { entries: {} };
@@ -189,7 +194,7 @@ async function migrateProfileOwnershipToCard(settings, names = null) {
     return changed;
 }
 
-/** Find legacy chat-owned profile entries in every book associated with this card. */
+/** Compatibility export name; scans every generated archive type, not only profiles. */
 export async function previewChatBoundProfilesForCardMigration(settings, onProgress = () => {}) {
     const cardKey = getCardArchiveKey();
     const primary = getPrimaryWorldbook();
@@ -207,22 +212,24 @@ export async function previewChatBoundProfilesForCardMigration(settings, onProgr
     const candidates = [];
     for (const { bookName, entries } of rows) for (const entry of entries) {
         const keys = getKeys(entry);
-        const marker = ['CWB:自动档案', 'CWB:主角档案'].find(value => keys.includes(value));
-        if (!marker || keys.includes(cardKey)) continue;
+        const type = GENERATED_ENTRY_TYPES.find(([value]) => keys.includes(value));
+        if (!type) continue;
+        const [marker, label] = type;
         // A stable owner for another character card is never reassigned.
-        if (keys.some(key => String(key).startsWith('CWB:角色卡:'))) continue;
-        // These legacy entries have no stable card key; keep only entries that
-        // carry a chat owner key. We intentionally do not filter by the active
-        // chat ID so archives from replaced chats are included as well.
-        if (!keys.some(key => !String(key).startsWith('CWB:'))) continue;
+        if (keys.some(key => String(key).startsWith('CWB:角色卡:') && key !== cardKey)) continue;
+        const nextKeys = cardArchiveKeys(entry, marker, cardKey);
+        if (JSON.stringify(keys) === JSON.stringify(nextKeys)) continue;
         candidates.push({
             bookName,
             uid: Number(entry.uid),
             marker,
-            name: profileName(entry) || '未识别姓名',
+            label,
+            name: ['CWB:自动档案', 'CWB:主角档案'].includes(marker) ? profileName(entry) || '未识别姓名' : label,
             comment: String(entry.comment ?? ''),
             keys,
-            nextKeys: [marker, cardKey, profileName(entry) || '未识别姓名'],
+            content: entry.content,
+            legacyOwnerKeys: entry.cwbLegacyOwnerKeys ?? [...keys],
+            nextKeys,
         });
     }
     candidates.sort((a, b) => a.bookName.localeCompare(b.bookName, 'zh-CN')
@@ -233,7 +240,7 @@ export async function previewChatBoundProfilesForCardMigration(settings, onProgr
 /** Re-scan and convert every candidate in place, verifying each updated UID. */
 export async function migrateChatBoundProfilesToCard(settings, expectedPreview, onProgress = () => {}) {
     const current = await previewChatBoundProfilesForCardMigration(settings, update => onProgress({ phase: 'scan', ...update }));
-    const signature = items => JSON.stringify(items.map(item => [item.bookName, item.uid, item.marker, item.name, item.keys]));
+    const signature = items => JSON.stringify(items.map(item => [item.bookName, item.uid, item.marker, item.name, item.keys, item.content]));
     if (!expectedPreview || expectedPreview.cardKey !== current.cardKey
         || signature(expectedPreview.candidates) !== signature(current.candidates)) {
         throw Error('扫描后档案列表发生变化；为避免漏项或错改，请重新扫描后再转换。');
@@ -241,16 +248,18 @@ export async function migrateChatBoundProfilesToCard(settings, expectedPreview, 
     const byBook = new Map();
     for (const item of current.candidates) {
         (byBook.get(item.bookName) ?? byBook.set(item.bookName, []).get(item.bookName))
-            .push({ uid: item.uid, keys: item.nextKeys });
+            .push({ uid: item.uid, keys: item.nextKeys, cwbLegacyOwnerKeys: item.legacyOwnerKeys });
     }
     let migrated = 0;
     let completed = 0;
     for (const [bookName, patches] of byBook) {
+        if (getCardArchiveKey() !== current.cardKey) throw Error('转换期间角色卡已切换，请重新扫描。');
         await patchEntries(bookName, patches);
         const stored = Object.values((await readWorldbookFromServer(bookName)).entries);
         for (const patch of patches) {
             const entry = stored.find(item => Number(item.uid) === Number(patch.uid));
-            if (!entry || JSON.stringify(getKeys(entry)) !== JSON.stringify(patch.keys)) {
+            const source = current.candidates.find(item => item.bookName === bookName && item.uid === Number(patch.uid));
+            if (!entry || entry.content !== source.content || JSON.stringify(getKeys(entry)) !== JSON.stringify(patch.keys)) {
                 throw Error(`世界书《${bookName}》UID ${patch.uid} 归属转换回读失败；已完成 ${migrated} 条，请重新扫描核对剩余条目。`);
             }
             migrated++;
@@ -268,10 +277,12 @@ function profileName(entry) {
 
 async function profileArchiveBooks(settings, preferredBook = null) {
     const primary = getPrimaryWorldbook();
+    const referenced = primary ? referencedProfileBooks(await readCardArchiveData(primary)) : [];
     const configuredTarget = settings.worldbookTarget === 'custom' && world_names.includes(settings.customWorldbook)
         ? settings.customWorldbook : null;
     return [...new Set([
         primary, preferredBook, getTargetWorldbook(settings), configuredTarget,
+        ...referenced,
         ...getActiveWorldbookNames(),
     ].filter(name => name && world_names.includes(name)))];
 }
@@ -463,12 +474,12 @@ async function mapWithConcurrency(items, limit, worker) {
     return results;
 }
 
-function referencedProfileBooks(primaryData, chatId = null) {
+function referencedProfileBooks(primaryData) {
     const books = new Set();
     for (const entry of Object.values(primaryData?.entries ?? {})) {
         const keys = getKeys(entry);
         if (keys.some(key => String(key).startsWith('CWB:角色卡:') && key !== getCardArchiveKey())) continue;
-        if (!keys.includes('CWB:角色档案目录') || (chatId && !keys.includes(chatId) && !isCurrentCardArchive(entry))) continue;
+        if (!keys.includes('CWB:角色档案目录') || !isCurrentCardArchive(entry)) continue;
         // The plugin's per-chat directory already records where routed profiles live.
         // Trust only names that still exist in Tavern's worldbook list.
         for (const match of String(entry.content ?? '').matchAll(/世界书《([^》]+)》/g)) {
@@ -481,7 +492,6 @@ function referencedProfileBooks(primaryData, chatId = null) {
 
 async function scanGeneratedContent(phase, onProgress) {
     const chatId = state.chatId.replace(/ imported/g, '');
-    if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天 ID，已停止扫描以保护其他聊天数据。');
     const primary = getPrimaryWorldbook();
     if (!primary) throw Error('当前角色卡没有主世界书，无法安全定位本聊天的生成记录。');
     // Read the master once, then follow its per-chat profile directory. This avoids
@@ -493,7 +503,6 @@ async function scanGeneratedContent(phase, onProgress) {
     const books = [...new Set([
         primary,
         ...(configuredTarget && world_names.includes(configuredTarget) ? [configuredTarget] : []),
-        ...referencedProfileBooks(primaryData, chatId),
         ...getActiveWorldbookNames(),
         ...referencedProfileBooks(primaryData),
     ])];
@@ -1067,7 +1076,7 @@ export async function updateRoster(settings, processedNames, startFloor, endFloo
 export async function updateMasterDirectory(settings) {
     const masterBook = getPrimaryWorldbook();
     if (!masterBook) return;
-    const chatId = state.chatId.replace(/ imported/g, '');
+    await migrateProfileOwnershipToCard(settings);
     const cardKey = getCardArchiveKey();
     const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
     const grouped = new Map();
@@ -1075,7 +1084,7 @@ export async function updateMasterDirectory(settings) {
         const entries = await getEntries(bookName);
         for (const entry of entries) {
             const keys = getKeys(entry);
-            if (!keys.includes('CWB:自动档案') || (!keys.includes(cardKey) && !hasLegacyChatOwner(keys, chatId))) continue;
+            if (!keys.includes('CWB:自动档案') || !isCurrentCardArchive(entry)) continue;
             const name = profileName(entry);
             if (name) (grouped.get(bookName) || grouped.set(bookName, new Set()).get(bookName)).add(String(name));
         }
@@ -1083,7 +1092,7 @@ export async function updateMasterDirectory(settings) {
     const lines = [];
     const masterEntries = await getEntries(masterBook);
     const userEntry = masterEntries.find(entry => getKeys(entry).includes('CWB:主角档案')
-        && (getKeys(entry).includes(cardKey) || hasLegacyChatOwner(getKeys(entry), chatId)));
+        && isCurrentCardArchive(entry));
     if (userEntry) {
         const userName = profileName(userEntry) || '主角';
         lines.push(`【主角档案】\n[${userName}] → 主世界书《${masterBook}》中的「动态-${userName}」\n`);
@@ -1095,7 +1104,7 @@ export async function updateMasterDirectory(settings) {
     const comment = `CWB角色世界书档案目录-${cardKey}`;
     const entries = await getEntries(masterBook);
     const candidates = entries.filter(entry => getKeys(entry).includes('CWB:角色档案目录')
-        && (getKeys(entry).includes(cardKey) || hasLegacyChatOwner(getKeys(entry), chatId)));
+        && isCurrentCardArchive(entry));
     const existing = candidates.find(entry => getKeys(entry).includes(cardKey)) || candidates[0];
     const content = `【当前角色卡档案目录】\n\n${lines.join('\n') || '当前尚未生成角色档案。'}\n\n{{// 本条由角色世界书插件自动维护，请勿手动删除。}}`;
     const data = {
@@ -1114,14 +1123,13 @@ export async function updateMasterDirectory(settings) {
 
 async function updateRosterForBook(bookName, processedNames, startFloor, endFloor) {
     const context = getContext();
-    const chatId = state.chatId.replace(/ imported/g, '');
     const cardKey = getCardArchiveKey();
     const characterName = context?.characters?.[context.characterId]?.name ?? context?.name2 ?? '未识别角色卡';
     const comment = `Amily2角色总集-${characterName}-${bookName}-角色总览`;
-    const entries = await getEntries(bookName);
+    const entries = bookName === getPrimaryWorldbook() ? await getCardArchiveEntries(bookName) : await getEntries(bookName);
     const candidates = entries.filter(entry => getKeys(entry).includes('Amily2角色总集')
-        && (getKeys(entry).includes(cardKey) || hasLegacyChatOwner(getKeys(entry), chatId)));
-    const existing = candidates.find(entry => getKeys(entry).includes(cardKey)) || entries.find(entry => entry.comment === comment) || candidates[0];
+        && isCurrentCardArchive(entry));
+    const existing = candidates[0];
     const names = new Set();
     let oldStart = 1;
     let oldEnd = 0;
@@ -1226,8 +1234,6 @@ export async function manageChatEntries(settings) {
     const customTarget = settings.worldbookTarget === 'custom';
     // Timeline and relationship summaries are always saved in the primary worldbook.
     const books = [...new Set([getPrimaryWorldbook(), ...(customTarget ? [] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)])])];
-    if (state.chatId.startsWith('unknown_chat')) return;
-    const chatId = state.chatId.replace(/ imported/g, '');
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName, { fresh: true });
         const patches = [];
@@ -1250,7 +1256,7 @@ export async function manageChatEntries(settings) {
                 continue;
             }
             if (customTarget || settings.enabled === false) continue;
-            if (!keys.includes('Amily2角色总集') && !keys.includes(chatId) && !keys.includes(state.chatId) && !isCurrentCardArchive(entry)) continue;
+            if (!GENERATED_ENTRY_TYPES.some(([marker]) => keys.includes(marker))) continue;
             const shouldEnable = isCurrentCardArchive(entry);
             if (entry.enabled !== shouldEnable) patches.push({ uid: entry.uid, enabled: shouldEnable });
         }

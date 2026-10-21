@@ -20,8 +20,9 @@ export async function callSystemApi(messages, responseLength = null) {
         console.error('[CWB] SillyTavern generateRaw request failed', error);
         throw new Error(`酒馆系统 API 请求失败：${error?.message || String(error)}`, { cause: error });
     }
-    if (!String(result ?? '').trim()) throw new Error('系统 API 未返回有效内容。');
-    return String(result).trim();
+    if (typeof result !== 'string') throw new Error(`系统 API 返回类型为 ${result === null ? 'null' : typeof result}，需要文本回复；未将非文本结果当作档案处理。`);
+    if (!result.trim()) throw new Error('系统 API 未返回有效内容。');
+    return result.trim();
 }
 
 export async function testSystemApi() {

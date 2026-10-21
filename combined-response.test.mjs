@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCombinedResponse } from './combined-response.mjs';
 import { COMBINED_OUTPUT_PROTOCOL } from './combined-response.mjs';
+import { parseCombinedParts, inspectCombinedResponse } from './combined-response.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 const valid = '[--档案无变化--]\n[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--关系增量开始--]\n{"关系更新":[],"删除关系":[]}\n[--关系增量结束--]';
 test('combined response requires all three sections, including explicit empty deltas', () => {
@@ -43,4 +44,66 @@ test('timeline prompts retain only concise key information and major events', ()
         assert.match(prompt, /不因日期相同合并无关事件/);
         assert.match(prompt, /姓名用可确认的全名/);
     }
+});
+
+test('reasoning examples do not duplicate final blocks, and reasoning-only output cannot succeed', () => {
+    for (const tag of ['think', 'thinking', 'Analysis']) {
+        const response = `<${tag}>Example output:\n${valid}</${tag}>\n${valid}`;
+        assert.deepEqual(parseCombinedResponse(response).timeline.时间线, []);
+        const diagnostics = inspectCombinedResponse(response);
+        assert.equal(diagnostics.reasoningBlocksRemoved, 1);
+        assert.equal(diagnostics.markerCounts.时间线增量开始, 1);
+        const reasoningOnly = `<${tag}>${valid}</${tag}>`;
+        assert.ok(Object.values(parseCombinedParts(reasoningOnly)).every(part => part.error));
+    }
+    assert.ok(Object.values(parseCombinedParts(`<think>${valid}`)).every(part => part.error));
+    assert.equal(inspectCombinedResponse(`<think>${valid}`).unclosedReasoning, true);
+});
+
+test('fullwidth brackets, whitespace and dashes normalize without changing actual field values', () => {
+    const fullwidth = valid.replace(/\[--([^\]]+)--\]/g, '【 －－ $1 －－ 】');
+    assert.deepEqual(parseCombinedResponse(fullwidth).relationships.关系更新, []);
+    assert.ok(inspectCombinedResponse(fullwidth).normalizedMarkers > 0);
+    const profile = '［ -- 角色档案开始 -- ］\n[姓名]:甲\n[剧情.0]:原文（保留）\n［ -- 角色档案结束 -- ］';
+    const result = parseCombinedResponse(profile + '\n' + fullwidth.replace('【 －－ 档案无变化 －－ 】', ''));
+    assert.match(result.blocks[0], /原文（保留）/);
+});
+
+test('profiles can appear after both delta sections without being lost', () => {
+    const profile = '[--角色档案开始--]\n[姓名]:甲\n[剧情.0]:甲取得证据\n[--角色档案结束--]';
+    const response = valid.replace('[--档案无变化--]', '') + '\n' + profile;
+    assert.deepEqual(parseCombinedResponse(response).blocks, [profile]);
+    assert.ok(parseCombinedParts(response + '\n[--角色档案开始--]').profiles.error);
+    assert.ok(parseCombinedParts(response + '\n[--角色档案结束--]').profiles.error);
+});
+
+test('complete JSON transport requires explicit profiles and all delta arrays', () => {
+    const doc = { 角色档案: [], 时间线: [], 关系更新: [], 删除关系: [] };
+    assert.deepEqual(parseCombinedResponse('```json\n' + JSON.stringify(doc) + '\n```').blocks, []);
+    assert.equal(inspectCombinedResponse(JSON.stringify(doc)).format, 'json');
+    const profile = '[--角色档案开始--]\n[姓名]:甲\n[剧情.0]:甲取得证据\n[--角色档案结束--]';
+    assert.deepEqual(parseCombinedResponse(JSON.stringify({ ...doc, 角色档案: [profile] })).blocks, [profile]);
+    assert.ok(parseCombinedParts(JSON.stringify({ 时间线: [], 关系更新: [], 删除关系: [] })).profiles.error);
+    assert.ok(parseCombinedParts(JSON.stringify({ ...doc, 角色档案: null })).profiles.error);
+    assert.ok(parseCombinedParts(JSON.stringify({ ...doc, 角色档案: ['普通文字'] })).profiles.error);
+    assert.ok(parseCombinedParts(JSON.stringify({ 角色档案: [] })).timeline.error);
+    assert.ok(parseCombinedParts(JSON.stringify({ 角色档案: [] })).relationships.error);
+});
+
+test('duplicate/reversed delimiters and nonprotocol replies stay failed', () => {
+    assert.ok(parseCombinedParts(valid + valid).timeline.error);
+    const reversed = valid.replace('[--时间线增量开始--]', '[--时间线增量结束--]').replace('[--时间线增量结束--]\n[--关系', '[--时间线增量开始--]\n[--关系');
+    assert.ok(parseCombinedParts(reversed).timeline.error);
+    for (const response of ['', '普通剧情回复', '[object Object]', '```json\n{"时间线":[]']) {
+        assert.ok(Object.values(parseCombinedParts(response)).every(part => part.error));
+    }
+    const conflicting = valid.replace('[--档案无变化--]', '[--档案无变化--]\n[--角色档案开始--]\n[姓名]:甲\n[--角色档案结束--]');
+    assert.ok(parseCombinedParts(conflicting).profiles.error);
+});
+
+test('structural diagnostics contain no response text or character data', () => {
+    const secret = 'PRIVATE_CHARACTER_AND_CONTENT';
+    const diagnostics = inspectCombinedResponse(secret + valid);
+    assert.equal(diagnostics.responseCharacters, secret.length + valid.length);
+    assert.ok(!JSON.stringify(diagnostics).includes(secret));
 });

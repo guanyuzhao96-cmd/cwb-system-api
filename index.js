@@ -445,13 +445,13 @@ function bindUi() {
                 });
                 const candidates = cardProfileMigrationPreview.candidates;
                 if (!candidates.length) {
-                    preview.text(`扫描完成：检查 ${cardProfileMigrationPreview.books.length} 本关联世界书，没有找到仍绑定聊天 ID 的角色档案。已绑定角色卡的档案不会更改。`);
+                    preview.text(`扫描完成：检查 ${cardProfileMigrationPreview.books.length} 本世界书，没有找到需要迁移的插件资料。`);
                     $('#cwb-status').text('旧档案扫描完成：没有需要转换的条目。');
                     return;
                 }
-                const lines = candidates.map((item, index) => `${index + 1}. ${item.name}｜${item.marker === 'CWB:主角档案' ? '主角档案' : '角色档案'}｜《${item.bookName}》｜${item.comment || '（无标题）'}｜UID ${item.uid}`).join('\n');
-                preview.text(`扫描完成：检查 ${cardProfileMigrationPreview.books.length} 本关联世界书，找到 ${candidates.length} 条旧聊天绑定档案。\n\n将转换为当前角色卡：${decodeURIComponent(cardProfileMigrationPreview.cardKey.replace('CWB:角色卡:', ''))}\n\n${lines}\n\n将保留所有条目和内容；已绑定其他角色卡的档案不在列表中。`);
-                convert.text(`确认转换全部 ${candidates.length} 条档案`).prop('hidden', false);
+                const lines = candidates.map((item, index) => `${index + 1}. ${item.name}｜${item.label}｜《${item.bookName}》｜${item.comment || '（无标题）'}｜UID ${item.uid}`).join('\n');
+                preview.text(`扫描完成：检查 ${cardProfileMigrationPreview.books.length} 本世界书，找到 ${candidates.length} 条待迁移插件资料。\n\n将转换为当前角色卡：${decodeURIComponent(cardProfileMigrationPreview.cardKey.replace('CWB:角色卡:', ''))}\n\n${lines}\n\n请核对所列资料属于这张角色卡。所有条目 UID 和正文保留；已绑定其他角色卡的资料不在列表中。`);
+                convert.text(`确认迁移全部 ${candidates.length} 条资料到当前角色卡`).prop('hidden', false);
                 $('#cwb-status').text(`旧档案扫描完成：发现 ${candidates.length} 条，已列出完整世界书与 UID。`);
             } finally { release(); }
         });
@@ -461,7 +461,7 @@ function bindUi() {
         const preview = cardProfileMigrationPreview;
         if (!preview?.candidates?.length) return;
         const details = preview.candidates.map((item, index) => `${index + 1}. ${item.name}｜《${item.bookName}》｜UID ${item.uid}`).join('\n');
-        if (!window.confirm(`即将把以下 ${preview.candidates.length} 条旧聊天绑定档案改为当前角色卡绑定：\n\n${details}\n\n只改归属键；原条目、UID 和内容均保留，不合并、不删除。确认转换？`)) return;
+        if (!window.confirm(`即将把以下 ${preview.candidates.length} 条档案、时间线、关系或进度资料改为当前角色卡绑定：\n\n${details}\n\n确认它们属于当前角色卡后再迁移。只改归属键；原条目、UID 和内容均保留，不合并、不删除。确认转换？`)) return;
         const original = button.text();
         button.prop('disabled', true).text('正在逐条转换并核验…');
         let release;
