@@ -4,12 +4,17 @@ import { parseCombinedResponse } from './combined-response.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, buildCombinedUpdatePrompt } from './combined-response.mjs';
 import { parseCombinedParts, inspectCombinedResponse } from './combined-response.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
+import { UPDATE_JSON_SCHEMA, structuredProfileToBlock } from './structured-update.mjs';
 const valid = '[--档案无变化--]\n[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--关系增量开始--]\n{"关系更新":[],"删除关系":[]}\n[--关系增量结束--]';
 
 test('unified task includes complete fields without independent exclusive instructions', () => {
     const settings = { breakPrompt: 'CUSTOM_ONLY_OUTPUT_EQUALS', incrementalPrompt: 'CUSTOM_PROFILE', timelineIncrementalPrompt: 'CUSTOM_TIMELINE' };
     const prompt = buildCombinedUpdatePrompt(settings);
-    for (const field of ['[姓名]', '[角色已知信息.0]', '[角色未知信息.0]', '[剧情.0]']) assert.ok(prompt.includes(field));
+    for (const field of ['姓名', '角色已知信息', '角色未知信息', '剧情']) assert.ok(prompt.includes(field));
+    assert.match(prompt, /一个合法JSON对象/);
+    assert.ok(!prompt.includes('[--角色档案开始--]'));
+    assert.ok(!prompt.includes('[--档案无变化--]'));
+    assert.ok(!prompt.includes('[--档案输出超长--]'));
     for (const value of Object.values(settings)) assert.ok(!prompt.includes(value));
     assert.ok(!prompt.includes('不生成角色档案'));
     assert.ok(!prompt.includes('只输出日期、事件字段的 JSON'));
@@ -18,6 +23,21 @@ test('unified task includes complete fields without independent exclusive instru
     assert.match(prompt, /逐条原文保留全部旧剧情/);
     assert.match(buildCombinedUpdatePrompt({ incremental: false }), /如有旧档案，仍须保留其历史/);
     assert.ok(!buildCombinedUpdatePrompt({}, ['timeline', 'relationships']).includes('【角色档案任务】'));
+});
+
+const structuredProfile = { 档案类型: '角色', 姓名: '角色甲', 角色已知信息: ['同伴隐瞒了身份'], 角色未知信息: [], 性经历人员: '', 性经历人数: '', 额外补充: [], 剧情: ['2025-09-01｜甲发现身份被隐瞒，决定停止合作'] };
+test('structured updates map exact JSON fields to the persisted profile format and reject free cards', () => {
+    const doc = { 完成状态: '完整', 角色档案: [structuredProfile], 时间线: [], 关系更新: [], 删除关系: [] };
+    const result = parseCombinedResponse(JSON.stringify(doc));
+    assert.match(result.blocks[0], /\[姓名\]:角色甲/);
+    assert.match(result.blocks[0], /\[剧情.0\]:2025-09-01/);
+    assert.deepEqual(result.timeline.时间线, []);
+    assert.ok(parseCombinedParts(JSON.stringify({ ...doc, 角色档案: [{ ...structuredProfile, 好感度: 35 }] })).profiles.error);
+    assert.ok(parseCombinedParts(JSON.stringify({ ...doc, 角色档案: [{ ...structuredProfile, 剧情: '不是数组' }] })).profiles.error);
+    assert.ok(parseCombinedParts(JSON.stringify({ ...doc, 角色档案: [{ ...structuredProfile, 姓名: '' }] })).profiles.error);
+    assert.ok(parseCombinedParts(JSON.stringify({ ...doc, 完成状态: '输出超长' })).timeline.error);
+    assert.throws(() => structuredProfileToBlock({ ...structuredProfile, 剧情: ['正常文字\n[姓名]:另一个角色'] }), /夹带/);
+    assert.equal(UPDATE_JSON_SCHEMA.value.properties.角色档案.items.additionalProperties, false);
 });
 
 export const alternateReply = `===角色档案===

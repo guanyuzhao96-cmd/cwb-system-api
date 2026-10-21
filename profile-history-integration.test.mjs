@@ -22,7 +22,7 @@ async function harness(events = [oldEvent]) {
     // write would erase the latest profile and the manual entry on the server.
     const cache = { entries: {} };
     const requests = [], modules = new Map();
-    const contextData = { chatId: 'history-chat', chatMetadata: { integrity: 'history-identity' },
+    const contextData = { mainApi: 'openai', chatId: 'history-chat', chatMetadata: { integrity: 'history-identity' },
         characterId: 0, name1: '主角', name2: '测试角色卡',
         characters: [{ name: '测试角色卡', avatar: 'card.png', data: { extensions: { world: '主世界书' } } }],
         chat: [{ name: '叙述者', mes: '她终于公开了证据。' }] };
@@ -429,7 +429,8 @@ test('unified generation ignores conflicting standalone prompts and saves throug
     await h.core.updateRange(h.settings, 0, 0, { silent: true });
     assert.equal(h.requests.length, 1);
     assert.ok(!h.requests[0].systemPrompt.includes('CONFLICT_'));
-    assert.match(h.requests[0].systemPrompt, /\[角色已知信息\.0\]/);
+    assert.match(h.requests[0].systemPrompt, /角色已知信息（字符串数组）/);
+    assert.equal(h.requests[0].jsonSchema.name, 'cwb_archive_update');
     assert.match(h.data().entries[1].content, /取得关键证据/);
     assert.match(h.data().entries[1].content, /决定停止合作/);
     const single = await harness();
@@ -448,6 +449,21 @@ test('equals-heading reply never saves a freeform profile or marks any module co
     for (const entry of Object.values(h.data().entries)) assert.ok(!['CWB:故事时间线', 'CWB:角色关系汇总'].some(marker => entry.key.includes(marker)));
     const progress = await h.lorebook.getModuleProgress();
     for (const module of ['profiles', 'timeline', 'relationships']) assert.equal(JSON.stringify(progress[module].completed), '[]');
+});
+
+test('JSON-only generation persists objects with history and never applies schema to a single-module request', supported, async () => {
+    const h = await harness();
+    h.reply(JSON.stringify({ 完成状态: '完整', 角色档案: [{ 档案类型: '角色', 姓名: '角色甲', 角色已知信息: [], 角色未知信息: [], 性经历人员: '', 性经历人数: '', 额外补充: [], 剧情: [oldEvent, newEvent] }],
+        时间线: [{ 日期: '2025-09-03', 事件: '甲揭露真相' }], 关系更新: [{ 人物A: '甲', 人物B: '乙', 方向: '↔', 关系: '解除合作' }], 删除关系: [] }));
+    await h.core.updateRange(h.settings, 0, 0, { silent: true });
+    assert.equal(h.requests.length, 1);
+    assert.ok(h.requests[0].jsonSchema);
+    assert.match(h.data().entries[1].content, /决定停止合作/);
+    assert.match(h.data().entries[1].content, /取得关键证据/);
+    assert.match(await h.lorebook.getRelationshipSummary(), /解除合作/);
+    const single = await harness();
+    await single.core.updateRange(single.settings, 0, 0, { silent: true, modules: ['profiles'] });
+    assert.equal(single.requests[0].jsonSchema, undefined);
 });
 
 test('reply-format failures record structural evidence and never confirm missing modules', supported, async () => {

@@ -1,5 +1,6 @@
 import { MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, buildCombinedUpdatePrompt, inspectCombinedResponse, parseCombinedParts } from './combined-response.mjs';
+import { UPDATE_JSON_SCHEMA } from './structured-update.mjs';
 import { mergeRelationships } from './relationship-utils.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -263,7 +264,7 @@ test('unified no-profile update still saves timeline and relationships with exac
         getRelationshipSummary: async () => '',
         callSystemApi: async () => { calls++; return '[--档案无变化--]\n[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--关系增量开始--]\n{"关系更新":[],"删除关系":[]}\n[--关系增量结束--]'; },
         recordChatUpdateRange: async () => {}, notify() {},
-        COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, buildCombinedUpdatePrompt, inspectCombinedResponse, parseCombinedParts, RELATIONSHIP_PROMPT: '', mergeRelationships,
+        COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, buildCombinedUpdatePrompt, UPDATE_JSON_SCHEMA, inspectCombinedResponse, parseCombinedParts, RELATIONSHIP_PROMPT: '', mergeRelationships,
         document: { getElementById: () => null },
     });
     vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);

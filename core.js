@@ -2,6 +2,7 @@ import { PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName, r
 import { PROFILE_COMPACTION_BATCH_SIZE, PROFILE_COMPACTION_BATCH_PROTOCOL, parseProfileCompactionBatch } from './profile-compaction.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, buildCombinedUpdatePrompt, inspectCombinedResponse, parseCombinedParts } from './combined-response.mjs';
+import { UPDATE_JSON_SCHEMA } from './structured-update.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
@@ -179,7 +180,9 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
         // Reassert the format after the potentially long source material, within
         // the same request; no hidden repair/retry generation is performed.
-        messages.push({ role: 'user', content: COMBINED_OUTPUT_REMINDER });
+        messages.push({ role: 'user', content: targets.length > 1
+            ? '资料已结束。现在只输出一个包含完成状态、角色档案、时间线、关系更新、删除关系的JSON对象；角色档案使用固定字段对象数组。不要续写聊天或输出等号标题。'
+            : COMBINED_OUTPUT_REMINDER });
         const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
         const requestBreakdown = {
             oldProfilesCharacters: oldProfiles.join('\n').length,
@@ -190,7 +193,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：AI 请求中，输入约 ${requestChars} 字符…`);
         let response;
         const requestStartedAt = Date.now();
-        try { response = await callSystemApi(messages, settings.responseLength); }
+        try { response = await callSystemApi(messages, settings.responseLength, { jsonSchema: targets.length > 1 ? UPDATE_JSON_SCHEMA : null }); }
         catch (error) {
             const progressErrors = [];
             if (state.chatId === chatId) {

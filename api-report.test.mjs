@@ -28,8 +28,9 @@ test('system API rejects object/empty results instead of converting them into pr
     const host = new vm.SyntheticModule(['generateRaw'], function () {
         this.setExport('generateRaw', async () => { calls++; return reply; });
     }, { context });
+    const extensions = new vm.SyntheticModule(['getContext'], function () { this.setExport('getContext', () => ({ mainApi: 'openai' })); }, { context });
     const api = new vm.SourceTextModule(readFileSync(new URL('./api.js', import.meta.url), 'utf8'), { context });
-    await api.link(() => host);
+    await api.link(path => path.includes('extensions.js') ? extensions : host);
     await api.evaluate();
     reply = { content: 'not the verified return contract' };
     await assert.rejects(api.namespace.callSystemApi([{ role: 'user', content: '测试' }]), /返回类型为 object/);
@@ -38,4 +39,25 @@ test('system API rejects object/empty results instead of converting them into pr
     reply = '  正常文本  ';
     assert.equal(await api.namespace.callSystemApi([{ role: 'user', content: '测试' }]), '正常文本');
     assert.equal(calls, 3, 'each operation makes exactly one generation request');
+});
+
+test('structured requests pass the host schema only for chat completion and never retry a failed request', { skip: !vm.SourceTextModule }, async () => {
+    let mainApi = 'openai', calls = 0, options, fail = false;
+    const context = vm.createContext({ console });
+    const host = new vm.SyntheticModule(['generateRaw'], function () {
+        this.setExport('generateRaw', async value => { calls++; options = value; if (fail) throw Error('schema unsupported'); return '{"角色档案":[]}'; });
+    }, { context });
+    const extensions = new vm.SyntheticModule(['getContext'], function () { this.setExport('getContext', () => ({ mainApi })); }, { context });
+    const api = new vm.SourceTextModule(readFileSync(new URL('./api.js', import.meta.url), 'utf8'), { context });
+    await api.link(path => path.includes('extensions.js') ? extensions : host);
+    await api.evaluate();
+    const schema = { name: 'fixture', value: { type: 'object' } };
+    await api.namespace.callSystemApi([{ role: 'user', content: 'JSON' }], 2048, { jsonSchema: schema });
+    assert.equal(options.jsonSchema, schema);
+    mainApi = 'textgenerationwebui';
+    await api.namespace.callSystemApi([{ role: 'user', content: 'JSON' }], 2048, { jsonSchema: schema });
+    assert.equal(options.jsonSchema, undefined);
+    fail = true;
+    await assert.rejects(api.namespace.callSystemApi([{ role: 'user', content: 'JSON' }], 2048, { jsonSchema: schema }), /schema unsupported/);
+    assert.equal(calls, 3);
 });

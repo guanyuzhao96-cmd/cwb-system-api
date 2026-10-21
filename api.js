@@ -1,10 +1,11 @@
 import { generateRaw } from '/script.js';
+import { getContext } from '/scripts/extensions.js';
 
 export function isSystemApiReady() {
     return true;
 }
 
-export async function callSystemApi(messages, responseLength = null) {
+export async function callSystemApi(messages, responseLength = null, { jsonSchema = null } = {}) {
     if (!Array.isArray(messages) || !messages.length) throw new Error('提示词为空。');
     const systemMessages = messages.filter(message => message.role === 'system').map(message => message.content);
     const promptMessages = messages.filter(message => message.role !== 'system');
@@ -15,6 +16,7 @@ export async function callSystemApi(messages, responseLength = null) {
             systemPrompt: systemMessages.join('\n\n'),
             responseLength: Number(responseLength) > 0 ? Number(responseLength) : null,
             trimNames: false,
+            ...(jsonSchema && getContext()?.mainApi === 'openai' ? { jsonSchema } : {}),
         });
     } catch (error) {
         console.error('[CWB] SillyTavern generateRaw request failed', error);
