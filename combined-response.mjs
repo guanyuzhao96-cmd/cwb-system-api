@@ -1,7 +1,7 @@
 import { extractCharacterBlocks } from './utils.js';
 import { PROFILE_FORMAT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { PROFILE_RULES } from './profile-utils.mjs';
-import { STRUCTURED_OUTPUT_PROTOCOL, structuredProfileToBlock } from './structured-update.mjs';
+import { STRUCTURED_OUTPUT_PROTOCOL, structuredProfileToBlock, inspectUpdateStatus } from './structured-update.mjs';
 
 export const COMBINED_OUTPUT_PROTOCOL = `本次必须在同一条回复中输出三部分，输出格式以本条为准，覆盖其他独立模块的输出格式要求。
 第一部分：角色与主角档案，完整字段与标记如下，不能自行改成自由人物卡：
@@ -119,7 +119,6 @@ function readProfiles(text, root) {
         const parts = root.角色档案.map(value => {
             if (typeof value === 'string') return readProfiles(prepareResponse(value).text, null);
             try {
-                if (root.完成状态 !== '完整') throw Error('结构化更新缺少完整状态');
                 return { value: [structuredProfileToBlock(value)] };
             } catch (error) { return { error: error.message }; }
         });
@@ -144,8 +143,8 @@ function readProfiles(text, root) {
 export function parseCombinedParts(response) {
     const { text } = prepareResponse(response);
     const root = rootJson(text);
-    if (root && Object.hasOwn(root, '完成状态') && root.完成状态 !== '完整') {
-        const error = root.完成状态 === '输出超长' ? '结构化更新输出长度不足，未写入本轮资料' : '结构化更新完成状态无效';
+    if (root && inspectUpdateStatus(root).blocked) {
+        const error = '结构化更新明确报告截断、未完成或失败，未写入本轮资料';
         return { profiles: { error }, timeline: { error }, relationships: { error } };
     }
     return {
@@ -177,5 +176,6 @@ export function inspectCombinedResponse(response) {
         format: root ? 'json' : Object.values(markerCounts).some(Boolean) ? 'tagged' : Object.values(alternateSectionCounts).some(Boolean) ? 'alternate-text' : 'unrecognized',
         markerCounts,
         alternateSectionCounts,
+        updateStatus: root ? inspectUpdateStatus(root) : null,
     };
 }

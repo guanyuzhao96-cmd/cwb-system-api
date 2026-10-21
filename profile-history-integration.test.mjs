@@ -466,6 +466,23 @@ test('JSON-only generation persists objects with history and never applies schem
     assert.equal(single.requests[0].jsonSchema, undefined);
 });
 
+test('completion status synonyms and object metadata save all validated modules instead of failing the whole batch', supported, async () => {
+    for (const status of ['已完成', { 角色档案: '完成', 时间线: '完成', 关系: '完成' }]) {
+        const h = await harness();
+        h.reply(JSON.stringify({ 完成状态: status, 角色档案: [{ 档案类型: '角色', 姓名: '角色甲', 角色已知信息: [], 角色未知信息: [], 性经历人员: '', 性经历人数: '', 额外补充: [], 剧情: [oldEvent, newEvent] }],
+            时间线: [{ 日期: '2025-09-03', 事件: '甲揭露真相，终止合作' }], 关系更新: [{ 人物A: '甲', 人物B: '乙', 方向: '↔', 关系: '解除合作' }], 删除关系: [] }));
+        await h.core.updateRange(h.settings, 0, 0, { silent: true });
+        assert.equal(h.requests.length, 1);
+        assert.match(h.data().entries[1].content, /决定停止合作/);
+        assert.match(h.data().entries[1].content, /取得关键证据/);
+        assert.match(await h.lorebook.getRelationshipSummary(), /解除合作/);
+        const timeline = Object.values(h.data().entries).find(entry => entry.key.includes('CWB:故事时间线'));
+        assert.match(timeline.content, /甲揭露真相，终止合作/);
+        const progress = await h.lorebook.getModuleProgress();
+        for (const module of ['profiles', 'timeline', 'relationships']) assert.equal(JSON.stringify(progress[module].completed), '[[0,0]]');
+    }
+});
+
 test('reply-format failures record structural evidence and never confirm missing modules', supported, async () => {
     const h = await harness();
     const privateReply = 'PRIVATE_UNSTRUCTURED_MODEL_REPLY';

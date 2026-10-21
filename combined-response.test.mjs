@@ -40,6 +40,34 @@ test('structured updates map exact JSON fields to the persisted profile format a
     assert.equal(UPDATE_JSON_SCHEMA.value.properties.角色档案.items.additionalProperties, false);
 });
 
+test('advisory completion metadata cannot veto otherwise valid module data', () => {
+    const doc = { 角色档案: [structuredProfile], 时间线: [{ 日期: '2025-09-01', 事件: '甲终止合作' }], 关系更新: [], 删除关系: [] };
+    for (const status of ['完成', '已完成', '成功', 'complete', 'completed', 'success', true, null, {},
+        { 角色档案: '完成', 时间线: '完成', 关系: '完成' }, 'PRIVATE_UNKNOWN_METADATA']) {
+        const response = JSON.stringify({ ...doc, 完成状态: status });
+        const result = parseCombinedResponse(response);
+        assert.match(result.blocks[0], /决定停止合作/);
+        assert.equal(result.timeline.时间线.length, 1);
+        assert.equal(inspectCombinedResponse(response).updateStatus.blocked, false);
+        assert.ok(!JSON.stringify(inspectCombinedResponse(response)).includes('PRIVATE_UNKNOWN_METADATA'));
+    }
+    assert.equal(parseCombinedResponse(JSON.stringify(doc)).blocks.length, 1);
+    const malformed = parseCombinedParts(JSON.stringify({ ...doc, 完成状态: '已完成', 时间线: null }));
+    assert.ok(malformed.timeline.error);
+    assert.equal(malformed.profiles.value.length, 1);
+    assert.ok(parseCombinedParts(JSON.stringify({ 完成状态: '已完成' })).profiles.error);
+    assert.ok(parseCombinedParts(JSON.stringify({ ...doc, 完成状态: '已完成', 角色档案: [{ ...structuredProfile, 好感度: 35 }] })).profiles.error);
+});
+
+test('explicitly incomplete or failed updates remain blocked even when their JSON is parseable', () => {
+    const doc = { 角色档案: [structuredProfile], 时间线: [], 关系更新: [], 删除关系: [] };
+    for (const status of ['输出超长', '未完成', '不完整', '部分完成', '失败', '已截断', 'incomplete', 'partial', 'failed', 'truncated', 'max_tokens', false, { 时间线: '未完成' }]) {
+        const result = parseCombinedParts(JSON.stringify({ ...doc, 完成状态: status }));
+        assert.ok(Object.values(result).every(part => part.error), JSON.stringify(status));
+    }
+    assert.ok(parseCombinedParts(JSON.stringify({ ...doc, 完成状态: '已完成', finish_reason: 'length' })).profiles.error);
+});
+
 export const alternateReply = `===角色档案===
 【赵冠宇】
 姓名：赵冠宇

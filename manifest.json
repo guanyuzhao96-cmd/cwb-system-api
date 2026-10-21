@@ -7,8 +7,8 @@
   "js": "index.js",
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
-  "version": "0.12.36",
-  "description": "多模块更新使用结构化JSON传输与固定字段校验，插件转换存档格式；角色卡归属存档。",
+  "version": "0.12.37",
+  "description": "修复完成状态说明导致整批拒绝；逐模块校验结构化资料，保留截断与失败保护。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/guanyuzhao96-cmd/cwb-system-api"
 }
