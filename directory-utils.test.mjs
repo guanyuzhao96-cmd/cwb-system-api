@@ -6,7 +6,6 @@ import {
     findRoutedBook,
     namesFromDirectory,
     namesFromRoleEntries,
-    planDirectorySources,
 } from './directory-utils.mjs';
 
 test('generated directory format is read back for routing', () => {
@@ -50,30 +49,4 @@ test('duplicate character entries in one book and across books are reported', ()
         ]],
     ]);
     assert.deepEqual(duplicateLines(duplicates), ['周韵涵：故事线01（2个条目：周韵涵、动态-周韵涵）、故事线02']);
-});
-
-test('directory scan permits static and dynamic profiles together and prefers the static source', () => {
-    const occurrences = new Map();
-    for (const [bookName, entries] of [
-        ['资料世界书', [{ comment: '周韵涵', key: ['周韵涵'] }]],
-        ['主世界书', [{ comment: '动态-周韵涵', key: ['CWB:自动档案', '周韵涵'] }, { comment: '动态-赵思琪', key: ['赵思琪'] }]],
-    ]) for (const [name, rows] of namesFromRoleEntries(entries)) {
-        occurrences.set(name, [...(occurrences.get(name) ?? []), ...rows.map(row => ({ ...row, bookName }))]);
-    }
-    const planned = planDirectorySources(occurrences);
-    assert.equal(planned.duplicates.size, 0);
-    assert.ok(planned.namesByBook.get('资料世界书').has('周韵涵'));
-    assert.ok(!planned.namesByBook.get('主世界书').has('周韵涵'));
-    assert.ok(planned.namesByBook.get('主世界书').has('赵思琪'));
-    const sameBook = planDirectorySources(new Map([['周韵涵', occurrences.get('周韵涵').map(row => ({ ...row, bookName: '同一本书' }))]]));
-    assert.equal(sameBook.duplicates.size, 0);
-    assert.deepEqual([...sameBook.namesByBook.get('同一本书')], ['周韵涵']);
-    occurrences.get('周韵涵').push({ comment: '动态-周韵涵', profileType: 'dynamic', bookName: '另一本书' });
-    const repeated = planDirectorySources(occurrences).duplicates.get('周韵涵');
-    assert.equal(repeated.length, 2);
-    assert.ok(repeated.every(row => row.profileType === 'dynamic'));
-    const staticCopies = planDirectorySources(new Map([['周韵涵', [
-        { comment: '周韵涵', bookName: '甲' }, { comment: '静态-周韵涵', bookName: '乙' },
-    ]]]));
-    assert.equal(staticCopies.duplicates.get('周韵涵').length, 2);
 });

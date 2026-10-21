@@ -1,28 +1,30 @@
 import { MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress } from './module-progress.mjs';
-import { COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, buildCombinedUpdatePrompt, inspectCombinedResponse, parseCombinedParts } from './combined-response.mjs';
-import { UPDATE_JSON_SCHEMA } from './structured-update.mjs';
+import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { mergeRelationships } from './relationship-utils.mjs';
 import { test } from 'node:test';
+import { webcrypto } from 'node:crypto';
+import { CARD_PREFIX, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress } from './card-archive.mjs';
+import { parseCustomFormat } from './utils.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
-import { mergeRanges, parseTaggedRanges, overlappingRanges } from './update-tracker.mjs';
+import { mergeRanges, parseTaggedRanges } from './update-tracker.mjs';
 import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } from './timeline-utils.mjs';
 import { acquireOperationLock } from './state.js';
-import { sanitizeName, parseCustomFormat } from './utils.js';
 
 function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
-    const context = vm.createContext({
+    for (const entry of Object.values(data.entries)) entry.key = entry.key?.map(key => key === 'chat' ? 'CWB:角色卡:Test.png' : key === 'other' ? 'CWB:角色卡:Other.png' : key);
+    const context = vm.createContext({ crypto: webcrypto, TextEncoder, CARD_PREFIX, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress, parseCustomFormat,
         MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,
-        structuredClone, sanitizeName, parseCustomFormat, world_names: ['main'], selected_world_info: [], world_info: {}, getRequestHeaders: () => ({}),
+        structuredClone, getRequestHeaders: () => ({}),
         fetch: async () => ({ ok: true, json: async () => structuredClone(data) }),
-        mergeRanges, parseTaggedRanges, overlappingRanges, state: { chatId: 'chat', operationOwner: null },
-        getContext: () => ({ characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }] }),
+        mergeRanges, parseTaggedRanges, state: { chatId: 'chat', operationOwner: null },
+        getContext: () => ({ characterId: 0, characters: [{ avatar: 'Test.png', data: { extensions: { world: 'main' } } }], chat: Array.from({ length: 120 }, (_, i) => ({ mes: String(i) })) }),
         loadWorldInfo: async () => structuredClone(data),
         saveWorldInfo: async (_, next) => { if (fail) throw Error('save failed'); data = structuredClone(next); saves++; },
         createWorldInfoEntry: (_, next) => { const uid = Math.max(-1, ...Object.keys(next.entries).map(Number)) + 1; return next.entries[uid] = { uid }; },
@@ -34,11 +36,11 @@ function harness(entries = {}) {
 const entry = (uid, chat, range, content) => ({ uid, key: ['CWB:故事时间线', chat, `CWB:时间线楼层:${range}`], content });
 
 test('legacy entries merge atomically, retain UID, deduplicate and isolate other chats', async () => {
-    const h = harness({ 0: entry(0, 'chat', '1-20', '[时间线.0]: 2025-02-02｜甲｜事件乙'), 1: entry(1, 'chat', '41-60', '[时间线.0]: 2025-01-01｜甲｜事件甲\n[时间线.1]: 2025-02-02｜甲｜事件乙\n[时间线.2]: 2025-02-02｜乙｜事件丙'), 2: entry(2, 'CWB:角色卡:foreign.png', '1-10', 'other') });
+    const h = harness({ 0: entry(0, 'chat', '1-20', '[时间线.0]: 2025-02-02｜甲｜事件乙'), 1: entry(1, 'chat', '41-60', '[时间线.0]: 2025-01-01｜甲｜事件甲\n[时间线.1]: 2025-02-02｜甲｜事件乙\n[时间线.2]: 2025-02-02｜乙｜事件丙'), 2: entry(2, 'other', '1-10', 'other') });
     await h.context.getTimelineEntries();
-    assert.equal(h.saves(), 2);
+    assert.equal(h.saves(), 1);
     assert.deepEqual(Object.keys(h.data().entries), ['0', '2']);
-    assert.equal(h.data().entries[0].content, '【主线时间线】\n「2025.1.1」 1.事件甲\n「2025.2.2」 1.事件乙\n           2.事件丙');
+    assert.equal(h.data().entries[0].content, '【主线时间线】\n[时间线.0]: 2025-01-01｜事件甲\n[时间线.1]: 2025-02-02｜事件乙\n    ↳ 事件丙');
     assert.ok(h.data().entries[0].key.includes('CWB:时间线楼层:41-60'));
     await h.context.saveTimeline({}, '【时间线楼层：21-40】\n（本范围已检查，无新增重要事件）', 20, 39);
     assert.ok(h.data().entries[0].key.includes('CWB:时间线楼层:1-60'));
@@ -57,7 +59,7 @@ test('timeline and relationship references stay enabled and constant after save 
         1: { uid: 1, key: ['CWB:角色关系汇总', 'chat'], content: '旧关系', disable: false },
         2: { uid: 2, key: ['CWB:角色档案目录', 'chat'], content: '目录', disable: false },
         3: { uid: 3, key: ['CWB:自动档案', 'chat', '角色甲'], content: '档案', disable: false },
-        4: { uid: 4, key: ['CWB:故事时间线', 'CWB:角色卡:foreign.png'], content: '其他聊天时间线', disable: false, constant: true, selective: false },
+        4: { uid: 4, key: ['CWB:故事时间线', 'other'], content: '其他聊天时间线', disable: false, constant: true, selective: false },
     });
     h.context.listWorldbooks = () => ['main'];
     await h.context.saveRelationshipSummary('甲 ↔ 乙：同学', 0, 10);
@@ -75,68 +77,13 @@ test('timeline and relationship references stay enabled and constant after save 
     assert.equal(h.data().entries[4].disable, true, 'blue entries from other chats must be turned off');
 });
 
-test('refresh repairs server-side disabled references despite stale cache and remains idempotent', async () => {
-    const h = harness({
-        0: { uid: 0, key: ['CWB:故事时间线', 'chat'], content: '时间线', disable: true, enabled: false, constant: false },
-        1: { uid: 1, key: ['CWB:角色关系汇总', 'chat'], content: '关系', disable: true, enabled: false, constant: false },
-        2: { uid: 2, key: ['CWB:角色关系汇总', 'CWB:角色卡:foreign.png'], content: '其他聊天', disable: true, constant: false },
-    });
-    h.context.loadWorldInfo = async () => ({ entries: {} });
-    await h.context.manageChatEntries({ enabled: false, worldbookTarget: 'custom', customWorldbook: 'elsewhere' });
-    for (const uid of [0, 1]) {
-        assert.equal(h.data().entries[uid].disable, false);
-        assert.equal(h.data().entries[uid].enabled, true);
-        assert.equal(h.data().entries[uid].constant, true);
-        assert.equal(h.data().entries[uid].selective, false);
-    }
-    assert.equal(h.data().entries[2].disable, true);
-    const saves = h.saves();
-    await h.context.manageChatEntries({ enabled: true, worldbookTarget: 'primary' });
-    assert.equal(h.saves(), saves);
-});
-
-test('Chinese progress migration keeps one UID, preserves gaps and failures, and reads manual floor edits', async () => {
-    const h = harness({
-        5: { uid: 5, key: ['CWB:更新状态', 'chat'], content: JSON.stringify({ version: 2, modules: { profiles: { completed: [[0, 29]], failed: [] } }, tracking: { startIndex: 0, totalMessages: 90, completed: [[0, 29]], duplicates: [] } }) },
-        6: { uid: 6, key: ['CWB:更新状态', 'chat'], content: JSON.stringify({ version: 2, modules: { profiles: { completed: [[40, 59]], failed: [[30, 39]] } } }) },
-        7: { uid: 7, key: ['CWB:更新状态', 'CWB:角色卡:foreign.png'], content: '其他聊天内容不变' },
-    });
-    const progress = await h.context.getModuleProgress();
-    assert.deepEqual(JSON.parse(JSON.stringify(progress.profiles.completed)), [[0, 29], [40, 59]]);
-    assert.deepEqual(JSON.parse(JSON.stringify(progress.profiles.failed)), [[30, 39]]);
-    assert.deepEqual(Object.keys(h.data().entries), ['5', '7']);
-    assert.equal(h.data().entries[5].comment, '插件更新进度');
-    const content = JSON.parse(h.data().entries[5].content);
-    assert.equal(content.角色档案.已保存楼层, '1-30、41-60');
-    assert.equal(content.角色档案.失败楼层, '31-40');
-    content.角色档案.已保存楼层 = '1-20';
-    content.角色档案.失败楼层 = '无';
-    h.data().entries[5].content = JSON.stringify(content, null, 2);
-    const edited = await h.context.getModuleProgress();
-    assert.deepEqual(JSON.parse(JSON.stringify(edited.profiles.completed)), [[0, 19]]);
-    const saves = h.saves();
-    await h.context.getModuleProgress();
-    assert.equal(h.saves(), saves, 'unchanged refresh does not rewrite the entry');
-    await h.context.recordModuleResult('timeline', 0, 9);
-    await h.context.recordChatUpdateRange(0, 9, 90, '保存完成');
-    assert.deepEqual(Object.keys(h.data().entries), ['5', '7']);
-    assert.equal(JSON.parse(h.data().entries[5].content).时间线.已保存楼层, '1-10');
-    assert.equal(h.data().entries[7].content, '其他聊天内容不变');
-    const invalid = JSON.parse(h.data().entries[5].content);
-    invalid.时间线.已保存楼层 = '30-1';
-    h.data().entries[5].content = JSON.stringify(invalid);
-    const snapshot = JSON.stringify(h.data());
-    await assert.rejects(h.context.getModuleProgress(), /存档损坏/);
-    assert.equal(JSON.stringify(h.data()), snapshot);
-});
-
 test('first save and retry keep one entry; failed migration preserves originals', async () => {
     const h = harness();
     await h.context.saveTimeline({}, '[时间线.0]: 日期未知｜甲｜事件', 0, 19);
     await h.context.saveTimeline({}, '[时间线.0]: 日期未知｜甲｜事件', 0, 19);
     assert.equal(Object.values(h.data().entries).filter(entry => entry.key.includes('CWB:故事时间线')).length, 1);
     assert.equal(h.data().entries[0].content.match(/日期未知/g).length, 1);
-    assert.ok(h.data().entries[0].content.includes('「日期未知」 1.事件'));
+    assert.ok(h.data().entries[0].content.includes('日期未知｜事件'));
     const failed = harness({ 0: entry(0, 'chat', '1-20', '旧资料'), 1: entry(1, 'chat', '21-40', '补充资料') });
     failed.fail();
     await assert.rejects(failed.context.getTimelineEntries(), /save failed/);
@@ -146,7 +93,7 @@ test('first save and retry keep one entry; failed migration preserves originals'
 test('refresh fills only the gap between disjoint ranges and repeats without API calls', async () => {
     const h = harness({ 0: entry(0, 'chat', '1-20', '2025-01-01｜甲｜事件甲'), 1: entry(1, 'chat', '41-60', '2025-03-01｜甲｜事件丙') });
     let calls = 0;
-    h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: 60 }, () => ({ mes: '正文' })), characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }] });
+    h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: 60 }, () => ({ mes: '正文' })), characterId: 0, characters: [{ avatar: 'Test.png', data: { extensions: { world: 'main' } } }] });
     h.context.$ = () => ({ text() {} });
     h.context.callSystemApi = async messages => {
         calls++;
@@ -155,6 +102,8 @@ test('refresh fills only the gap between disjoint ranges and repeats without API
     };
     const source = readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, '');
     vm.runInContext(source, h.context);
+    await h.context.recordModuleResult('timeline', 0, 19);
+    await h.context.recordModuleResult('timeline', 40, 59);
     const result = await h.context.refreshTimeline({ threshold: 20, timelineIncrementalPrompt: '自定义提示词' }, () => {}, 59, 60);
     assert.equal(result.addedRanges.join(','), '21-40');
     assert.equal(result.coveredCount, 60);
@@ -175,31 +124,10 @@ test('timeline parser keeps same-day events separate, omits people columns and n
     assert.deepEqual(JSON.parse(JSON.stringify(h.context.uniqueTimelineEntries(parsed, ['[时间线.0]: 2026-10-16｜甲、乙｜甲揭露秘密']))), ['2026-10-16｜乙承担后果']);
 });
 
-test('timeline groups dates numerically, restarts daily numbering and round-trips events intact', () => {
-    const records = [
-        { date: '2024-10-01', event: '事件C' },
-        { date: '2024-9-1', event: '事件A；结果保留' },
-        { date: '2024-09-01', event: '事件B' },
-        { date: '日期未知', event: '事件D' },
-    ];
-    const formatted = formatTimelineRecords(records, { header: '' }).trim();
-    assert.equal(formatted, '「2024.9.1」 1.事件A；结果保留\n           2.事件B\n「2024.10.1」 1.事件C\n「日期未知」 1.事件D');
-    assert.deepEqual(parseTimelineRecords(formatted), [
-        { date: '2024-09-01', event: '事件A；结果保留' },
-        { date: '2024-09-01', event: '事件B' },
-        { date: '2024-10-01', event: '事件C' },
-        { date: '日期未知', event: '事件D' },
-    ]);
-    const legacy = '[时间线.0]: 2024-09-01｜甲｜事件A\n    ↳ 事件B';
-    const updated = formatTimelineRecords(parseTimelineRecords([legacy, '「2024.9.1」 1.事件C']));
-    assert.equal(parseTimelineRecords(updated).length, 3);
-    assert.match(updated, /3\.事件C/);
-});
-
 test('timeline context stays bounded and same-day events retain separate records', () => {
     const records = Array.from({ length: 120 }, (_, i) => ({ date: '2026-10-16', event: `关键事件${i}` }));
     const formatted = formatTimelineRecords(records);
-    assert.equal((formatted.match(/「2026.10.16」/g) ?? []).length, 1);
+    assert.equal((formatted.match(/2026-10-16/g) ?? []).length, 1);
     assert.equal(parseTimelineRecords(formatted).length, 120);
     const context = compactTimelineContext(formatted, { maxChars: 1200, firstCount: 3, recentCount: 5 });
     assert.ok(context.length <= 1200);
@@ -210,7 +138,7 @@ test('timeline context stays bounded and same-day events retain separate records
 
 test('chat switch during a timeline request prevents cross-chat writes and releases the operation lock', async () => {
     const h = harness();
-    let active = { chatId: 'chat', chat: [{ mes: '旧聊天事件' }], characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }] };
+    let active = { chatId: 'chat', chat: [{ mes: '旧聊天事件' }], characterId: 0, characters: [{ avatar: 'Test.png', data: { extensions: { world: 'main' } } }] };
     h.context.getContext = () => active;
     h.context.$ = () => ({ text() {} });
     let finish;
@@ -230,7 +158,7 @@ test('chat switch during a timeline request prevents cross-chat writes and relea
 test('consecutive new rounds append to one entry; covered empty results can recover', async () => {
     const h = harness();
     let count = 20, calls = 0, empty = false;
-    h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: count }, () => ({ mes: '正文' })), characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }] });
+    h.context.getContext = () => ({ chatId: 'chat', chat: Array.from({ length: count }, () => ({ mes: '正文' })), characterId: 0, characters: [{ avatar: 'Test.png', data: { extensions: { world: 'main' } } }] });
     h.context.$ = () => ({ text() {} });
     h.context.callSystemApi = async () => { calls++; return JSON.stringify({ 时间线: empty ? [] : [`2025-01-${String(count / 20).padStart(2, '0')}｜甲｜事件${count}`] }); };
     vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
@@ -255,7 +183,7 @@ test('consecutive new rounds append to one entry; covered empty results can reco
 
 test('unified no-profile update still saves timeline and relationships with exactly one AI call', async () => {
     const h = harness();
-    h.context.getContext = () => ({ chatId: 'chat', characterId: 0, characters: [{ avatar: 'unit-card.png', data: { extensions: { world: 'main' } } }], name1: '用户', chat: [{ mes: '新事件' }] });
+    h.context.getContext = () => ({ chatId: 'chat', characterId: 0, characters: [{ avatar: 'Test.png', data: { extensions: { world: 'main' } } }], name1: '用户', chat: [{ mes: '新事件' }] });
     let calls = 0, timelineWrites = 0, relationshipWrites = 0;
     Object.assign(h.context, {
         $: () => ({ text() {} }), getTargetWorldbook: () => 'main',
@@ -264,8 +192,7 @@ test('unified no-profile update still saves timeline and relationships with exac
         getRelationshipSummary: async () => '',
         callSystemApi: async () => { calls++; return '[--档案无变化--]\n[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--关系增量开始--]\n{"关系更新":[],"删除关系":[]}\n[--关系增量结束--]'; },
         recordChatUpdateRange: async () => {}, notify() {},
-        COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, buildCombinedUpdatePrompt, UPDATE_JSON_SCHEMA, inspectCombinedResponse, parseCombinedParts, RELATIONSHIP_PROMPT: '', mergeRelationships,
-        document: { getElementById: () => null },
+        COMBINED_OUTPUT_PROTOCOL, parseCombinedParts, RELATIONSHIP_PROMPT: '', mergeRelationships,
     });
     vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
     h.context.saveTimeline = async () => timelineWrites++;
@@ -275,43 +202,16 @@ test('unified no-profile update still saves timeline and relationships with exac
 });
 
 
-test('timeline headings never become events and explicit date styles survive normalization', () => {
-    const records = parseTimelineRecords('【时间线增量】\n2025年9月1日 08:00｜周韵涵提交证据\n2025/9/2 10:00｜秦雅楠启动复核');
-    assert.equal(records.length, 2);
-    assert.deepEqual(records.map(item => item.date), ['2025-09-01', '2025-09-02']);
-    const stored = formatTimelineRecords(records);
-    assert.match(stored, /「2025.9.1」/);
-    assert.match(stored, /「2025.9.2」/);
-    assert.ok(!stored.includes('日期未知'));
-    assert.equal(parseTimelineRecords('【主线时间线】\n「日期未知」 1.【时间线增量】\n2.实际旧事件').length, 1);
-});
-
-test('v0.9.8 confirmed 100-floor progress migrates, arbitrary prose markers do not', async () => {
+test('legacy floor-only records remain preserved but cannot complete unrelated source content', async () => {
     const h = harness({
-        0: { uid: 0, key: ['CWB:更新记录', 'chat', 'CWB:总结楼层:0-99'], content: '三个模块均成功，AI调用1次' },
+        0: { uid: 0, key: ['CWB:更新状态', 'chat'], content: JSON.stringify({ modules: { profiles: { completed: [[0, 99]] } } }) },
         1: entry(1, 'chat', '1-100', '旧时间线'),
-        2: { uid: 2, key: ['CWB:角色关系汇总', 'chat', 'CWB:关系楼层:0-99'], content: 'A ↔ B：同学' },
     });
     const progress = await h.context.getModuleProgress();
-    assert.deepEqual(JSON.parse(JSON.stringify(progress.profiles.completed)), [[0, 99]]);
-    assert.deepEqual(pendingBatches(progress, 100, 20), []);
+    assert.deepEqual(JSON.parse(JSON.stringify(progress.profiles.completed)), []);
+    assert.equal(h.data().entries[1].content, '旧时间线');
     await h.context.recordModuleResult('timeline', 100, 119, '格式错误');
     const reloaded = await h.context.getModuleProgress();
     assert.deepEqual(JSON.parse(JSON.stringify(reloaded.timeline.failed)), [[100, 119]]);
-    assert.deepEqual(JSON.parse(JSON.stringify(reloaded.relationships.completed)), [[0, 99]]);
-    const prose = harness({ 0: { uid: 0, key: ['chat'], content: '本条勿动【前197楼总结已完成】' } });
-    assert.deepEqual(JSON.parse(JSON.stringify(await prose.context.getModuleProgress())), {});
-});
-
-test('partial saved module progress does not hide confirmed legacy coverage after refresh', async () => {
-    const h = harness({
-        0: { uid: 0, key: ['CWB:更新记录', 'chat', 'CWB:总结楼层:0-99'], content: '三个模块均成功，AI调用1次' },
-        1: { uid: 1, key: ['CWB:故事时间线', 'chat', 'CWB:时间线楼层:1-100'], content: '旧时间线' },
-        2: { uid: 2, key: ['CWB:角色关系汇总', 'chat', 'CWB:关系楼层:0-99'], content: 'A ↔ B：同学' },
-        3: { uid: 3, key: ['CWB:模块进度', 'chat'], content: JSON.stringify({ version: 1, modules: { profiles: { completed: [[0, 119]], failed: [] } } }) },
-    });
-    const progress = await h.context.getModuleProgress();
-    assert.deepEqual(JSON.parse(JSON.stringify(progress.profiles.completed)), [[0, 119]]);
-    assert.deepEqual(JSON.parse(JSON.stringify(progress.timeline.completed)), [[0, 99]]);
-    assert.deepEqual(JSON.parse(JSON.stringify(progress.relationships.completed)), [[0, 99]]);
+    assert.deepEqual(JSON.parse(JSON.stringify(reloaded.profiles.completed)), []);
 });

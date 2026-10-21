@@ -1,11 +1,10 @@
 import { generateRaw } from '/script.js';
-import { getContext } from '/scripts/extensions.js';
 
 export function isSystemApiReady() {
     return true;
 }
 
-export async function callSystemApi(messages, responseLength = null, { jsonSchema = null } = {}) {
+export async function callSystemApi(messages, responseLength = null) {
     if (!Array.isArray(messages) || !messages.length) throw new Error('提示词为空。');
     const systemMessages = messages.filter(message => message.role === 'system').map(message => message.content);
     const promptMessages = messages.filter(message => message.role !== 'system');
@@ -16,15 +15,13 @@ export async function callSystemApi(messages, responseLength = null, { jsonSchem
             systemPrompt: systemMessages.join('\n\n'),
             responseLength: Number(responseLength) > 0 ? Number(responseLength) : null,
             trimNames: false,
-            ...(jsonSchema && getContext()?.mainApi === 'openai' ? { jsonSchema } : {}),
         });
     } catch (error) {
         console.error('[CWB] SillyTavern generateRaw request failed', error);
         throw new Error(`酒馆系统 API 请求失败：${error?.message || String(error)}`, { cause: error });
     }
-    if (typeof result !== 'string') throw new Error(`系统 API 返回类型为 ${result === null ? 'null' : typeof result}，需要文本回复；未将非文本结果当作档案处理。`);
-    if (!result.trim()) throw new Error('系统 API 未返回有效内容。');
-    return result.trim();
+    if (!String(result ?? '').trim()) throw new Error('系统 API 未返回有效内容。');
+    return String(result).trim();
 }
 
 export async function testSystemApi() {

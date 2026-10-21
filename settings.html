@@ -6,19 +6,18 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.38</span><h2>聊天世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版</span><h2>角色卡世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
-            <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前角色卡进度</div>
+            <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
             <button id="cwb-download-error-report" class="menu_button cwb-full-width" hidden>下载最近一次错误报告</button>
-            <details id="cwb-response-log" class="cwb-log" hidden><summary>查看本次 AI 返回文本</summary><p class="cwb-help">这里显示酒馆接口返回给插件的文本，可能已经过酒馆正则处理。</p><pre id="cwb-timeline-debug" class="cwb-route-status">尚未调用 AI</pre></details>
 
             <section class="cwb-progress-overview" aria-label="三项更新进度">
                 <button type="button" class="cwb-progress-tile" data-cwb-progress="profiles" aria-label="查看角色档案进度与补漏"><span>角色档案</span><strong id="cwb-through-profiles">—</strong><small id="cwb-gap-profiles">待读取</small></button>
                 <button type="button" class="cwb-progress-tile" data-cwb-progress="timeline" aria-label="查看时间线进度与补漏"><span>时间线</span><strong id="cwb-through-timeline">—</strong><small id="cwb-gap-timeline">待读取</small></button>
                 <button type="button" class="cwb-progress-tile" data-cwb-progress="relationships" aria-label="查看角色关系进度与补漏"><span>角色关系</span><strong id="cwb-through-relationships">—</strong><small id="cwb-gap-relationships">待读取</small></button>
             </section>
-            <p class="cwb-caption">资料与进度按当前角色卡保存；聊天只提供待更新正文；点击任一项目可查看缺漏并补更。</p>
+            <p class="cwb-caption">档案、时间线与关系按角色卡保存，切换聊天继续共用；楼层进度按当前正文核验。旧楼层记录无法核对正文的会显示待补，已有资料保留。</p>
             <div class="cwb-primary-actions">
                 <button id="cwb-batch-update" class="menu_button cwb-primary"><i class="fa-solid fa-layer-group" aria-hidden="true"></i> 补齐缺漏</button>
                 <button id="cwb-manual-update" class="menu_button"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 更新最近楼层</button>
@@ -58,36 +57,18 @@
             <details class="cwb-section">
                 <summary><span class="cwb-section-title">档案维护</span><span>清理、删除与单项更新</span></summary>
                 <div class="cwb-section-body">
-<div class="cwb-subsection">
-                        <h3>性经历人数核对</h3>
-                        <p class="cwb-help">手动勾选当前角色卡的角色档案，输入动态信息中的人数进行对比，并查看对象名单和关键剧情。最终人数按旧档案人数加上剧情中新确认的不同对象；发现不一致时可只修改档案人数，不调用 AI。</p>
-                        <button id="cwb-start-profile-audit" class="menu_button cwb-full-width">选择档案并开始核对</button>
-                        <div id="cwb-profile-audit" class="cwb-profile-audit" hidden></div>
-                    </div>
-                    <div class="cwb-subsection">
-                        <h3>已知 / 未知信息审查</h3>
-                        <p class="cwb-help">逐个角色选择要保留的信息；逗号或分号分隔的内容拆为独立条目。可直接点击下一位角色，档案保持不变；点击删除未保留信息，核验成功后自动进入下一位。不调用 AI。</p>
-                        <button id="cwb-start-info-review" class="menu_button cwb-full-width">开始审查所有已知 / 未知信息</button>
-                        <div id="cwb-info-review" class="cwb-info-review" hidden></div>
-                    </div>
                     <div class="cwb-subsection">
                         <h3>整理生成内容</h3>
-                        <button id="cwb-convert-format" class="menu_button cwb-full-width">全部资料升级到最新格式</button>
-                        <p class="cwb-help">预览并勾选角色档案、主角档案、关系、时间线、目录、总览及进度；直接按原 UID 升级，不备份、不调用 AI。</p>
-                        <button id="cwb-scan-card-profile-migration" class="menu_button cwb-full-width">扫描所有旧版资料归属</button>
-                <p class="cwb-help">扫描全部世界书中的角色档案、主角档案、时间线、角色关系、目录、总览与更新进度。核对列表属于当前角色卡后，再确认迁移。转换后这些资料由角色卡共用，切换聊天继续读取；保留正文与 UID，已绑定其他角色卡的条目跳过。</p>
-                        <pre id="cwb-card-profile-migration-preview" class="cwb-route-status" hidden></pre>
-                        <button id="cwb-convert-card-profile-migration" class="menu_button cwb-full-width" hidden>确认迁移全部所列资料到当前角色卡</button>
                         <button id="cwb-cleanup-profiles" class="menu_button cwb-full-width">精简已有角色档案</button>
-                        <p class="cwb-help">勾选角色后，每次 AI 请求精简最多5个角色，超过5个自动分批；完成后显示每份档案及合计的 token 数和减少比例，写回后逐条核验。</p>
+                        <p class="cwb-help">不调用 AI；仅保留姓名和个人关键剧情，只处理当前角色卡由本插件生成的角色及主角档案。</p>
                         <button id="cwb-delete-generated" class="menu_button cwb-full-width cwb-danger">删除本角色卡生成的世界书数据</button>
                         <p class="cwb-help">删除前会列出条目分类并二次确认。仅删除当前角色卡中带插件标记的档案、时间线、关系、档案目录、更新进度和角色总览；原始及手工条目、全局目录、其他角色卡数据和插件设置都会保留。</p>
                     </div>
-                                        
                     <div class="cwb-subsection">
                         <h3>单项更新</h3>
                         <div class="cwb-secondary-actions"><button id="cwb-refresh-timeline" class="menu_button">单独更新时间线</button><button id="cwb-update-relationships" class="menu_button">单独更新关系</button></div>
                         <details class="cwb-log"><summary>角色关系汇总</summary><pre id="cwb-relationship-status" class="cwb-route-status">尚未读取</pre></details>
+                        <details class="cwb-log"><summary>AI 回复与保存记录</summary><pre id="cwb-timeline-debug" class="cwb-route-status">尚未调用 AI</pre></details>
                     </div>
                 </div>
             </details>
@@ -128,7 +109,6 @@
                     </div>
                     <div class="cwb-subsection">
                         <h3>提示词</h3>
-                        <p class="cwb-help">同时更新多个模块使用内置 JSON 协议，由插件生成存档格式；聊天补全接口启用结构化输出。下方自定义提示词用于单模块更新，原设置继续保留。</p>
                     <p class="cwb-help">修改后自动保存，下次更新档案时生效。</p>
                     <details class="cwb-prompt-editor"><summary>前置提示词</summary><label class="cwb-sr-only" for="cwb-break-prompt">前置提示词</label><textarea id="cwb-break-prompt" rows="3" class="text_pole textarea_compact"></textarea></details>
                     <details class="cwb-prompt-editor"><summary>全量生成</summary><label class="cwb-sr-only" for="cwb-full-prompt">全量生成</label><textarea id="cwb-full-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></details>

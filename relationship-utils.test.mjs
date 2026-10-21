@@ -21,11 +21,3 @@ test('explicit deletion and invalid replies do not silently clear the summary', 
     const cleared = mergeRelationships(old, JSON.stringify({ 关系更新: [], 删除关系: [relation('B', 'A', '')] }));
     assert.equal(parseRelationshipSummary(cleared).length, 0);
 });
-
-test('equivalent names normalize without guessing missing identities or accepting conflicting aliases', () => {
-    const result = mergeRelationships('', response([{ 角色A: { 姓名: '周韵涵' }, 角色B: '秦雅楠', direction: '<->', relationship: '协作核查' }]));
-    assert.match(result, /周韵涵 ↔ 秦雅楠：协作核查/);
-    assert.throws(() => mergeRelationships(result, response([{ 角色A: '周韵涵', 关系: '朋友' }])), /缺人物B/);
-    assert.throws(() => mergeRelationships(result, response([{ 人物A: '甲', 角色A: '乙', 人物B: '丙', 关系: '朋友' }])), /冲突/);
-    assert.throws(() => mergeRelationships(result, response([{ 人物A: '甲', 人物B: '甲', 关系: '朋友' }])), /同一人/);
-});

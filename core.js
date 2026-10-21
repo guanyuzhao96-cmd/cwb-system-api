@@ -1,8 +1,6 @@
-import { PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName, reconcileProfileExperienceCount, readProfilePlotEvents, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
-import { PROFILE_COMPACTION_BATCH_SIZE, PROFILE_COMPACTION_BATCH_PROTOCOL, parseProfileCompactionBatch } from './profile-compaction.mjs';
+import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
-import { COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, buildCombinedUpdatePrompt, inspectCombinedResponse, parseCombinedParts } from './combined-response.mjs';
-import { UPDATE_JSON_SCHEMA } from './structured-update.mjs';
+import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
@@ -11,7 +9,6 @@ import { createErrorReport } from './error-report.js';
 import { state, acquireOperationLock } from './state.js';
 import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } from './timeline-utils.mjs';
 import {
-    getCardArchiveKey,
     getLastUpdatedFloor,
     getModuleProgress,
     getProgressRecoveryCandidates,
@@ -32,53 +29,25 @@ import {
     saveUserDescription,
     updateMasterDirectory,
     updateRoster,
-    cleanupProfileFields,
 } from './lorebook.js';
 import { extractCharacterBlocks, notify, parseCustomFormat } from './utils.js';
 import { formatRanges, overlappingRanges, missingRanges } from './update-tracker.mjs';
+import { getCardArchiveKey } from './lorebook.js';
 
 let autoTimer = null;
 
-export async function compactRoleProfiles(settings, onProgress = () => {}, selection = null) {
-    const release = acquireOperationLock(state, '角色档案剧情精简');
-    state.repairing = true;
-    try {
-        refreshChatState();
-        return await cleanupProfileFields(settings, {
-            selection,
-            onProgress,
-            batchSize: PROFILE_COMPACTION_BATCH_SIZE,
-            transformBatch: async candidates => {
-                const active = candidates.filter(candidate => readProfilePlotEvents(candidate.content).length);
-                if (!active.length) return candidates.map(candidate => candidate.content);
-                const response = await callSystemApi([
-                    { role: 'system', content: PROFILE_PLOT_COMPACTION_PROMPT },
-                    { role: 'system', content: PROFILE_COMPACTION_BATCH_PROTOCOL },
-                    { role: 'user', content: JSON.stringify({ 角色档案: active.map(candidate => ({ id: candidate.id, 姓名: candidate.name, 剧情: readProfilePlotEvents(candidate.content) })) }) },
-                ], settings.responseLength);
-                const transformed = new Map(parseProfileCompactionBatch(response, active).map((content, index) => [active[index].id, content]));
-                return candidates.map(candidate => transformed.get(candidate.id) ?? candidate.content);
-            },
-        });
-    } finally {
-        state.repairing = false;
-        release();
-    }
-}
-
 function currentChatId() {
     const context = getContext();
-    return context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId || 'unknown_chat';
+    return JSON.stringify([getCardArchiveKey(), context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || 'unknown_chat']);
 }
 
 function assertCurrentChat(chatId) {
-    if (state.chatId !== chatId || currentChatId() !== chatId || state.cardKey !== getCardArchiveKey()) throw new Error('生成期间切换了聊天，本次停止写入；请在目标聊天重新更新。');
+    if (state.chatId !== chatId || currentChatId() !== chatId) throw new Error('生成期间切换了聊天，本次停止写入；请在目标聊天重新更新。');
 }
 
 export function refreshChatState() {
     const context = getContext();
-    state.cardKey = getCardArchiveKey();
-    state.chatId = context?.chatId || context?.chat_filename?.replace(/\.jsonl?$/i, '') || state.chatId || 'unknown_chat';
+    state.chatId = currentChatId();
     state.messages = (context?.chat ?? []).map((message, index) => ({
         ...message,
         id: index,
@@ -116,7 +85,7 @@ export async function refreshModuleProgress() {
         recoveryCandidates.length ? `找回其他聊天的进度（${recoveryCandidates.length} 条候选）` : '找回其他聊天的进度',
     );
     $('#cwb-progress-error').text(recoveryCandidates.length
-        ? `当前角色卡没有匹配到进度存档；发现 ${recoveryCandidates.length} 条其他聊天存档。请选择正确来源恢复，原存档不会被删除。`
+        ? `当前聊天 ID 没有匹配到进度存档；发现 ${recoveryCandidates.length} 条其他聊天存档。请选择正确来源恢复，原存档不会被删除。`
         : '');
     for (const module of Object.keys(MODULE_LABELS)) {
         const status = moduleStatus(progress, module, state.messages.length);
@@ -158,42 +127,27 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
     if (!targets.length) throw Error('未选择更新模块。');
     const chatId = state.chatId;
     state.updating = true;
-    const names = [], failures = [], successes = [], savedProfiles = [];
+    const names = [], failures = [], successes = [];
     try {
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
         const selected = state.messages.slice(start, end + 1);
-        const oldProfiles = targets.includes('profiles') ? await getTriggeredOldProfiles(settings, selected) : [];
+        const oldProfiles = targets.includes('profiles') ? (await getTriggeredOldProfiles(settings, selected)).map(sanitizeProfileContent).filter(Boolean) : [];
         const oldTimeline = targets.includes('timeline') ? (await getTimelineEntries()).map(entry => entry.content).join('\n') : '';
         const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
         assertCurrentChat(chatId);
         const messages = [];
-        if (targets.length > 1) {
-            messages.push({ role: 'system', content: buildCombinedUpdatePrompt(settings, targets) });
-        } else {
-            if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
-            if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
-            if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
-            if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
-            if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
-            messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
-        }
+        if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
+        if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
+        if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
+        if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
+        if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
+        messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
-        // Reassert the format after the potentially long source material, within
-        // the same request; no hidden repair/retry generation is performed.
-        messages.push({ role: 'user', content: targets.length > 1
-            ? '资料已结束。现在只输出一个包含完成状态、角色档案、时间线、关系更新、删除关系的JSON对象；角色档案使用固定字段对象数组。不要续写聊天或输出等号标题。'
-            : COMBINED_OUTPUT_REMINDER });
         const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
-        const requestBreakdown = {
-            oldProfilesCharacters: oldProfiles.join('\n').length,
-            chatCharacters: formatMessages(selected).length,
-            previousRelationshipsCharacters: oldRelationships.length,
-            promptAndOtherCharacters: requestChars - oldProfiles.join('\n').length - formatMessages(selected).length - oldRelationships.length,
-        };
         setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：AI 请求中，输入约 ${requestChars} 字符…`);
         let response;
         const requestStartedAt = Date.now();
-        try { response = await callSystemApi(messages, settings.responseLength, { jsonSchema: targets.length > 1 ? UPDATE_JSON_SCHEMA : null }); }
+        try { response = await callSystemApi(messages, settings.responseLength); }
         catch (error) {
             const progressErrors = [];
             if (state.chatId === chatId) {
@@ -214,7 +168,6 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                 totalChatFloors: state.messages.length,
                 requestCharacters: requestChars,
                 requestDurationMs: Date.now() - requestStartedAt,
-                requestBreakdown,
             };
             createErrorReport(reportedError, reportedError.cwbDiagnostics);
             reportedError.cwbReportGenerated = true;
@@ -223,8 +176,6 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         assertCurrentChat(chatId);
         const parts = parseCombinedParts(response);
         $('#cwb-timeline-debug').text(`统一更新：AI 1 次，第 ${start + 1}-${end + 1} 楼\n${response}`);
-        const responseLog = document.getElementById('cwb-response-log');
-        if (responseLog) responseLog.hidden = false;
         for (const module of targets) {
             try {
                 assertCurrentChat(chatId);
@@ -235,21 +186,20 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         const parsed = parseCustomFormat(block);
                         const type = String(parsed?.档案类型 || parsed?.record_type || '').toUpperCase();
                         const name = characterNameFromBlock(block);
-                        if (isExcludedProfileName(name)) return null;
                         if (!name || ['时间线', 'TIMELINE'].includes(type)) throw Error('角色档案姓名或档案类型不合法');
-                        const cleaned = reconcileProfileExperienceCount(block, oldProfiles);
+                        const cleaned = sanitizeProfileContent(block);
                         if (!cleaned || !hasProfileFacts(cleaned)) return null;
                         return { block: cleaned, name, isUser: type === '主角' || type === 'USER' || name === (getContext()?.name1 || '用户') };
                     }).filter(Boolean);
                     let userUpdated = false;
                     for (const { block, name, isUser } of prepared) {
                         assertCurrentChat(chatId);
-                        const options = { returnReceipt: true };
-                        const saved = isUser ? await saveUserDescription(settings, name, block, start, end, options) : await saveCharacterDescription(settings, name, block, start, end, options);
+                        const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
                         assertCurrentChat(chatId);
                         if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，缺失时先激活目标世界书并扫描生成目录。`);
-                        savedProfiles.push({ ...saved, isUser });
-                        if (isUser) userUpdated = true; else names.push(saved.name);
+                        await verifyProfileContent(settings, name, block, isUser);
+                        assertCurrentChat(chatId);
+                        if (isUser) userUpdated = true; else names.push(saved);
                     }
                     if (names.length) { assertCurrentChat(chatId); await updateRoster(settings, [...new Set(names)], start, end); assertCurrentChat(chatId); }
                     else if (userUpdated && settings.multiWorldbookRouting) { assertCurrentChat(chatId); await updateMasterDirectory(settings); assertCurrentChat(chatId); }
@@ -276,45 +226,23 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                 catch (progressError) { failures.push(`进度未确认：${progressError.message}`); }
             }
         }
-        // Re-check after timeline, relationships and progress writes: those also
-        // save the entire book and must not undo a successful profile write.
-        if (savedProfiles.length) {
-            try {
-                for (const saved of savedProfiles) {
-                    assertCurrentChat(chatId);
-                    await verifyProfileContent(settings, saved.name, saved.content, saved.isUser, saved);
-                }
-            } catch (error) {
-                failures.push(`${MODULE_LABELS.profiles}：${error.message}`);
-                const index = successes.indexOf(MODULE_LABELS.profiles);
-                if (index >= 0) successes.splice(index, 1);
-                try { if (currentChatId() === chatId && state.chatId === chatId) await recordModuleResult('profiles', start, end, error.message); }
-                catch (progressError) { failures.push(`进度未确认：${progressError.message}`); }
-            }
-        }
         if (!failures.length && targets.length === 3) {
             assertCurrentChat(chatId);
             await recordChatUpdateRange(start, end, state.messages.length, '三个模块均成功，AI调用1次', 0);
         }
-        const responseInvalid = targets.some(module => parts[module].error);
-        const responseHint = failures.length && responseInvalid
-            ? `；AI 返回 ${response.length} 字符，请展开“查看本次 AI 返回文本”核对格式` : '';
-        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}${responseHint}`;
+        const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
         setStatus(message);
         if (failures.length) {
             const failedModules = targets.filter(module => failures.some(failure => failure.startsWith(`${MODULE_LABELS[module]}：`)));
             const reportError = new Error(message);
             reportError.cwbDiagnostics = {
-                stage: responseInvalid ? 'response_validation' : failures.some(failure => failure.includes('未出现在可用目录')) ? 'profile_worldbook_routing' : 'module_save',
+                stage: failures.some(failure => failure.includes('未出现在可用目录')) ? 'profile_worldbook_routing' : 'module_save',
                 modules: failedModules.map(module => MODULE_LABELS[module]),
                 startFloor: start + 1,
                 endFloor: end + 1,
                 batchFloors: end - start + 1,
                 totalChatFloors: state.messages.length,
                 requestCharacters: requestChars || null,
-                requestDurationMs: Date.now() - requestStartedAt,
-                responseDiagnostics: inspectCombinedResponse(response),
-                requestBreakdown,
             };
             createErrorReport(reportError, reportError.cwbDiagnostics);
             reportError.cwbReportGenerated = true;
@@ -360,7 +288,7 @@ function parseTimelineResponse(response) {
     const items = Array.isArray(parsed) ? parsed : parsed?.时间线 ?? parsed?.events;
     if (Array.isArray(items)) return consolidateTimelineEntries(items.map(item => {
         if (typeof item === 'string') return item.trim();
-        const date = String(item?.日期 ?? item?.date ?? item?.时间 ?? item?.time ?? '日期未知').trim();
+        const date = String(item?.日期 ?? item?.date ?? '日期未知').trim();
         const event = String(item?.事件 ?? item?.event ?? '').trim();
         return event ? `${date}｜${event}` : '';
     }).filter(Boolean));
@@ -418,12 +346,11 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
         assertCurrentChat(chatId);
         const total = messagesSnapshot.length;
         const covered = new Array(total + 1).fill(false);
-        for (const entry of existing) {
-            for (const range of timelineRanges(entry)) {
-            const start = Math.max(1, range[0]);
-            const end = Math.min(total, range[1]);
+        const sourceProgress = await getModuleProgress();
+        for (const range of sourceProgress.timeline?.completed ?? []) {
+            const start = Math.max(1, range[0] + 1);
+            const end = Math.min(total, range[1] + 1);
             for (let floor = start; floor <= end; floor++) covered[floor] = true;
-            }
         }
         // Explicit character updates must check their selected range again, even if
         // a previous request marked it covered but returned no events (or was swiped).
@@ -540,7 +467,7 @@ export async function batchUpdate(settings, onProgress) {
 }
 
 export async function onChatChanged(settings) {
-    // Archives are card-owned. Let an in-flight request finish its source-chat check
+    // Worldbook state is chat-scoped. Let any in-flight save finish its chat check
     // before refreshing or migrating entries for the newly selected chat.
     let waited = 0;
     while (state.operationOwner && waited < 60000) {

@@ -1,4 +1,4 @@
-import { PLUGIN_VERSION } from './version.mjs';
+const REPORT_VERSION = '0.12.4';
 let latestReportJson = null;
 let latestReportName = null;
 
@@ -7,7 +7,6 @@ function errorDetails(error) {
     return {
         name: String(error?.name || 'Error'),
         message: String(error?.message || error || '未知错误').slice(0, 2000),
-        historyGuard: error?.cwbHistoryGuard ?? undefined,
         causeName: cause?.name ? String(cause.name).slice(0, 120) : undefined,
         causeMessage: cause?.message ? String(cause.message).slice(0, 2000) : undefined,
         stack: error?.stack ? String(error.stack).slice(0, 5000) : undefined,
@@ -19,7 +18,7 @@ export function createErrorReport(error, details = {}) {
         reportType: 'CWB 插件错误诊断报告',
         reportVersion: 1,
         generatedAt: new Date().toISOString(),
-        pluginVersion: PLUGIN_VERSION,
+        pluginVersion: REPORT_VERSION,
         environment: {
             userAgent: globalThis.navigator?.userAgent || 'unknown',
             language: globalThis.navigator?.language || 'unknown',
@@ -34,8 +33,6 @@ export function createErrorReport(error, details = {}) {
             totalChatFloors: Number.isFinite(details.totalChatFloors) ? details.totalChatFloors : null,
             requestCharacters: Number.isFinite(details.requestCharacters) ? details.requestCharacters : null,
             requestDurationMs: Number.isFinite(details.requestDurationMs) ? details.requestDurationMs : null,
-            responseDiagnostics: details.responseDiagnostics ?? null,
-            requestBreakdown: details.requestBreakdown ?? null,
         },
         error: errorDetails(error),
         privacy: '报告不包含聊天正文、完整提示词、世界书条目内容或聊天标识。',
