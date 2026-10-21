@@ -1,7 +1,7 @@
 import { PROFILE_PLOT_COMPACTION_PROMPT, PROFILE_RULES, isExcludedProfileName, reconcileProfileExperienceCount, readProfilePlotEvents, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { PROFILE_COMPACTION_BATCH_SIZE, PROFILE_COMPACTION_BATCH_PROTOCOL, parseProfileCompactionBatch } from './profile-compaction.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
-import { COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, inspectCombinedResponse, parseCombinedParts } from './combined-response.mjs';
+import { COMBINED_OUTPUT_PROTOCOL, COMBINED_OUTPUT_REMINDER, buildCombinedUpdatePrompt, inspectCombinedResponse, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
@@ -166,12 +166,16 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
         assertCurrentChat(chatId);
         const messages = [];
-        if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
-        if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
-        if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
-        if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
-        if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
-        messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
+        if (targets.length > 1) {
+            messages.push({ role: 'system', content: buildCombinedUpdatePrompt(settings, targets) });
+        } else {
+            if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
+            if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
+            if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
+            if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
+            if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
+            messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
+        }
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
         // Reassert the format after the potentially long source material, within
         // the same request; no hidden repair/retry generation is performed.
@@ -291,7 +295,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         }
         const responseInvalid = targets.some(module => parts[module].error);
         const responseHint = failures.length && responseInvalid
-            ? `；AI 返回 ${response.length} 字符，请展开“查看本次 AI 原始回复”核对格式` : '';
+            ? `；AI 返回 ${response.length} 字符，请展开“查看本次 AI 返回文本”核对格式` : '';
         const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}${responseHint}`;
         setStatus(message);
         if (failures.length) {

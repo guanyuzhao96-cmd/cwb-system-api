@@ -8,7 +8,7 @@ export function ensureProfilePromptRules(prompt) {
     return `${text}\n\n${PROFILE_PROMPT_RULE_MARKER}\n${PROFILE_RULES}`;
 }
 
-const PROFILE_FORMAT = `只输出档案数据，不解释、不用Markdown代码块。每个角色独立输出，可按实际信息省略空字段：
+export const PROFILE_FORMAT = `只输出档案数据，不解释、不用Markdown代码块。每个角色独立输出，可按实际信息省略空字段：
 [--角色档案开始--]
 [档案类型]:角色或主角
 [姓名]:实际姓名

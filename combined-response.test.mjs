@@ -1,10 +1,55 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCombinedResponse } from './combined-response.mjs';
-import { COMBINED_OUTPUT_PROTOCOL } from './combined-response.mjs';
+import { COMBINED_OUTPUT_PROTOCOL, buildCombinedUpdatePrompt } from './combined-response.mjs';
 import { parseCombinedParts, inspectCombinedResponse } from './combined-response.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 const valid = '[--档案无变化--]\n[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--关系增量开始--]\n{"关系更新":[],"删除关系":[]}\n[--关系增量结束--]';
+
+test('unified task includes complete fields without independent exclusive instructions', () => {
+    const settings = { breakPrompt: 'CUSTOM_ONLY_OUTPUT_EQUALS', incrementalPrompt: 'CUSTOM_PROFILE', timelineIncrementalPrompt: 'CUSTOM_TIMELINE' };
+    const prompt = buildCombinedUpdatePrompt(settings);
+    for (const field of ['[姓名]', '[角色已知信息.0]', '[角色未知信息.0]', '[剧情.0]']) assert.ok(prompt.includes(field));
+    for (const value of Object.values(settings)) assert.ok(!prompt.includes(value));
+    assert.ok(!prompt.includes('不生成角色档案'));
+    assert.ok(!prompt.includes('只输出日期、事件字段的 JSON'));
+    assert.match(prompt, /赵冠宇：不得生成或更新/);
+    assert.match(prompt, /任务、系统点数、奖励和好感度数值/);
+    assert.match(prompt, /逐条原文保留全部旧剧情/);
+    assert.match(buildCombinedUpdatePrompt({ incremental: false }), /如有旧档案，仍须保留其历史/);
+    assert.ok(!buildCombinedUpdatePrompt({}, ['timeline', 'relationships']).includes('【角色档案任务】'));
+});
+
+export const alternateReply = `===角色档案===
+【赵冠宇】
+姓名：赵冠宇
+等级：主角
+系统点：43
+当前任务：整理藏书
+===角色档案结束===
+===角色档案===
+【周韵涵】
+姓名：周韵涵
+身份：班长
+好感度：35
+===角色档案结束===
+===时间线增量===
+2025-09-01 08:00｜校门口｜赵冠宇认识周韵涵，触发任务。
+===时间线增量结束===
+===关系增量===
+赵冠宇—周韵涵：班长与转学生。好感35。任务进行中。
+===关系增量结束===`;
+
+test('reported equals-heading reply fails explicitly and diagnostics identify the actual format', () => {
+    const parts = parseCombinedParts(alternateReply);
+    assert.match(parts.profiles.error, /自由人物卡.*档案未保存/);
+    assert.match(parts.timeline.error, /纯文本格式.*JSON/);
+    assert.match(parts.relationships.error, /纯文本格式.*JSON/);
+    const diagnostic = inspectCombinedResponse(alternateReply);
+    assert.equal(diagnostic.format, 'alternate-text');
+    assert.deepEqual(diagnostic.alternateSectionCounts, { 角色档案: 2, 时间线增量: 1, 关系增量: 1 });
+    assert.ok(!JSON.stringify(diagnostic).includes('周韵涵'));
+});
 test('combined response requires all three sections, including explicit empty deltas', () => {
     const result = parseCombinedResponse(valid);
     assert.deepEqual(result.timeline.时间线, []);

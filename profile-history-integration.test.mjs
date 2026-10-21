@@ -423,6 +423,33 @@ test('card archives and enabled references can be read without an existing chat 
     assert.ok((await h.lorebook.getCardArchiveEntries('主世界书')).some(entry => entry.uid === 1));
 });
 
+test('unified generation ignores conflicting standalone prompts and saves through one request', supported, async () => {
+    const h = await harness();
+    Object.assign(h.settings, { breakPrompt: 'CONFLICT_BREAK', incrementalPrompt: 'CONFLICT_PROFILE', timelineIncrementalPrompt: 'CONFLICT_TIMELINE' });
+    await h.core.updateRange(h.settings, 0, 0, { silent: true });
+    assert.equal(h.requests.length, 1);
+    assert.ok(!h.requests[0].systemPrompt.includes('CONFLICT_'));
+    assert.match(h.requests[0].systemPrompt, /\[角色已知信息\.0\]/);
+    assert.match(h.data().entries[1].content, /取得关键证据/);
+    assert.match(h.data().entries[1].content, /决定停止合作/);
+    const single = await harness();
+    single.settings.incrementalPrompt = 'KEEP_SINGLE_MODULE_CUSTOM';
+    await single.core.updateRange(single.settings, 0, 0, { silent: true, modules: ['profiles'] });
+    assert.ok(single.requests[0].systemPrompt.includes('KEEP_SINGLE_MODULE_CUSTOM'));
+});
+
+test('equals-heading reply never saves a freeform profile or marks any module completed', supported, async () => {
+    const h = await harness();
+    const original = structuredClone(h.data().entries[1]);
+    h.reply('===角色档案===\n姓名：角色甲\n好感度：35\n===角色档案结束===\n===时间线增量===\n任务完成\n===时间线增量结束===\n===关系增量===\n甲—乙：好感35\n===关系增量结束===');
+    await assert.rejects(h.core.updateRange(h.settings, 0, 0, { silent: true }), /自由人物卡/);
+    assert.equal(h.requests.length, 1);
+    assert.deepEqual(h.data().entries[1], original);
+    for (const entry of Object.values(h.data().entries)) assert.ok(!['CWB:故事时间线', 'CWB:角色关系汇总'].some(marker => entry.key.includes(marker)));
+    const progress = await h.lorebook.getModuleProgress();
+    for (const module of ['profiles', 'timeline', 'relationships']) assert.equal(JSON.stringify(progress[module].completed), '[]');
+});
+
 test('reply-format failures record structural evidence and never confirm missing modules', supported, async () => {
     const h = await harness();
     const privateReply = 'PRIVATE_UNSTRUCTURED_MODEL_REPLY';
