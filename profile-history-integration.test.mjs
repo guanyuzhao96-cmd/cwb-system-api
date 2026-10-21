@@ -26,12 +26,12 @@ async function harness(events = [oldEvent]) {
         characterId: 0, name1: '主角', name2: '测试角色卡',
         characters: [{ name: '测试角色卡', avatar: 'card.png', data: { extensions: { world: '主世界书' } } }],
         chat: [{ name: '叙述者', mes: '她终于公开了证据。' }] };
-    let duringAI = () => {}, nextResponse = response(profile([newEvent]));
+    let duringAI = () => {}, nextResponse = response(profile([newEvent])), readFailures = 0, saveFailure = false;
     const sandbox = vm.createContext({ console, structuredClone, AbortController, setTimeout, clearTimeout,
         window: { toastr: { warning() {}, error() {}, success() {}, info() {} } },
         document: { getElementById: () => null },
         $: () => ({ text() {}, prop() {} }),
-        fetch: async () => ({ ok: true, json: async () => structuredClone(disk) }),
+        fetch: async () => { if (readFailures > 0) { readFailures--; throw Error('Load failed'); } return { ok: true, json: async () => structuredClone(disk) }; },
     });
     const mocks = {
         '/scripts/tokenizers.js': { getTokenCountAsync: async text => text.length },
@@ -39,7 +39,7 @@ async function harness(events = [oldEvent]) {
         '/scripts/extensions.js': { getContext: () => contextData, extension_settings: {} },
         '/scripts/world-info.js': { world_names: ['主世界书'], selected_world_info: [], world_info: {},
             loadWorldInfo: async () => structuredClone(cache),
-            saveWorldInfo: async (_, data) => { disk = structuredClone(data); },
+            saveWorldInfo: async (_, data) => { if (saveFailure) throw Error('Load failed'); disk = structuredClone(data); },
             createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid }; },
         },
     };
@@ -65,10 +65,11 @@ async function harness(events = [oldEvent]) {
         incrementalPrompt: '更新角色档案', fullPrompt: '整理角色档案', responseLength: 8000 };
     return { core: mod.namespace, lorebook: modules.get(resolve(root, 'lorebook.js')).namespace,
         state: modules.get(resolve(root, 'state.js')).namespace.state, settings, contextData, requests,
-        data: () => disk, duringAI: fn => { duringAI = fn; }, reply: content => { nextResponse = content; } };
+        data: () => disk, failReads: count => { readFailures = count; }, failSave: () => { saveFailure = true; },
+        duringAI: fn => { duringAI = fn; }, reply: content => { nextResponse = content; } };
 }
 
-test('format upgrade previews all archive types, preserves originals and is repeatable', supported, async () => {
+test('direct format upgrade previews all archive types, creates no backups and is repeatable', supported, async () => {
     const h = await harness();
     const fixtures = [
         ['CWB:主角档案', '[姓名]:主角\n[剧情.0]:旧剧情\n[自定义]:原信息'],
@@ -91,16 +92,12 @@ test('format upgrade previews all archive types, preserves originals and is repe
     assert.equal(preview.foreignSkipped, 1);
     assert.equal(preview.candidates.length, 10);
     assert.ok(preview.candidates.every(item => !item.error), JSON.stringify(preview.candidates.map(item => item.error)));
-    let backup;
-    const result = await h.lorebook.applyArchiveFormatUpgrade(preview, preview.candidates.map(item => item.id), {
-        beforeWrite: value => { assert.deepEqual(h.data(), original); backup = value; },
-    });
+    const result = await h.lorebook.applyArchiveFormatUpgrade(preview, preview.candidates.map(item => item.id));
     assert.equal(result.converted, 10);
-    assert.equal(backup.entries.length, 10);
     for (const item of preview.candidates) {
         const stored = h.data().entries[item.uid];
         assert.equal(stored.uid, item.uid);
-        assert.deepEqual(stored.cwbFormatUpgradeBackup.entry, original.entries[item.uid]);
+        assert.equal(stored.cwbFormatUpgradeBackup, undefined);
         if (item.marker !== 'CWB:世界书目录') assert.ok(stored.key.includes(owner));
         assert.ok(!stored.key.includes('old-chat'));
     }
@@ -117,15 +114,27 @@ test('format upgrade refuses stale previews and card switches before writing', s
     const preview = await h.lorebook.previewArchiveFormatUpgrade(h.settings);
     h.data().entries[1].content += '\n[备注]:预览后的编辑';
     const edited = structuredClone(h.data());
-    let backedUp = false;
-    await assert.rejects(h.lorebook.applyArchiveFormatUpgrade(preview, [preview.candidates[0].id], {
-        beforeWrite: () => { backedUp = true; },
-    }), /发生变化/);
-    assert.equal(backedUp, false);
+    await assert.rejects(h.lorebook.applyArchiveFormatUpgrade(preview, [preview.candidates[0].id]), /发生变化/);
     assert.deepEqual(h.data(), edited);
     h.contextData.characters[0].avatar = 'other.png';
     await assert.rejects(h.lorebook.applyArchiveFormatUpgrade(preview, [preview.candidates[0].id]), /角色卡/);
     assert.deepEqual(h.data(), edited);
+});
+
+test('direct upgrade retries transient reads and reports persistent read or save failures', supported, async () => {
+    const h = await harness();
+    let preview = await h.lorebook.previewArchiveFormatUpgrade(h.settings);
+    h.failReads(1);
+    assert.equal((await h.lorebook.applyArchiveFormatUpgrade(preview, [preview.candidates[0].id])).converted, 1);
+    const other = await harness();
+    preview = await other.lorebook.previewArchiveFormatUpgrade(other.settings);
+    const original = structuredClone(other.data());
+    other.failReads(2);
+    await assert.rejects(other.lorebook.applyArchiveFormatUpgrade(preview, [preview.candidates[0].id]), /主世界书.*升级前复核失败.*Load failed.*已核验 0 条/);
+    assert.deepEqual(other.data(), original);
+    other.failSave();
+    await assert.rejects(other.lorebook.applyArchiveFormatUpgrade(preview, [preview.candidates[0].id]), /主世界书.*保存请求失败.*保存结果未确认/);
+    assert.deepEqual(other.data(), original);
 });
 
 test('compaction writes only selected profiles and reports verified token totals', supported, async () => {

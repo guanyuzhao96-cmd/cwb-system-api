@@ -17,7 +17,6 @@ import { notify, parseCustomFormat, sanitizeName } from './utils.js';
 import { directoryContent, duplicateLines, findRoutedBook, namesFromDirectory, namesFromRoleEntries, planDirectorySources } from './directory-utils.mjs';
 import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges } from './update-tracker.mjs';
 import { ARCHIVE_FORMAT_VERSION, ARCHIVE_UPGRADE_TYPES, upgradeArchiveContent } from './archive-upgrade.mjs';
-import { PLUGIN_VERSION } from './version.mjs';
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
 const isEnabled = entry => entry?.enabled !== false && entry?.disable !== true;
@@ -1744,8 +1743,8 @@ export async function previewArchiveFormatUpgrade(settings, onProgress = () => {
     return { cardKey, version: ARCHIVE_FORMAT_VERSION, candidates, booksScanned: books.length, foreignSkipped };
 }
 
-/** Upgrade selected entries, checking snapshots and verifying backups on the server. */
-export async function applyArchiveFormatUpgrade(preview, selectedIds, { onProgress = () => {}, beforeWrite = () => {} } = {}) {
+/** Upgrade selected entries directly, checking snapshots and server receipts. */
+export async function applyArchiveFormatUpgrade(preview, selectedIds, { onProgress = () => {} } = {}) {
     if (!preview || preview.cardKey !== getCardArchiveKey() || preview.version !== ARCHIVE_FORMAT_VERSION) throw Error('角色卡或升级版本已变化，请重新扫描');
     const ids = new Set(selectedIds ?? []);
     const selected = preview.candidates.filter(item => ids.has(item.id));
@@ -1758,32 +1757,36 @@ export async function applyArchiveFormatUpgrade(preview, selectedIds, { onProgre
             if (!original || JSON.stringify(original) !== JSON.stringify(item.original)) throw Error(`《${item.bookName}》UID ${item.uid} 在预览后发生变化，请重新扫描`);
         }
     };
-    for (const [bookName, items] of groups) verifyOriginals(await readWorldbookFromServer(bookName), items);
-    if (preview.cardKey !== getCardArchiveKey()) throw Error('复核期间角色卡已切换，尚未升级任何条目');
-    const backup = { type: 'CWB资料格式升级备份', pluginVersion: PLUGIN_VERSION, formatVersion: ARCHIVE_FORMAT_VERSION,
-        createdAt: new Date().toISOString(), cardKey: preview.cardKey,
-        entries: selected.map(item => ({ bookName: item.bookName, entry: structuredClone(item.original) })) };
-    await beforeWrite(backup);
     let converted = 0;
+    const read = async (bookName, phase) => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try { return await readWorldbookFromServer(bookName); }
+            catch (error) {
+                if (attempt === 1) throw Error(`《${bookName}》${phase}失败：${error.message}；已核验 ${converted} 条`);
+            }
+        }
+    };
+    for (const [bookName, items] of groups) verifyOriginals(await read(bookName, '升级前复核'), items);
+    if (preview.cardKey !== getCardArchiveKey()) throw Error('复核期间角色卡已切换，尚未升级任何条目');
     const byType = {};
     for (const [bookName, items] of groups) {
         if (preview.cardKey !== getCardArchiveKey()) throw Error(`角色卡已切换，已停止；本次已核验 ${converted} 条`);
-        const data = await readWorldbookFromServer(bookName);
+        const data = await read(bookName, '写入前读取');
         verifyOriginals(data, items);
         if (preview.cardKey !== getCardArchiveKey()) throw Error(`读取期间角色卡已切换，已停止；本次已核验 ${converted} 条`);
         const expected = [];
         for (const item of items) {
             const key = Object.keys(data.entries).find(key => Number(data.entries[key].uid) === item.uid);
             const next = structuredClone(item.next);
-            next.cwbFormatUpgradeBackup ??= { createdAt: backup.createdAt, pluginVersion: PLUGIN_VERSION, entry: structuredClone(item.original) };
             data.entries[key] = next;
             expected.push({ item, next });
         }
-        await saveWorldInfo(bookName, data, true);
-        const persisted = await readWorldbookFromServer(bookName);
+        try { await saveWorldInfo(bookName, data, true); }
+        catch (error) { throw Error(`《${bookName}》保存请求失败：${error.message}；已核验 ${converted} 条，本书保存结果未确认，请重新扫描`); }
+        const persisted = await read(bookName, '保存后回读');
         for (const { item, next } of expected) {
             const stored = Object.values(persisted.entries).find(entry => Number(entry.uid) === item.uid);
-            if (!stored || JSON.stringify(stored) !== JSON.stringify(next)) throw Error(`《${bookName}》UID ${item.uid} 升级回读不一致；已核验 ${converted} 条，请保留备份并重新扫描`);
+            if (!stored || JSON.stringify(stored) !== JSON.stringify(next)) throw Error(`《${bookName}》UID ${item.uid} 升级回读不一致；已核验 ${converted} 条，请重新扫描`);
             converted++;
             byType[item.label] = (byType[item.label] ?? 0) + 1;
             onProgress({ phase: 'write', current: converted, total: selected.length, bookName });
