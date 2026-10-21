@@ -59,6 +59,14 @@ test('advisory completion metadata cannot veto otherwise valid module data', () 
     assert.ok(parseCombinedParts(JSON.stringify({ ...doc, 完成状态: '已完成', 角色档案: [{ ...structuredProfile, 好感度: 35 }] })).profiles.error);
 });
 
+test('equivalent profile fields normalize, while conflicting aliases and free fields remain invalid', () => {
+    const profile = { ...structuredProfile, 角色名: '角色甲', 已知信息: structuredProfile.角色已知信息 };
+    delete profile.姓名; delete profile.角色已知信息;
+    assert.match(structuredProfileToBlock(profile), /\[姓名\]:角色甲/);
+    assert.throws(() => structuredProfileToBlock({ ...profile, 姓名: '其他人' }), /冲突/);
+    assert.throws(() => structuredProfileToBlock({ ...structuredProfile, 好感度: 35 }), /好感度/);
+});
+
 test('explicitly incomplete or failed updates remain blocked even when their JSON is parseable', () => {
     const doc = { 角色档案: [structuredProfile], 时间线: [], 关系更新: [], 删除关系: [] };
     for (const status of ['输出超长', '未完成', '不完整', '部分完成', '失败', '已截断', 'incomplete', 'partial', 'failed', 'truncated', 'max_tokens', false, { 时间线: '未完成' }]) {

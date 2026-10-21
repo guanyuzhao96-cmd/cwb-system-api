@@ -1,9 +1,9 @@
-const DATE_PATTERN = /^(\d{4}-\d{1,2}-\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/;
+const DATE_PATTERN = /^(\d{4}(?:[-./]\d{1,2}[-./]\d{1,2}|年\d{1,2}月\d{1,2}日))(?:[ T].*)?$/;
 
 function recordKey(record) { return `${record.date}｜${record.event}`; }
 
 function normalizeDate(date) {
-    const match = String(date).match(/^(\d{4})[-.](\d{1,2})[-.](\d{1,2})$/);
+    const match = String(date).match(/^(\d{4})(?:[-./]|年)(\d{1,2})(?:[-./]|月)(\d{1,2})日?$/);
     return match ? `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}` : date;
 }
 
@@ -19,13 +19,14 @@ export function parseTimelineRecords(contents) {
 
     for (const raw of lines) {
         let line = String(raw).replace(/^\s*\[时间线(?:\.\d+)?\]\s*[:：]\s*/, '').trim().replace(/\s*[|]\s*/g, '｜');
-        if (!line || /^【(?:时间线楼层|故事时间线|主线时间线)/.test(line)
+        if (!line || /^【(?:时间线(?:增量|楼层)?|故事时间线|主线时间线)(?:】|[:：])/.test(line)
+            || /^===\s*(?:时间线增量|时间线增量结束)\s*===$/.test(line)
             || line === '（本范围已检查，无新增重要事件）' || line === '（暂无重要事件）') continue;
 
         const grouped = line.match(/^「(\d{4}\.\d{1,2}\.\d{1,2}|日期未知)」\s*(?:\d+[.、]\s*)?(.*)$/);
         if (grouped) {
             currentDate = normalizeDate(grouped[1]);
-            if (grouped[2]) add(currentDate, grouped[2], false);
+            if (grouped[2] && !/^【(?:时间线增量|时间线|主线时间线)】$/.test(grouped[2])) add(currentDate, grouped[2], false);
             continue;
         }
         const continuation = line.match(/^(?:↳|└|├|[-*•]|\d+[.、])\s*(.+)$/);

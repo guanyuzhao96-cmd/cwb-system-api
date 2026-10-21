@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,11 +14,12 @@ const oldEvent = '2025-09-01｜甲发现身份被隐瞒，决定停止合作';
 const newEvent = '2025-09-03｜甲取得关键证据，向同伴揭露真相';
 const response = content => `${content}\n[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--关系增量开始--]\n{"关系更新":[],"删除关系":[]}\n[--关系增量结束--]`;
 
-async function harness(events = [oldEvent]) {
+async function harness(events = [oldEvent], { storageFile = null } = {}) {
     let disk = { entries: {
         1: { uid: 1, key: ['CWB:自动档案', owner, '角色甲'], comment: '动态-角色甲', disable: false, content: profile(events) },
         9: { uid: 9, key: ['原始设定'], content: '手工资料保留' },
     } };
+    if (storageFile) writeFileSync(storageFile, JSON.stringify(disk));
     // Deliberately stale and never updated on writes. Any cache-based whole-book
     // write would erase the latest profile and the manual entry on the server.
     const cache = { entries: {} };
@@ -31,7 +33,7 @@ async function harness(events = [oldEvent]) {
         window: { toastr: { warning() {}, error() {}, success() {}, info() {} } },
         document: { getElementById: () => null },
         $: () => ({ text() {}, prop() {} }),
-        fetch: async () => { if (readFailures > 0) { readFailures--; throw Error('Load failed'); } return { ok: true, json: async () => structuredClone(disk) }; },
+        fetch: async () => { if (readFailures > 0) { readFailures--; throw Error('Load failed'); } return { ok: true, json: async () => storageFile ? JSON.parse(readFileSync(storageFile, 'utf8')) : structuredClone(disk) }; },
     });
     const mocks = {
         '/scripts/tokenizers.js': { getTokenCountAsync: async text => text.length },
@@ -39,7 +41,7 @@ async function harness(events = [oldEvent]) {
         '/scripts/extensions.js': { getContext: () => contextData, extension_settings: {} },
         '/scripts/world-info.js': { world_names: ['主世界书'], selected_world_info: [], world_info: {},
             loadWorldInfo: async () => structuredClone(cache),
-            saveWorldInfo: async (_, data) => { if (saveFailure) throw Error('Load failed'); disk = structuredClone(data); },
+            saveWorldInfo: async (_, data) => { if (saveFailure) throw Error('Load failed'); disk = structuredClone(data); if (storageFile) writeFileSync(storageFile, JSON.stringify(disk)); },
             createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid }; },
         },
     };
@@ -107,6 +109,34 @@ test('direct format upgrade previews all archive types, creates no backups and i
     assert.equal(h.requests.length, 0);
     const again = await h.lorebook.previewArchiveFormatUpgrade(h.settings);
     assert.ok(again.candidates.every(item => !item.changed && !item.error));
+});
+
+test('assistant-generated prompt response writes two profiles, three dated events and two relations to a local worldbook file', supported, async t => {
+    const sample = JSON.parse(readFileSync(resolve(root, 'fixtures/assistant-generated-update.json'), 'utf8'));
+    const storageFile = resolve(mkdtempSync(resolve(tmpdir(), 'cwb-generation-check-')), 'worldbook.json');
+    const h = await harness([], { storageFile });
+    h.contextData.chat = sample.messages.map(mes => ({ name: '叙述者', mes }));
+    h.reply(JSON.stringify(sample.response));
+    await h.core.updateRange(h.settings, 0, sample.messages.length - 1, { silent: true });
+    const stored = JSON.parse(readFileSync(storageFile, 'utf8'));
+    const entries = Object.values(stored.entries);
+    const names = new Set(['动态-周韵涵', '动态-秦雅楠']);
+    const profiles = entries.filter(entry => names.has(entry.comment));
+    assert.equal(profiles.length, 2);
+    const timeline = entries.find(entry => entry.key.includes('CWB:故事时间线'));
+    assert.ok(timeline.content.includes('「2025.9.1」'));
+    assert.ok(timeline.content.includes('「2025.9.2」'));
+    assert.ok(!timeline.content.includes('日期未知'), timeline.content);
+    assert.ok(!timeline.content.includes('【时间线增量】'), timeline.content);
+    const { parseTimelineRecords } = await import('./timeline-utils.mjs');
+    assert.equal(parseTimelineRecords(timeline.content).length, 3);
+    const relation = entries.find(entry => entry.key.includes('CWB:角色关系汇总'));
+    assert.match(relation.content, /周韵涵 ↔ 赵冠宇：合作调查/);
+    assert.match(relation.content, /周韵涵 ↔ 秦雅楠：协作核查/);
+    for (const entry of [...profiles, timeline, relation]) assert.ok(!/系统点|好感度|任务触发/.test(entry.content));
+    assert.equal(stored.entries[9].content, '手工资料保留');
+    assert.equal(h.requests.length, 1);
+    t.diagnostic(`本地写入文件：${storageFile}`);
 });
 
 test('format upgrade refuses stale previews and card switches before writing', supported, async () => {

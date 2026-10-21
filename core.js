@@ -360,7 +360,7 @@ function parseTimelineResponse(response) {
     const items = Array.isArray(parsed) ? parsed : parsed?.时间线 ?? parsed?.events;
     if (Array.isArray(items)) return consolidateTimelineEntries(items.map(item => {
         if (typeof item === 'string') return item.trim();
-        const date = String(item?.日期 ?? item?.date ?? '日期未知').trim();
+        const date = String(item?.日期 ?? item?.date ?? item?.时间 ?? item?.time ?? '日期未知').trim();
         const event = String(item?.事件 ?? item?.event ?? '').trim();
         return event ? `${date}｜${event}` : '';
     }).filter(Boolean));

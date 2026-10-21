@@ -275,6 +275,17 @@ test('unified no-profile update still saves timeline and relationships with exac
 });
 
 
+test('timeline headings never become events and explicit date styles survive normalization', () => {
+    const records = parseTimelineRecords('【时间线增量】\n2025年9月1日 08:00｜周韵涵提交证据\n2025/9/2 10:00｜秦雅楠启动复核');
+    assert.equal(records.length, 2);
+    assert.deepEqual(records.map(item => item.date), ['2025-09-01', '2025-09-02']);
+    const stored = formatTimelineRecords(records);
+    assert.match(stored, /「2025.9.1」/);
+    assert.match(stored, /「2025.9.2」/);
+    assert.ok(!stored.includes('日期未知'));
+    assert.equal(parseTimelineRecords('【主线时间线】\n「日期未知」 1.【时间线增量】\n2.实际旧事件').length, 1);
+});
+
 test('v0.9.8 confirmed 100-floor progress migrates, arbitrary prose markers do not', async () => {
     const h = harness({
         0: { uid: 0, key: ['CWB:更新记录', 'chat', 'CWB:总结楼层:0-99'], content: '三个模块均成功，AI调用1次' },
