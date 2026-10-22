@@ -133,7 +133,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
     if (!targets.length) throw Error('未选择更新模块。');
     const chatId = state.chatId;
     state.updating = true;
-    const names = [], failures = [], successes = [];
+    const names = [], failures = [], successes = [], moduleErrors = [];
     try {
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
         const selected = state.messages.slice(start, end + 1);
@@ -227,6 +227,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                 assertCurrentChat(chatId);
                 successes.push(MODULE_LABELS[module]);
             } catch (error) {
+                moduleErrors.push(error);
                 failures.push(`${MODULE_LABELS[module]}：${error.message}`);
                 try { if (currentChatId() === chatId && state.chatId === chatId) await recordModuleResult(module, start, end, error.message); }
                 catch (progressError) { failures.push(`进度未确认：${progressError.message}`); }
@@ -240,9 +241,11 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         setStatus(message);
         if (failures.length) {
             const failedModules = targets.filter(module => failures.some(failure => failure.startsWith(`${MODULE_LABELS[module]}：`)));
-            const reportError = new Error(message);
+            const reportError = new Error(message, { cause: moduleErrors[0] });
+            if (moduleErrors[0]?.stack) reportError.stack += `\nCaused by: ${moduleErrors[0].stack}`;
             reportError.cwbDiagnostics = {
-                stage: failures.some(failure => failure.includes('未出现在可用目录')) ? 'profile_worldbook_routing' : 'module_save',
+                ...moduleErrors[0]?.cwbDiagnostics,
+                stage: moduleErrors[0]?.cwbDiagnostics?.stage || (failures.some(failure => failure.includes('未出现在可用目录')) ? 'profile_worldbook_routing' : 'module_save'),
                 modules: failedModules.map(module => MODULE_LABELS[module]),
                 startFloor: start + 1,
                 endFloor: end + 1,

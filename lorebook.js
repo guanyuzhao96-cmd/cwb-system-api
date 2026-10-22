@@ -14,7 +14,7 @@ import {
 } from '/scripts/world-info.js';
 import { state } from './state.js';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
-import { directoryContent, duplicateLines, findRoutedBook, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
+import { directoryContent, duplicateLines, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
 import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges } from './update-tracker.mjs';
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
@@ -49,7 +49,7 @@ export function getTargetWorldbook(settings) {
 }
 
 let archiveLocation = null;
-export function resetArchiveLocation() { archiveLocation = null; }
+export function resetArchiveLocation() { archiveLocation = null; state.routeCache = null; }
 
 // Candidate discovery is read-only. All central archives use this same result.
 export async function getArchiveWorldbook(settings = extension_settings?.cwb_system_api ?? {}) {
@@ -84,8 +84,7 @@ export async function getCardArchiveEntries(settings = extension_settings?.cwb_s
     const owner = getCardArchiveKey();
     const master = await getArchiveWorldbook(settings);
     const data = await readWorldbookFromServer(master);
-    const books = [...new Set([master, ...referencedProfileBooks(data, getCardArchiveKey()),
-        ...(settings.multiWorldbookRouting ? listWorldbooks() : [])])];
+    const books = [...new Set([master, ...referencedProfileBooks(data, getCardArchiveKey())])];
     const entries = [];
     for (const bookName of books) {
         const rows = bookName === master ? Object.values(data.entries).map(entry => ({ ...entry, keys: getKeys(entry), enabled: isEnabled(entry) })) : await getEntries(bookName);
@@ -174,7 +173,7 @@ export async function generateWorldbookDirectories(onProgress = () => {}) {
 export async function discoverWorldbookRoutes(settings = {}) {
     const primary = getPrimaryWorldbook();
     const result = {};
-    for (const bookName of listWorldbooks()) {
+    for (const bookName of await archiveRelatedBooks(settings, true)) {
         const entries = await getEntries(bookName);
         if (!entries.some(entry => getKeys(entry).includes('CWB:世界书目录'))) continue;
         result[bookName] = { names: routeNames(entries), primary: bookName === primary };
@@ -184,9 +183,25 @@ export async function discoverWorldbookRoutes(settings = {}) {
 }
 
 async function routeWorldbook(settings, characterName) {
-    if (settings.worldbookTarget === 'custom' || !settings.multiWorldbookRouting) return getArchiveWorldbook(settings);
-    const routes = state.routeCache || await discoverWorldbookRoutes(settings);
-    return findRoutedBook(routes, characterName);
+    const master = await getArchiveWorldbook(settings);
+    if (settings.worldbookTarget === 'custom' || !settings.multiWorldbookRouting) return master;
+    // Dynamic archives belong to this card, independently of static NPC catalogs.
+    // Keep existing indexed volumes in place; new profiles live in the master.
+    const { entries } = await getCardArchiveEntries(settings);
+    const matches = [...new Set(entries.filter(entry => getKeys(entry).includes('CWB:自动档案')
+        && getKeys(entry).includes(sanitizeName(characterName))).map(entry => entry.bookName))];
+    if (matches.length > 1) throw Error(`角色 ${characterName} 的已有档案分散在多个分卷，停止写入以免覆盖。`);
+    return matches[0] || master;
+}
+
+// Installed books are not dependencies of the selected character's archive.
+// Existing profile volumes come from its own index; new routing candidates must
+// be explicitly active in the host. Never cache routes across card switches.
+async function archiveRelatedBooks(settings, includeActive = false) {
+    const master = await getArchiveWorldbook(settings);
+    const data = await readWorldbookFromServer(master);
+    return [...new Set([master, ...referencedProfileBooks(data),
+        ...(includeActive && settings.worldbookTarget !== 'custom' ? getActiveWorldbookNames() : [])])];
 }
 
 export async function routeSummary(settings = {}) {
@@ -544,15 +559,15 @@ export async function updateRoster(settings, processedNames, startFloor, endFloo
     }
     if (!grouped.size) throw new Error('无法确定写入世界书。');
     for (const [bookName, namesForBook] of grouped) await updateRosterForBook(bookName, namesForBook, startFloor, endFloor);
-    if (settings.multiWorldbookRouting) await updateMasterDirectory(settings);
+    if (settings.multiWorldbookRouting) await updateMasterDirectory(settings, [...grouped.keys()]);
 }
 
 /** Create one compact index in the current character's primary worldbook. */
-export async function updateMasterDirectory(settings) {
+export async function updateMasterDirectory(settings, updatedBooks = []) {
     const masterBook = await getArchiveWorldbook(settings);
     if (!masterBook) return;
     const chatId = getCardArchiveKey();
-    const books = settings.multiWorldbookRouting && settings.worldbookTarget !== 'custom' ? listWorldbooks() : [masterBook];
+    const books = [...new Set([...(await archiveRelatedBooks(settings)), ...updatedBooks])];
     const grouped = new Map();
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
@@ -638,7 +653,7 @@ export async function getTriggeredOldProfiles(settings, messages) {
     if (!settings.incremental) return [];
     const chatId = getCardArchiveKey();
     const haystack = messages.map(message => `${message.name ?? ''}\n${message.message ?? ''}`).join('\n').toLowerCase();
-    const books = settings.multiWorldbookRouting && settings.worldbookTarget !== 'custom' ? listWorldbooks() : [await getArchiveWorldbook(settings)];
+    const books = await archiveRelatedBooks(settings);
     const profiles = [];
     const masterBook = await getArchiveWorldbook(settings);
     if (masterBook) {
@@ -661,7 +676,7 @@ export async function getTriggeredOldProfiles(settings, messages) {
 
 export async function getLastUpdatedFloor(settings) {
     const chatId = getCardArchiveKey();
-    const books = settings.multiWorldbookRouting && settings.worldbookTarget !== 'custom' ? listWorldbooks() : [await getArchiveWorldbook(settings)];
+    const books = await archiveRelatedBooks(settings);
     let latest = 0;
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
@@ -679,7 +694,7 @@ export async function getLastUpdatedFloor(settings) {
 export async function manageChatEntries(settings) {
     const customTarget = settings.worldbookTarget === 'custom';
     const master = await getArchiveWorldbook(settings);
-    const books = [...new Set([master, ...(settings.multiWorldbookRouting ? listWorldbooks() : [])])];
+    const books = await archiveRelatedBooks(settings);
     getCardArchiveKey();
     const chatId = getCardArchiveKey();
     for (const bookName of books.filter(Boolean)) {
@@ -952,15 +967,16 @@ async function readWorldbookFromServer(bookName, migrate = true) {
     for (let attempt = 1; attempt <= 2; attempt++) {
         if (owner !== getCardArchiveKey()) throw Error('读取期间角色卡已切换，停止操作。');
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
-        const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
+        const timeoutMs = attempt === 1 ? 30000 : 60000;
+        const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
         try {
             response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache', ...(controller ? { signal: controller.signal } : {}) });
             if (!response.ok) throw Error(`HTTP ${response.status}`);
             data = await response.json();
             break;
         } catch (error) {
-            if (attempt < 2 && error.name === 'TypeError' && !controller?.signal.aborted) continue;
-            const reason = controller?.signal.aborted ? new Error('读取超过30秒') : error;
+            if (attempt < 2 && (error.name === 'TypeError' || controller?.signal.aborted)) continue;
+            const reason = controller?.signal.aborted ? new Error(`读取超过${timeoutMs / 1000}秒（已尝试${attempt}次）`) : error;
             throw worldbookError(reason, bookName, '读取', '/api/worldinfo/get', attempt, response?.status);
         } finally { if (timeout !== null) clearTimeout(timeout); }
     }
@@ -1040,7 +1056,7 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
 
 export async function cleanupProfileFields(settings) {
     const chatId = getCardArchiveKey();
-    const books = settings.multiWorldbookRouting ? listWorldbooks() : [await getArchiveWorldbook(settings)];
+    const books = await archiveRelatedBooks(settings);
     const primary = await getArchiveWorldbook(settings);
     const targets = [...new Set([...books, primary].filter(Boolean))];
     let changed = 0, skipped = 0;

@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url';
 
 test('settings button -> real API wrapper -> incremental prompt -> server readback, three rounds', { skip: !vm.SourceTextModule && 'Requires --experimental-vm-modules' }, async () => {
     const nodes = new Map(), requests = [], modules = new Map(), worldbookReads = [];
-    let invalidCombined = false, failApiRequest = false;
+    let invalidCombined = false, failApiRequest = false, suppliedReply = null;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized, booksByName = null;
-    let readFailures = 0, throwOnWrite = false, blockedReadBook = null;
+    let readFailures = 0, readTimeouts = 0, throwOnWrite = false, blockedReadBook = null;
     const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ avatar: 'Test.png', data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
@@ -32,13 +32,18 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const documentNodes = new Map();
     const document = { getElementById: id => { if (!documentNodes.has(id)) documentNodes.set(id, { open: false, scrollIntoView() { this.scrolled = true; } }); return documentNodes.get(id); } };
     let lastConfirmation = '';
-    const context = vm.createContext({ crypto: webcrypto, TextEncoder, document, console, structuredClone, setTimeout, clearTimeout, $, window: {
+    const context = vm.createContext({ crypto: webcrypto, TextEncoder, document, console, structuredClone, AbortController,
+        setTimeout: (fn, ms) => setTimeout(fn, ms === 30000 || ms === 60000 ? 10 : ms), clearTimeout, $, window: {
         jQuery: f => initialized = f,
         confirm: message => { lastConfirmation = message; return true; },
     },
         fetch: async (_url, options = {}) => {
             const name = JSON.parse(options.body ?? '{}').name;
             worldbookReads.push(name);
+            if (readTimeouts > 0) {
+                readTimeouts--;
+                return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true }));
+            }
             if (name === blockedReadBook) throw new TypeError('Load failed');
             if (readFailures > 0) { readFailures--; throw new TypeError('Load failed'); }
             return { ok: true, json: async () => structuredClone(booksByName ? booksByName.get(name) : disk) };
@@ -49,6 +54,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         generateRaw: async options => {
             requests.push(options);
             if (failApiRequest) throw new TypeError('Load failed');
+            if (suppliedReply !== null) return suppliedReply;
             if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
                 if (invalidCombined) return '[--档案无变化--]';
                 relationRound++;
@@ -390,6 +396,33 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     await progressStore.getModuleProgress();
     blockedReadBook = null;
     assert.equal(worldbookReads.length - readsBeforeRetry, 2, 'one transient read failure is retried once');
+    readTimeouts = 1;
+    const beforeTimeoutRetry = worldbookReads.length;
+    await progressStore.getModuleProgress();
+    assert.equal(worldbookReads.length - beforeTimeoutRetry, 2, 'timed-out read retries without repeating AI');
+    readTimeouts = 2;
+    await assert.rejects(progressStore.getModuleProgress(), error => error.cwbDiagnostics.attempts === 2 && /超过60秒/.test(error.message));
+    // A stale installed-book name must never become a dependency of this card.
+    blockedReadBook = '空书';
+    const relatedReadStart = worldbookReads.length;
+    const scopedSettings = { worldbookTarget: 'custom', customWorldbook: '已有书', multiWorldbookRouting: true, incremental: true };
+    await progressStore.getCardArchiveEntries(scopedSettings);
+    await progressStore.getTriggeredOldProfiles(scopedSettings, [{ message: '角色甲' }]);
+    await progressStore.discoverWorldbookRoutes(scopedSettings);
+    await progressStore.updateMasterDirectory(scopedSettings);
+    await progressStore.manageChatEntries(scopedSettings);
+    assert.ok(!worldbookReads.slice(relatedReadStart).includes('空书'), 'unrelated unreadable installed book is never fetched');
+    blockedReadBook = null;
+    // Primary mode also writes new profiles without static NPC directories.
+    contextData.characters[2].data.extensions.world = '已有书';
+    progressStore.resetArchiveLocation();
+    blockedReadBook = '空书';
+    const primarySettings = { ...scopedSettings, worldbookTarget: 'primary' };
+    await progressStore.saveCharacterDescription(primarySettings, '新角色', '[姓名]:新角色\n[剧情.0]:2025-09-01｜关键剧情', 0, 24);
+    await progressStore.verifyProfileContent(primarySettings, '新角色', '[姓名]:新角色\n[剧情.0]:2025-09-01｜关键剧情');
+    await progressStore.updateRoster(primarySettings, ['新角色'], 0, 24);
+    assert.ok(Object.values(booksByName.get('已有书').entries).some(entry => entry.key?.includes('新角色')));
+    blockedReadBook = null;
     readFailures = 2;
     await assert.rejects(progressStore.getModuleProgress(), error => {
         const report = modules.get(resolve(root, 'error-report.js')).namespace.createErrorReport(error, error.cwbDiagnostics);
@@ -404,6 +437,38 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     throwOnWrite = false;
     assert.equal(JSON.stringify(booksByName.get('已有书')), beforeFailedWrite, 'failed persistence does not advance progress');
     assert.equal(requests.length, beforeReadRequests, 'network handling never repeats AI generation');
+
+    // Full nine-profile batch through the actual update/save/readback pipeline.
+    // Optional private fixture stays outside the repository and release tree.
+    suppliedReply = process.env.CWB_PRIVATE_RESPONSE_FIXTURE
+        ? readFileSync(process.env.CWB_PRIVATE_RESPONSE_FIXTURE, 'utf8')
+        : ['林清', '许宁', '沈雨', '陆云', '江平', '苏兰', '方明', '陈青', '主角'].map((name, i) =>
+            `[--角色档案开始--]\n[档案类型]:${i === 8 ? '主角' : '角色'}\n[姓名]:${name}\n[角色已知信息.0]:已确认的关键事实\n[剧情.0]:2025-09-01｜作出重要决定并改变后续关系\n[--角色档案结束--]`).join('\n')
+            + '\n[--时间线增量开始--]\n{"时间线":[{"日期":"2025-09-01","事件":"重要决定改变后续关系"}]}\n[--时间线增量结束--]'
+            + '\n[--关系增量开始--]\n{"关系更新":[],"删除关系":[]}\n[--关系增量结束--]';
+    const parser = modules.get(resolve(root, 'combined-response.mjs')).namespace;
+    const utils = modules.get(resolve(root, 'utils.js')).namespace;
+    const suppliedParts = parser.parseCombinedParts(suppliedReply);
+    assert.equal(suppliedParts.profiles.value.length, 9);
+    const writesBeforeBatch = requests.length;
+    blockedReadBook = '空书';
+    await modules.get(resolve(root, 'core.js')).namespace.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true });
+    assert.equal(requests.length - writesBeforeBatch, 1);
+    for (const block of suppliedParts.profiles.value) {
+        const name = utils.parseCustomFormat(block).姓名;
+        assert.ok(Object.values(booksByName.get('已有书').entries).some(entry => entry.key?.includes(name) && entry.content.includes('[剧情.0]')), `profile persisted: ${name}`);
+    }
+    const savedBatchProgress = await progressStore.getModuleProgress();
+    for (const module of ['profiles', 'timeline', 'relationships']) assert.equal(savedBatchProgress[module].completed[0][1], 24);
+    throwOnWrite = true;
+    await assert.rejects(modules.get(resolve(root, 'core.js')).namespace.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true, modules: ['profiles'] }), error =>
+        error.cwbDiagnostics.stage === 'Worldbook write'
+        && error.cwbDiagnostics.worldbookName === '已有书'
+        && error.cwbDiagnostics.requestPath === '/api/worldinfo/edit'
+        && error.stack.includes('Caused by:'));
+    throwOnWrite = false;
+    suppliedReply = null;
+    blockedReadBook = null;
 
     contextData.characters[2].data.extensions.world = '';
     booksByName.get('空书').entries[10] = structuredClone(booksByName.get('已有书').entries[10]);
