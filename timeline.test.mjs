@@ -3,7 +3,7 @@ import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-respons
 import { mergeRelationships } from './relationship-utils.mjs';
 import { test } from 'node:test';
 import { webcrypto } from 'node:crypto';
-import { CARD_PREFIX, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress } from './card-archive.mjs';
+import { CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress } from './card-archive.mjs';
 import { parseCustomFormat } from './utils.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -17,7 +17,7 @@ import { acquireOperationLock } from './state.js';
 function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     for (const entry of Object.values(data.entries)) entry.key = entry.key?.map(key => key === 'chat' ? 'CWB:角色卡:Test.png' : key === 'other' ? 'CWB:角色卡:Other.png' : key);
-    const context = vm.createContext({ crypto: webcrypto, TextEncoder, CARD_PREFIX, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress, parseCustomFormat,
+    const context = vm.createContext({ crypto: webcrypto, TextEncoder, CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress, parseCustomFormat,
         MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,

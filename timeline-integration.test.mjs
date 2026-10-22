@@ -284,4 +284,21 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     failWrite = false;
     assert.equal(disk.entries[uid].content, contentBefore, 'failed receipt write does not remove archives');
     assert.equal((await progressStore.getProgressRecoveryCandidates()).length, 0);
+    // Screenshot regression: existing Test2.png timeline is reachable even when
+    // the host retains a groupId. Exercise the actual worldbook reader, no AI.
+    contextData.characters.push({ avatar: 'Test2.png', data: { extensions: { world: '主世界书' } } });
+    contextData.characterId = '2';
+    contextData.groupId = 'existing-group';
+    const screenshotUid = Math.max(...Object.keys(disk.entries).map(Number)) + 1;
+    disk.entries[screenshotUid] = { uid: screenshotUid, key: ['CWB:故事时间线', 'CWB:角色卡:Test2.png', 'CWB:时间线楼层:1-25', '故事时间线'],
+        content: '【主线时间线】\n「日期未知」1.原有故事资料', disable: false, constant: true, selective: false };
+    const beforeReadRequests = requests.length;
+    const screenshotEntries = await progressStore.getTimelineEntries();
+    assert.equal(screenshotEntries.length, 1);
+    assert.equal(screenshotEntries[0].uid, screenshotUid);
+    assert.equal(screenshotEntries[0].content, disk.entries[screenshotUid].content);
+    contextData.groups = [{ id: 'existing-group', members: ['Test2.png'] }];
+    contextData.characterId = undefined;
+    assert.equal((await progressStore.getTimelineEntries())[0].uid, screenshotUid, 'unique group member resolves the same file and primary worldbook');
+    assert.equal(requests.length, beforeReadRequests, 'reading existing archives does not generate AI output');
 });

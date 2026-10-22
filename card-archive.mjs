@@ -3,10 +3,24 @@ export const CARD_PREFIX = 'CWB:角色卡:';
 export const ARCHIVE_MARKERS = ['CWB:自动档案', 'CWB:主角档案', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:角色档案目录', 'CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度', 'Amily2角色总集'];
 const keysOf = entry => entry.key ?? entry.keys ?? [];
 
+export function archiveCharacter(context) {
+    const characters = context?.characters ?? [];
+    const selected = context?.characterId;
+    const character = selected !== null && selected !== undefined && selected !== '' ? characters[selected] : null;
+    // A group flag does not invalidate an explicitly selected character file.
+    if (typeof character?.avatar === 'string' && character.avatar.trim()) return character;
+    const group = (context?.groups ?? []).find(item => String(item.id) === String(context?.groupId));
+    const members = [...new Set(group?.members ?? [])];
+    if (members.length === 1) {
+        const member = characters.find(item => item?.avatar === members[0]);
+        if (typeof member?.avatar === 'string' && member.avatar.trim()) return member;
+    }
+    if (group && members.length > 1) throw Error('当前群聊未指定存档角色卡，无法确定已有资料的归属；请先选中要使用的角色卡。');
+    throw Error('酒馆尚未提供当前角色卡文件（characterId / avatar），请打开角色聊天后刷新进度；未读取或改写其他卡资料。');
+}
+
 export function cardKey(context) {
-    const avatar = context?.characters?.[context.characterId]?.avatar;
-    if (!avatar || context?.groupId) throw Error('请选择单人角色卡；无法确认角色卡文件身份，停止写入。');
-    return CARD_PREFIX + encodeURIComponent(avatar);
+    return CARD_PREFIX + encodeURIComponent(archiveCharacter(context).avatar);
 }
 
 export function owns(entry, owner) {

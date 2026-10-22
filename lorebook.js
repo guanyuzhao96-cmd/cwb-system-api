@@ -1,5 +1,5 @@
 import { parseTimelineRecords, formatTimelineRecords } from './timeline-utils.mjs';
-import { CARD_PREFIX, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress } from './card-archive.mjs';
+import { CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress } from './card-archive.mjs';
 import { sanitizeProfileContent } from './profile-utils.mjs';
 import { applyModuleResult, intersectRanges, mergeModuleProgress, MODULE_LABELS } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
@@ -35,7 +35,7 @@ const GENERATED_ENTRY_TYPES = [
 
 export function getPrimaryWorldbook() {
     const context = getContext();
-    const character = context?.characters?.[context.characterId];
+    const character = archiveCharacter(context);
     return character?.data?.extensions?.world || character?.extensions?.world || null;
 }
 
@@ -65,7 +65,7 @@ function getActiveWorldbookNames() {
     (Array.isArray(selected_world_info) ? selected_world_info : []).forEach(add);
     add(context?.chatMetadata?.world_info);
 
-    const character = context?.characters?.[context.characterId];
+    const character = archiveCharacter(context);
     add(character?.data?.extensions?.world || character?.extensions?.world);
     const avatarKey = String(character?.avatar ?? '').replace(/\.[^/.]+$/, '');
     const extraBooks = world_info?.charLore?.find(item => item.name === avatarKey)?.extraBooks;
@@ -566,7 +566,7 @@ async function updateRosterForBook(bookName, processedNames, startFloor, endFloo
     processedNames.forEach(name => names.add(String(name).trim()));
     const newStart = Math.min(oldStart, startFloor + 1);
     const newEnd = Math.max(oldEnd, endFloor + 1);
-    const characterName = context?.characters?.[context.characterId]?.name ?? context?.name2 ?? '未识别角色卡';
+    const characterName = archiveCharacter(context).name ?? context?.name2 ?? '未识别角色卡';
     const content = `此为当前角色卡【${characterName}】中登场的角色，AI需要根据剧情让以下角色在合适的时机登场：\n\n`
         + [...names].sort().map(name => `[${name}: (详细查看绿灯角色条目)]`).join('\n')
         + `\n\n{{// 本条勿动，【前${newEnd}楼角色世界书已更新完成】否则后续更新无法完成。}}`;
@@ -907,7 +907,8 @@ async function readWorldbookFromServer(bookName, migrate = true) {
     if (migrate) {
         const context = getContext();
         const primary = getPrimaryWorldbook();
-        const shared = (context.characters ?? []).some((character, index) => index !== Number(context.characterId)
+        const currentCharacter = archiveCharacter(context);
+        const shared = (context.characters ?? []).some(character => character?.avatar !== currentCharacter.avatar
             && (character?.data?.extensions?.world || character?.extensions?.world) === primary);
         const primaryData = bookName === primary ? data : primary ? await readWorldbookFromServer(primary) : { entries: {} };
         const legacyOwners = [...new Set([...(shared ? [] : [String(getContext()?.chatId ?? getContext()?.chat_filename ?? '').replace(/ imported/g, '').replace(/\.jsonl?$/i, '')]), ...Object.values(primaryData.entries)

@@ -5,10 +5,14 @@ import { cardKey, migrateOwnership, sourceHashes, receiptProgress } from './card
 const owner = 'CWB:角色卡:Test.png';
 const digest = async text => createHash('sha256').update(text).digest('hex');
 
-test('requires an actual card file, rejects group and display-name-only identity', () => {
+test('requires an actual card file; group flags do not reject an explicitly selected card', () => {
     assert.equal(cardKey({ characterId: 0, characters: [{ avatar: 'Test.png' }] }), owner);
     assert.throws(() => cardKey({ characterId: 0, characters: [{ name: '同名卡' }] }), /角色卡/);
-    assert.throws(() => cardKey({ groupId: '1', characterId: 0, characters: [{ avatar: 'Test.png' }] }), /单人/);
+    assert.equal(cardKey({ groupId: '1', characterId: 0, characters: [{ avatar: 'Test.png' }] }), owner);
+    assert.equal(cardKey({ groupId: '1', characterId: '0', characters: [{ avatar: 'Test2.png' }] }), 'CWB:角色卡:Test2.png');
+    assert.equal(cardKey({ groupId: '1', groups: [{ id: '1', members: ['Test.png'] }], characters: [{ avatar: 'Test.png' }] }), owner);
+    assert.throws(() => cardKey({ characterId: null, characters: [{ avatar: 'Test.png' }] }), /尚未提供/);
+    assert.throws(() => cardKey({ groupId: '1', groups: [{ id: '1', members: ['Test.png', 'Other.png'] }], characters: [{ avatar: 'Test.png' }, { avatar: 'Other.png' }] }), /未指定/);
 });
 
 test('all generated types migrate across old chats; preserve content, UIDs and manual data; idempotent', () => {
