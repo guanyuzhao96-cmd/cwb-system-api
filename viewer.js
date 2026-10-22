@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { deleteEntries, getEntries, getTargetWorldbook, patchEntries, getCardArchiveKey } from './lorebook.js';
+import { deleteEntries, getCardArchiveEntries, patchEntries, getCardArchiveKey } from './lorebook.js';
 import { escapeHtml, notify, parseCustomFormat } from './utils.js';
 
 function currentEntries(entries) {
@@ -10,15 +10,15 @@ function currentEntries(entries) {
 }
 
 export async function openViewer(settings) {
-    const bookName = getTargetWorldbook(settings);
+    const { bookName, entries: found } = await getCardArchiveEntries(settings);
     if (!bookName) return notify('warning', '未找到目标世界书。');
-    const entries = currentEntries(await getEntries(bookName));
+    const entries = currentEntries(found);
     $('#cwb-viewer-modal').remove();
     const cards = entries.length ? entries.map(entry => {
         const parsed = parseCustomFormat(entry.content);
         const name = parsed?.姓名 || parsed?.name || entry.comment || `UID ${entry.uid}`;
-        return `<details class="cwb-card" data-uid="${entry.uid}">
-            <summary>${escapeHtml(name)} <small>UID ${entry.uid}</small></summary>
+        return `<details class="cwb-card" data-uid="${entry.uid}" data-book="${escapeHtml(entry.bookName)}">
+            <summary>${escapeHtml(name)} <small>${escapeHtml(entry.bookName)} · UID ${entry.uid}</small></summary>
             <textarea class="text_pole textarea_compact cwb-profile-content">${escapeHtml(entry.content)}</textarea>
             <div class="cwb-actions">
                 <button class="menu_button cwb-save-profile"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
@@ -40,7 +40,7 @@ export async function openViewer(settings) {
         const card = $(this).closest('.cwb-card');
         const uid = Number(card.data('uid'));
         try {
-            await patchEntries(bookName, [{ uid, content: card.find('.cwb-profile-content').val() }]);
+            await patchEntries(card.attr('data-book'), [{ uid, content: card.find('.cwb-profile-content').val() }]);
             notify('success', '角色档案已保存。');
         } catch (error) { notify('error', `保存失败：${error.message}`); }
     });
@@ -49,7 +49,7 @@ export async function openViewer(settings) {
         const uid = Number(card.data('uid'));
         if (!confirm(`确定删除 UID ${uid} 的角色档案吗？`)) return;
         try {
-            await deleteEntries(bookName, [uid]);
+            await deleteEntries(card.attr('data-book'), [uid]);
             card.remove();
             notify('success', '角色档案已删除。');
         } catch (error) { notify('error', `删除失败：${error.message}`); }

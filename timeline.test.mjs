@@ -21,7 +21,7 @@ function harness(entries = {}) {
         MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,
-        structuredClone, getRequestHeaders: () => ({}),
+        structuredClone, getRequestHeaders: () => ({}), world_names: ['main'], extension_settings: {},
         fetch: async () => ({ ok: true, json: async () => structuredClone(data) }),
         mergeRanges, parseTaggedRanges, state: { chatId: 'chat', operationOwner: null },
         getContext: () => ({ characterId: 0, characters: [{ avatar: 'Test.png', data: { extensions: { world: 'main' } } }], chat: Array.from({ length: 120 }, (_, i) => ({ mes: String(i) })) }),

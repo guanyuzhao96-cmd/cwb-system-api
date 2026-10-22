@@ -6,10 +6,11 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订2</span><h2>角色卡世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订3</span><h2>角色卡世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
+            <p id="cwb-archive-availability" class="cwb-caption" role="status">已有资料待读取；下方楼层表示更新进度，不是资料数量。</p>
             <button id="cwb-download-error-report" class="menu_button cwb-full-width" hidden>下载最近一次错误报告</button>
 
             <section class="cwb-progress-overview" aria-label="三项更新进度">
@@ -87,7 +88,7 @@
                         <div class="cwb-grid cwb-target-grid">
                             <label>写入目标
                                 <select id="cwb-worldbook-target" class="text_pole">
-                                    <option value="primary">角色主世界书</option>
+                                    <option value="primary">自动定位角色卡已有存档</option>
                                     <option value="custom">指定世界书</option>
                                 </select>
                             </label>

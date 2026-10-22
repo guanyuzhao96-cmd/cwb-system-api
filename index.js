@@ -11,7 +11,7 @@ import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrat
 import { testSystemApi } from './api.js';
 import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
-import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, getProgressRecoveryCandidates, listWorldbooks, routeSummary } from './lorebook.js';
+import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, getProgressRecoveryCandidates, listWorldbooks, routeSummary, resetArchiveLocation } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
@@ -67,6 +67,7 @@ function saveFromUi() {
     value.incrementalPrompt = $('#cwb-incremental-prompt').val();
     value.timelineIncrementalPrompt = $('#cwb-timeline-incremental-prompt').val();
     state.routeCache = null;
+    resetArchiveLocation();
     saveSettingsDebounced();
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
     updatePluginButton();
@@ -127,7 +128,7 @@ function bindUi() {
             await refreshTimeline(settings());
         });
     });
-    $('#cwb-check-progress').on('click', function () { runButton($(this), '读取中…', refreshModuleProgress); });
+    $('#cwb-check-progress').on('click', function () { resetArchiveLocation(); runButton($(this), '读取中…', refreshModuleProgress); });
     $('#cwb-recover-progress').on('click', function () {
         runButton($(this), '读取候选…', async () => {
             refreshChatState();

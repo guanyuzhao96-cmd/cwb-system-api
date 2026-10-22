@@ -11,6 +11,7 @@ import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } f
 import {
     getLastUpdatedFloor,
     getModuleProgress,
+    getArchiveAvailability,
     getProgressRecoveryCandidates,
     recordModuleResult,
     verifyProfileContent,
@@ -79,6 +80,9 @@ function setStatus(text) {
 
 export async function refreshModuleProgress() {
     refreshChatState();
+    $('#cwb-archive-availability').text('正在读取已有资料…');
+    const available = await getArchiveAvailability();
+    $('#cwb-archive-availability').text(`读取世界书《${available.bookName}》；已有档案 ${available.profiles} 条、时间线 ${available.timeline} 条、关系 ${available.relationships} 条。楼层数仅表示已核对当前正文的进度。`);
     const progress = await getModuleProgress();
     const recoveryCandidates = await getProgressRecoveryCandidates();
     $('#cwb-recover-progress').prop('hidden', recoveryCandidates.length === 0).text(

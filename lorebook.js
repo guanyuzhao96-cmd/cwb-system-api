@@ -48,6 +48,60 @@ export function getTargetWorldbook(settings) {
     return getPrimaryWorldbook();
 }
 
+let archiveLocation = null;
+export function resetArchiveLocation() { archiveLocation = null; }
+
+// Candidate discovery is read-only. All central archives use this same result.
+export async function getArchiveWorldbook(settings = extension_settings?.cwb_system_api ?? {}) {
+    const owner = getCardArchiveKey();
+    const primary = getPrimaryWorldbook();
+    if (settings.worldbookTarget === 'custom') {
+        if (!settings.customWorldbook) throw Error('请在世界书设置中选择指定世界书。');
+        return settings.customWorldbook;
+    }
+    const names = [...new Set([primary, ...world_names].filter(Boolean))];
+    const signature = JSON.stringify([owner, primary, names]);
+    if (archiveLocation?.signature === signature) return archiveLocation.bookName;
+    const canonical = ['CWB:更新状态', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:主角档案'];
+    const matches = [], profileBooks = [];
+    for (const bookName of names) {
+        const data = await readWorldbookFromServer(bookName, false);
+        const entries = Object.values(data.entries).filter(entry => owns(entry, owner));
+        if (entries.some(entry => getKeys(entry).some(key => canonical.includes(key)))) {
+            if (bookName === primary) { archiveLocation = { signature, bookName }; return bookName; }
+            matches.push(bookName);
+        } else if (entries.some(entry => getKeys(entry).includes('CWB:自动档案'))) profileBooks.push(bookName);
+    }
+    if (owner !== getCardArchiveKey()) throw Error('定位期间角色卡已切换，停止操作。');
+    if (matches.length > 1) throw Error(`当前角色卡的存档分散在多个世界书（${matches.join('、')}），请在世界书设置中指定本次使用的世界书。已有资料未改写。`);
+    const bookName = matches[0] || primary || (profileBooks.length === 1 ? profileBooks[0] : null);
+    if (!bookName) throw Error('未找到当前角色卡的已有存档，也没有角色主世界书；请在世界书设置中指定已有世界书。全局启用列表不能单独确定存档归属。');
+    archiveLocation = { signature, bookName };
+    return bookName;
+}
+
+export async function getCardArchiveEntries(settings = extension_settings?.cwb_system_api ?? {}) {
+    const owner = getCardArchiveKey();
+    const master = await getArchiveWorldbook(settings);
+    const data = await readWorldbookFromServer(master);
+    const books = [...new Set([master, ...referencedProfileBooks(data, getCardArchiveKey()),
+        ...(settings.multiWorldbookRouting ? listWorldbooks() : [])])];
+    const entries = [];
+    for (const bookName of books) {
+        const rows = bookName === master ? Object.values(data.entries).map(entry => ({ ...entry, keys: getKeys(entry), enabled: isEnabled(entry) })) : await getEntries(bookName);
+        entries.push(...rows.filter(entry => owns(entry, owner)).map(entry => ({ ...entry, bookName })));
+    }
+    if (owner !== getCardArchiveKey()) throw Error('读取档案期间角色卡已切换，停止展示。');
+    return { bookName: master, entries };
+}
+
+export async function getArchiveAvailability() {
+    const { bookName, entries } = await getCardArchiveEntries();
+    return { bookName, profiles: entries.filter(entry => getKeys(entry).some(key => ['CWB:自动档案', 'CWB:主角档案'].includes(key))).length,
+        timeline: entries.filter(entry => getKeys(entry).includes('CWB:故事时间线')).length,
+        relationships: entries.filter(entry => getKeys(entry).includes('CWB:角色关系汇总')).length };
+}
+
 function routeNames(entries) {
     const directories = entries.filter(entry => getKeys(entry).includes('CWB:世界书目录'));
     const names = new Set();
@@ -130,7 +184,7 @@ export async function discoverWorldbookRoutes(settings = {}) {
 }
 
 async function routeWorldbook(settings, characterName) {
-    if (!settings.multiWorldbookRouting) return getTargetWorldbook(settings);
+    if (settings.worldbookTarget === 'custom' || !settings.multiWorldbookRouting) return getArchiveWorldbook(settings);
     const routes = state.routeCache || await discoverWorldbookRoutes(settings);
     return findRoutedBook(routes, characterName);
 }
@@ -239,7 +293,7 @@ function referencedProfileBooks(primaryData, chatId) {
 async function scanGeneratedContent(phase, onProgress) {
     const chatId = getCardArchiveKey();
     if (!chatId || chatId.startsWith('unknown_chat')) throw Error('无法确认当前聊天 ID，已停止扫描以保护其他聊天数据。');
-    const primary = getPrimaryWorldbook();
+    const primary = await getArchiveWorldbook();
     if (!primary) throw Error('当前角色卡没有主世界书，无法安全定位本聊天的生成记录。');
     // Read the master once, then follow its per-chat profile directory. This avoids
     // fetching every worldbook in Tavern when the plugin already knows the targets.
@@ -374,7 +428,7 @@ export async function saveCharacterDescription(settings, characterName, content,
 }
 
 export async function saveUserDescription(settings, userName, content, startFloor, endFloor) {
-    const bookName = getPrimaryWorldbook();
+    const bookName = await getArchiveWorldbook(settings);
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存主角档案。');
     const chatId = getCardArchiveKey();
     const safeName = sanitizeName(userName || '主角');
@@ -406,8 +460,8 @@ function mergeTimelineContent(contents) {
 }
 
 // Merge and remove legacy per-range entries in the same worldbook save.
-async function writeTimeline(content, startFloor, endFloor) {
-    const bookName = getPrimaryWorldbook();
+async function writeTimeline(content, startFloor, endFloor, settings) {
+    const bookName = await getArchiveWorldbook(settings);
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存故事时间线。');
     const chatId = getCardArchiveKey();
     const data = structuredClone(await readWorldbookFromServer(bookName));
@@ -446,7 +500,7 @@ async function writeTimeline(content, startFloor, endFloor) {
 }
 
 export async function saveTimeline(settings, content, startFloor, endFloor) {
-    return writeTimeline(content, startFloor, endFloor);
+    return writeTimeline(content, startFloor, endFloor, settings);
 }
 
 export async function getTimelineEntries() {
@@ -454,7 +508,7 @@ export async function getTimelineEntries() {
 }
 
 export async function getChatUpdateTracking(totalMessages = 0) {
-    const bookName = getPrimaryWorldbook();
+    const bookName = await getArchiveWorldbook();
     if (!bookName) return null;
     const data = await readWorldbookFromServer(bookName);
     const { entry, state: saved } = findSavedUpdateState(data, getCardArchiveKey());
@@ -466,7 +520,7 @@ export async function getChatUpdateTracking(totalMessages = 0) {
 }
 
 export async function recordChatUpdateRange(startIndex, endIndex, totalMessages, latest) {
-    const bookName = getPrimaryWorldbook();
+    const bookName = await getArchiveWorldbook();
     if (!bookName) throw Error('当前角色卡未绑定主世界书。');
     const owner = getCardArchiveKey();
     const data = await readWorldbookFromServer(bookName);
@@ -499,10 +553,10 @@ export async function updateRoster(settings, processedNames, startFloor, endFloo
 
 /** Create one compact index in the current character's primary worldbook. */
 export async function updateMasterDirectory(settings) {
-    const masterBook = getPrimaryWorldbook();
+    const masterBook = await getArchiveWorldbook(settings);
     if (!masterBook) return;
     const chatId = getCardArchiveKey();
-    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const books = settings.multiWorldbookRouting && settings.worldbookTarget !== 'custom' ? listWorldbooks() : [masterBook];
     const grouped = new Map();
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
@@ -588,9 +642,9 @@ export async function getTriggeredOldProfiles(settings, messages) {
     if (!settings.incremental) return [];
     const chatId = getCardArchiveKey();
     const haystack = messages.map(message => `${message.name ?? ''}\n${message.message ?? ''}`).join('\n').toLowerCase();
-    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const books = settings.multiWorldbookRouting && settings.worldbookTarget !== 'custom' ? listWorldbooks() : [await getArchiveWorldbook(settings)];
     const profiles = [];
-    const masterBook = getPrimaryWorldbook();
+    const masterBook = await getArchiveWorldbook(settings);
     if (masterBook) {
         const masterEntries = await getEntries(masterBook);
         const userProfile = masterEntries.find(entry => entry.enabled && getKeys(entry).includes('CWB:主角档案') && isCurrentCardArchive(entry));
@@ -611,7 +665,7 @@ export async function getTriggeredOldProfiles(settings, messages) {
 
 export async function getLastUpdatedFloor(settings) {
     const chatId = getCardArchiveKey();
-    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const books = settings.multiWorldbookRouting && settings.worldbookTarget !== 'custom' ? listWorldbooks() : [await getArchiveWorldbook(settings)];
     let latest = 0;
     for (const bookName of books.filter(Boolean)) {
         const entries = await getEntries(bookName);
@@ -628,7 +682,8 @@ export async function getLastUpdatedFloor(settings) {
 
 export async function manageChatEntries(settings) {
     const customTarget = settings.worldbookTarget === 'custom';
-    const books = customTarget ? [getPrimaryWorldbook()] : settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
+    const master = await getArchiveWorldbook(settings);
+    const books = [...new Set([master, ...(settings.multiWorldbookRouting ? listWorldbooks() : [])])];
     getCardArchiveKey();
     const chatId = getCardArchiveKey();
     for (const bookName of books.filter(Boolean)) {
@@ -666,7 +721,7 @@ export async function manageChatEntries(settings) {
 }
 
 export async function convertLegacyEntries(settings) {
-    const bookName = getTargetWorldbook(settings);
+    const bookName = await getArchiveWorldbook(settings);
     if (!bookName) throw new Error('未找到目标世界书。');
     const entries = await getEntries(bookName);
     const patches = [];
@@ -700,7 +755,7 @@ export async function convertLegacyEntries(settings) {
 }
 
 export async function getRelationshipSummary() {
-    const bookName = getPrimaryWorldbook();
+    const bookName = await getArchiveWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法读取角色关系。');
     const chatId = getCardArchiveKey();
     const entries = await getEntries(bookName);
@@ -712,7 +767,7 @@ export async function getRelationshipRanges() {
 }
 
 export async function saveRelationshipSummary(content, startIndex, endIndex) {
-    const bookName = getPrimaryWorldbook();
+    const bookName = await getArchiveWorldbook();
     if (!bookName) throw new Error('当前角色卡未绑定主世界书，无法保存角色关系。');
     const chatId = getCardArchiveKey();
     const data = structuredClone(await readWorldbookFromServer(bookName));
@@ -733,7 +788,7 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
 }
 
 export async function getModuleProgress() {
-    const bookName = getPrimaryWorldbook();
+    const bookName = await getArchiveWorldbook();
     if (!bookName) throw Error('当前角色卡未绑定主世界书，无法读取模块进度。');
     const chatId = getCardArchiveKey();
     const data = await readWorldbookFromServer(bookName);
@@ -760,7 +815,7 @@ export async function copyProgressFromChat(sourceChatId) {
 
 
 export async function recordModuleResult(module, start, end, error = null) {
-    const bookName = getPrimaryWorldbook();
+    const bookName = await getArchiveWorldbook();
     if (!bookName) throw Error('当前角色卡未绑定主世界书，无法保存模块进度。');
     const chatId = getCardArchiveKey();
     const data = await readWorldbookFromServer(bookName);
@@ -788,7 +843,7 @@ export async function recordModuleResult(module, start, end, error = null) {
 }
 
 export async function verifyProfileContent(settings, name, content, isUser = false) {
-    const bookName = isUser ? getPrimaryWorldbook() : await routeWorldbook(settings, name);
+    const bookName = isUser ? await getArchiveWorldbook(settings) : await routeWorldbook(settings, name);
     if (!bookName) throw Error(`角色 ${name} 未找到目录归属，未标记档案完成。`);
     const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
     if (!response.ok) throw Error(`角色 ${name} 保存后回读失败。`);
@@ -971,8 +1026,8 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
 
 export async function cleanupProfileFields(settings) {
     const chatId = getCardArchiveKey();
-    const books = settings.multiWorldbookRouting ? listWorldbooks() : [getTargetWorldbook(settings)];
-    const primary = getPrimaryWorldbook();
+    const books = settings.multiWorldbookRouting ? listWorldbooks() : [await getArchiveWorldbook(settings)];
+    const primary = await getArchiveWorldbook(settings);
     const targets = [...new Set([...books, primary].filter(Boolean))];
     let changed = 0, skipped = 0;
     for (const bookName of targets) {

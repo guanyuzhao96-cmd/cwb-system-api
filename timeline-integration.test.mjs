@@ -12,7 +12,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const nodes = new Map(), requests = [], modules = new Map(), worldbookReads = [];
     let invalidCombined = false, failApiRequest = false;
     let relationRound = 0;
-    let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized;
+    let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized, booksByName = null;
     const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ avatar: 'Test.png', data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
@@ -36,8 +36,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         confirm: message => { lastConfirmation = message; return true; },
     },
         fetch: async (_url, options = {}) => {
-            try { worldbookReads.push(JSON.parse(options.body ?? '{}').name); } catch {}
-            return { ok: true, json: async () => structuredClone(disk) };
+            const name = JSON.parse(options.body ?? '{}').name;
+            worldbookReads.push(name);
+            return { ok: true, json: async () => structuredClone(booksByName ? booksByName.get(name) : disk) };
         },
     });
     const script = {
@@ -72,7 +73,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const world = {
         selected_world_info: [], world_info: {}, world_names: ['主世界书'],
         loadWorldInfo: async () => structuredClone(cache),
-        saveWorldInfo: async (_, data) => { cache = structuredClone(data); if (!failWrite) disk = structuredClone(data); },
+        saveWorldInfo: async (name, data) => { cache = structuredClone(data); if (!failWrite) { if (booksByName) booksByName.set(name, structuredClone(data)); else disk = structuredClone(data); } },
         createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid }; },
     };
     const root = dirname(fileURLToPath(import.meta.url));
@@ -301,4 +302,81 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     contextData.characterId = undefined;
     assert.equal((await progressStore.getTimelineEntries())[0].uid, screenshotUid, 'unique group member resolves the same file and primary worldbook');
     assert.equal(requests.length, beforeReadRequests, 'reading existing archives does not generate AI output');
+
+    // Separate named server books reproduce the actual location mismatch: the
+    // previous mock returned the same data for every requested book name.
+    contextData.characterId = 2;
+    contextData.chat = [{ mes: '新聊天的第一楼' }];
+    contextData.characters[2].data.extensions.world = '';
+    world.world_names.push('已有书', '其他卡书', '空书', '角色分卷');
+    booksByName = new Map(world.world_names.map(name => [name, { entries: {} }]));
+    booksByName.get('已有书').entries = {
+        10: structuredClone(disk.entries[screenshotUid]),
+        11: { uid: 11, key: ['CWB:角色关系汇总', 'CWB:角色卡:Test2.png', '角色关系'], content: '【角色关系汇总】\n甲 ↔ 乙：同学' },
+        12: { uid: 12, key: ['CWB:更新状态', 'CWB:角色卡:Test2.png'], content: JSON.stringify({ modules: { timeline: { completed: [[0, 24]] } } }) },
+        13: { uid: 13, key: ['CWB:角色档案目录', 'CWB:角色卡:Test2.png'], content: '[角色甲] → 世界书《角色分卷》中的「动态-角色甲」' },
+    };
+    booksByName.get('角色分卷').entries[1] = { uid: 1, key: ['CWB:自动档案', 'CWB:角色卡:Test2.png', '角色甲'], content: '[姓名]:角色甲\n[剧情.0]:已有的重要剧情' };
+    booksByName.get('其他卡书').entries[10] = { uid: 10, key: ['CWB:故事时间线', 'CWB:角色卡:Other.png'], content: '其他卡的资料' };
+    extension_settings.cwb_system_api.worldbookTarget = 'primary';
+    progressStore.resetArchiveLocation();
+    const originalExisting = JSON.stringify(booksByName.get('已有书'));
+    assert.equal(await progressStore.getArchiveWorldbook(), '已有书', 'no primary binding: discovers the existing card-owned global book');
+    assert.equal((await progressStore.getTimelineEntries())[0].uid, screenshotUid);
+    assert.match(await progressStore.getRelationshipSummary(), /同学/);
+    assert.equal((await progressStore.getModuleProgress()).timeline.completed.length, 0, 'legacy floor-only progress is not represented as verified content');
+    const available = await progressStore.getArchiveAvailability();
+    assert.equal(available.bookName, '已有书');
+    assert.equal(available.timeline, 1);
+    assert.equal(available.relationships, 1);
+    assert.equal(available.profiles, 1, 'directory-linked profiles are included in the archive viewer and count');
+    await modules.get(resolve(root, 'core.js')).namespace.refreshModuleProgress();
+    assert.match($('#cwb-archive-availability').text(), /已有档案 1 条、时间线 1 条、关系 1 条/);
+    assert.equal($('#cwb-through-timeline').text(), '0 楼');
+    assert.equal(JSON.stringify(booksByName.get('已有书')), originalExisting, 'reading existing owned records preserves their content');
+
+    // Explicit selection wins even when another primary book is bound and the
+    // multi-worldbook profile routing option was enabled in saved settings.
+    contextData.characters[2].data.extensions.world = '空书';
+    extension_settings.cwb_system_api.worldbookTarget = 'custom';
+    extension_settings.cwb_system_api.customWorldbook = '已有书';
+    progressStore.resetArchiveLocation();
+    assert.equal(await progressStore.getArchiveWorldbook(), '已有书');
+    await progressStore.saveTimeline(extension_settings.cwb_system_api, '2025-09-02｜指定书的新事件', 0, 0);
+    await progressStore.saveRelationshipSummary('甲 ↔ 乙：合作', 0, 0);
+    await progressStore.saveUserDescription(extension_settings.cwb_system_api, '主角', '[姓名]:主角\n[剧情.0]:新的关键剧情', 0, 0);
+    await progressStore.saveCharacterDescription(extension_settings.cwb_system_api, '角色甲', '[姓名]:角色甲\n[剧情.0]:角色关键剧情', 0, 0);
+    await progressStore.recordModuleResult('timeline', 0, 0);
+    await progressStore.recordChatUpdateRange(0, 0, 1, '检查完成');
+    assert.match((await progressStore.getTimelineEntries())[0].content, /新事件/);
+    assert.match(await progressStore.getRelationshipSummary(), /合作/);
+    assert.equal((await progressStore.getModuleProgress()).timeline.completed[0][1], 0);
+    assert.equal((await progressStore.getChatUpdateTracking(1)).completedRanges.length, 1);
+    assert.equal(Object.values(booksByName.get('空书').entries).length, 0, 'primary book must not receive accidental writes');
+    assert.equal(booksByName.get('其他卡书').entries[10].content, '其他卡的资料');
+    assert.ok(Object.values(booksByName.get('已有书').entries).some(entry => entry.key.includes('CWB:主角档案')));
+    assert.ok(Object.values(booksByName.get('已有书').entries).some(entry => entry.key.includes('CWB:自动档案')));
+    assert.equal((await progressStore.getCardArchiveEntries()).entries.some(entry => entry.bookName === '角色分卷'), true);
+    booksByName.get('已有书').entries[1] = { uid: 1, key: ['手工'], content: '同UID的手工资料' };
+    await modules.get(resolve(root, 'viewer.js')).namespace.openViewer(extension_settings.cwb_system_api);
+    const routedCard = { data: () => 1, attr: () => '角色分卷', find: () => ({ val: () => '[姓名]:角色甲\n[剧情.0]:修改后的分卷剧情' }) };
+    await $('.cwb-save-profile').handlers.click.call({ closest: () => routedCard });
+    assert.match(booksByName.get('角色分卷').entries[1].content, /修改后的分卷剧情/);
+    assert.equal(booksByName.get('已有书').entries[1].content, '同UID的手工资料', 'viewer writes to the entry source book, not the currently selected central book');
+    assert.equal(requests.length, beforeReadRequests, 'location discovery and direct persistence do not call AI');
+
+    contextData.characters[2].data.extensions.world = '';
+    booksByName.get('空书').entries[10] = structuredClone(booksByName.get('已有书').entries[10]);
+    extension_settings.cwb_system_api.worldbookTarget = 'primary';
+    progressStore.resetArchiveLocation();
+    const ambiguousBefore = JSON.stringify([...booksByName]);
+    await assert.rejects(progressStore.getArchiveWorldbook(), /分散在多个世界书/);
+    assert.equal(JSON.stringify([...booksByName]), ambiguousBefore, 'ambiguous discovery is read-only');
+
+    // No binding and no owned archive must never choose an arbitrary global book.
+    contextData.characters.push({ avatar: 'New.png', data: { extensions: {} } });
+    contextData.characterId = 3;
+    extension_settings.cwb_system_api.worldbookTarget = 'primary';
+    progressStore.resetArchiveLocation();
+    await assert.rejects(progressStore.getArchiveWorldbook(), /指定已有世界书/);
 });
