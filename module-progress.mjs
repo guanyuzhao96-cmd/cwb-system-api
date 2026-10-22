@@ -1,5 +1,24 @@
 import { mergeRanges, missingRanges } from './update-tracker.mjs';
 export const MODULE_LABELS = { profiles: '角色与主角档案', timeline: '主线时间线', relationships: '角色关系' };
+
+// Historical floors are display evidence, never proof of the current source.
+export function legacyModuleHistory(saved) {
+    if (saved?.legacyModules) return structuredClone(saved.legacyModules);
+    if (saved?.存档版本 !== 3) return !saved?.receipts ? structuredClone(saved?.modules ?? {}) : {};
+    const parse = value => {
+        if (!value || value === '无') return [];
+        const parts = String(value).split(/[、,，;；]/).map(part => part.trim());
+        return mergeRanges(parts.map(part => {
+            const match = part.match(/^(\d+)(?:\s*[-–—~至]\s*(\d+))?$/);
+            if (!match || Number(match[1]) < 1 || Number(match[2] ?? match[1]) < Number(match[1])) throw Error('旧进度楼层格式无效，原记录保留。');
+            return [Number(match[1]) - 1, Number(match[2] ?? match[1]) - 1];
+        }));
+    };
+    return Object.fromEntries(Object.entries({ profiles: '角色档案', timeline: '时间线', relationships: '角色关系' }).map(([key, label]) => {
+        const row = saved[label] ?? {};
+        return [key, { completed: parse(row.已保存楼层), failed: parse(row.失败楼层), error: row.最近更新?.错误 ?? null }];
+    }));
+}
 export function removeRange(ranges, start, end) {
     return mergeRanges((ranges ?? []).flatMap(([a, b]) => b < start || a > end ? [[a, b]] : [[a, start - 1], [end + 1, b]].filter(([x, y]) => x <= y)));
 }
@@ -37,7 +56,12 @@ export function moduleStatus(progress, module, total) {
     const completed = mergeRanges(item.completed);
     const missing = missingRanges(total, completed);
     const through = completed[0]?.[0] === 0 ? completed[0][1] + 1 : 0;
-    return { completed, missing, through, failed: mergeRanges(item.failed), latest: item.latest };
+    const legacyCompleted = mergeRanges(item.legacy?.completed), legacyFailed = mergeRanges(item.legacy?.failed);
+    const currentCovered = [...completed, ...(item.failed ?? [])];
+    const unverified = currentCovered.reduce((ranges, [a, b]) => removeRange(ranges, a, b), intersectRanges(legacyCompleted, total ? [[0, total - 1]] : []));
+    const legacyThrough = legacyCompleted[0]?.[0] === 0 ? legacyCompleted[0][1] + 1 : 0;
+    return { completed, missing, through, failed: mergeRanges(item.failed), latest: item.latest,
+        legacyCompleted, legacyFailed, legacyThrough, unverified, legacyError: item.legacy?.error ?? item.legacy?.latest?.error };
 }
 export function displayRanges(ranges) { return ranges.map(([a, b]) => `${a + 1}-${b + 1}`).join('、') || '无'; }
 

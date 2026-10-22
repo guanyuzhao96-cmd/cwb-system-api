@@ -8,7 +8,7 @@
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
   "version": "0.12.4",
-  "description": "0.12.4角色卡存档版修订3：统一已有世界书定位和读写，显示已有资料数量，保留原提示词。",
+  "description": "0.12.4角色卡存档版修订4：保留旧进度历史，减少无关世界书读取，读取故障有限重试并报告具体阶段。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/guanyuzhao96-cmd/cwb-system-api"
 }

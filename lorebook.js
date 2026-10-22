@@ -1,13 +1,13 @@
 import { parseTimelineRecords, formatTimelineRecords } from './timeline-utils.mjs';
 import { CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress } from './card-archive.mjs';
 import { sanitizeProfileContent } from './profile-utils.mjs';
-import { applyModuleResult, intersectRanges, mergeModuleProgress, MODULE_LABELS } from './module-progress.mjs';
+import { applyModuleResult, intersectRanges, mergeModuleProgress, legacyModuleHistory, MODULE_LABELS } from './module-progress.mjs';
 import { getRequestHeaders } from '/script.js';
 import { extension_settings, getContext } from '/scripts/extensions.js';
 import {
     createWorldInfoEntry,
     loadWorldInfo,
-    saveWorldInfo,
+    saveWorldInfo as hostSaveWorldInfo,
     selected_world_info,
     world_info,
     world_names,
@@ -489,11 +489,7 @@ async function writeTimeline(content, startFloor, endFloor, settings) {
     for (const key of Object.keys(data.entries)) if (removed.has(data.entries[key])) delete data.entries[key];
     await saveWorldInfo(bookName, data, true);
     // loadWorldInfo reads a client cache. Verify the actual server copy instead.
-    const response = await fetch('/api/worldinfo/get', {
-        method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache',
-    });
-    if (!response.ok) throw new Error(`时间线保存后回读失败（HTTP ${response.status}），请重试。`);
-    const persisted = await response.json();
+    const persisted = await readWorldbookFromServer(bookName, false);
     const stored = Object.values(persisted?.entries ?? {}).find(entry => Number(entry.uid) === Number(target.uid));
     if (!stored || stored.content !== target.content) throw new Error('时间线服务端回读与本次写入不一致，不能确认已保存，请重试。');
     return [{ ...target, keys: getKeys(target), enabled: isEnabled(target) }];
@@ -780,9 +776,7 @@ export async function saveRelationshipSummary(content, startIndex, endIndex) {
     const duplicates = new Set(existing.slice(1));
     for (const key of Object.keys(data.entries)) if (duplicates.has(data.entries[key])) delete data.entries[key];
     await saveWorldInfo(bookName, data, true);
-    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
-    if (!response.ok) throw new Error('角色关系保存后回读失败。');
-    const stored = await response.json();
+    const stored = await readWorldbookFromServer(bookName, false);
     if (stored?.entries?.[target.uid]?.content !== content) throw new Error('角色关系服务端回读不一致，无法确认保存成功。');
     return target;
 }
@@ -793,7 +787,10 @@ export async function getModuleProgress() {
     const chatId = getCardArchiveKey();
     const data = await readWorldbookFromServer(bookName);
     const { state: saved } = findSavedUpdateState(data, chatId);
-    return mergeModuleProgress(receiptProgress(saved?.receipts, await currentSourceHashes()), {});
+    const progress = mergeModuleProgress(receiptProgress(saved?.receipts, await currentSourceHashes()), {});
+    const history = legacyModuleHistory(saved);
+    for (const module of Object.keys(MODULE_LABELS)) progress[module].legacy = history[module] ?? {};
+    return progress;
 }
 
 async function currentSourceHashes() {
@@ -845,9 +842,7 @@ export async function recordModuleResult(module, start, end, error = null) {
 export async function verifyProfileContent(settings, name, content, isUser = false) {
     const bookName = isUser ? await getArchiveWorldbook(settings) : await routeWorldbook(settings, name);
     if (!bookName) throw Error(`角色 ${name} 未找到目录归属，未标记档案完成。`);
-    const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
-    if (!response.ok) throw Error(`角色 ${name} 保存后回读失败。`);
-    const data = await response.json();
+    const data = await readWorldbookFromServer(bookName, false);
     const chatId = getCardArchiveKey();
     if (!Object.values(data?.entries ?? {}).some(entry => isCurrentCardArchive(entry) && getKeys(entry).includes(isUser ? 'CWB:主角档案' : 'CWB:自动档案') && entry.content === content)) throw Error(`角色 ${name} 服务端未确认保存。`);
 }
@@ -940,22 +935,34 @@ function moduleProgressFromLegacy(data, chatId) {
     catch { throw Error('旧版模块进度存档损坏，无法迁移；原始存档已保留。'); }
 }
 
+function worldbookError(error, bookName, action, endpoint, attempts, httpStatus) {
+    const wrapped = new Error(`世界书《${bookName}》${action}失败：${error.message || error}；${action === '保存' ? '保存结果未确认，请刷新核对' : '未将读取失败当作空资料'}。`, { cause: error });
+    wrapped.cwbDiagnostics = { stage: `Worldbook ${action === '保存' ? 'write' : 'read'}`, requestPath: endpoint, worldbookName: bookName, attempts, httpStatus };
+    return wrapped;
+}
+
+async function saveWorldInfo(bookName, data, immediately) {
+    try { return await hostSaveWorldInfo(bookName, data, immediately); }
+    catch (error) { throw worldbookError(error, bookName, '保存', '/api/worldinfo/edit', 1); }
+}
+
 async function readWorldbookFromServer(bookName, migrate = true) {
     const owner = getCardArchiveKey();
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
     let response, data;
-    try {
-        response = await fetch('/api/worldinfo/get', {
-            method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache', ...(controller ? { signal: controller.signal } : {}),
-        });
-        if (!response.ok) throw Error(`无法从服务端读取世界书《${bookName}》。`);
-        data = await response.json();
-    } catch (error) {
-        if (controller?.signal.aborted) throw Error(`读取世界书《${bookName}》超过30秒，已停止并保留未确认条目。`);
-        throw error;
-    } finally {
-        if (timeout !== null) clearTimeout(timeout);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        if (owner !== getCardArchiveKey()) throw Error('读取期间角色卡已切换，停止操作。');
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
+        try {
+            response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache', ...(controller ? { signal: controller.signal } : {}) });
+            if (!response.ok) throw Error(`HTTP ${response.status}`);
+            data = await response.json();
+            break;
+        } catch (error) {
+            if (attempt < 2 && error.name === 'TypeError' && !controller?.signal.aborted) continue;
+            const reason = controller?.signal.aborted ? new Error('读取超过30秒') : error;
+            throw worldbookError(reason, bookName, '读取', '/api/worldinfo/get', attempt, response?.status);
+        } finally { if (timeout !== null) clearTimeout(timeout); }
     }
     if (!data?.entries) throw Error(`世界书《${bookName}》返回的数据格式无效。`);
     if (owner !== getCardArchiveKey()) throw Error('读取期间角色卡已切换，停止操作。');
@@ -965,7 +972,13 @@ async function readWorldbookFromServer(bookName, migrate = true) {
         const currentCharacter = archiveCharacter(context);
         const shared = (context.characters ?? []).some(character => character?.avatar !== currentCharacter.avatar
             && (character?.data?.extensions?.world || character?.extensions?.world) === primary);
-        const primaryData = bookName === primary ? data : primary ? await readWorldbookFromServer(primary) : { entries: {} };
+        const needsLegacyLookup = Object.values(data.entries).some(entry => {
+            const keys = getKeys(entry);
+            return GENERATED_ENTRY_TYPES.some(([marker]) => keys.includes(marker)) && !keys.some(key => String(key).startsWith(CARD_PREFIX));
+        });
+        // Owned entries do not need another book to establish their ownership.
+        // A failed unrelated primary read must not block the chosen archive.
+        const primaryData = bookName === primary ? data : needsLegacyLookup && primary ? await readWorldbookFromServer(primary) : { entries: {} };
         const legacyOwners = [...new Set([...(shared ? [] : [String(getContext()?.chatId ?? getContext()?.chat_filename ?? '').replace(/ imported/g, '').replace(/\.jsonl?$/i, '')]), ...Object.values(primaryData.entries)
             .filter(isCurrentCardArchive).flatMap(entry => {
                 const name = parseCustomFormat(entry.content)?.姓名;
@@ -1002,7 +1015,8 @@ async function persistUpdateState(bookName, chatId, data, nextState) {
     if (!target) throw Error('无法创建统一更新状态条目。');
     const canonical = {
         comment: `CWB插件更新状态-${chatId}`,
-        content: JSON.stringify({ version: 2, numbering: 'zero-based inclusive', ...nextState }),
+        content: JSON.stringify({ version: 2, numbering: 'zero-based inclusive', ...nextState,
+            legacyModules: nextState.legacyModules ?? legacyModuleHistory(findSavedUpdateState(data, chatId).state) }),
         keys: ['CWB:更新状态', chatId],
         enabled: false,
         type: 'selective',
@@ -1042,9 +1056,7 @@ export async function cleanupProfileFields(settings) {
         }
         if (patches.length) {
             await patchEntries(bookName, patches);
-            const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name: bookName }), cache: 'no-cache' });
-            if (!response.ok) throw Error('精简档案保存后回读失败。');
-            const stored = await response.json();
+            const stored = await readWorldbookFromServer(bookName, false);
             for (const patch of patches) if (stored?.entries?.[patch.uid]?.content !== patch.content) throw Error('精简档案回读不一致，无法确认清理成功。');
             changed += patches.length;
         }

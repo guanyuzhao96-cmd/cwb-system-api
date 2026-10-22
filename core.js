@@ -94,10 +94,12 @@ export async function refreshModuleProgress() {
     for (const module of Object.keys(MODULE_LABELS)) {
         const status = moduleStatus(progress, module, state.messages.length);
         const missingCount = status.missing.reduce((count, [start, end]) => count + end - start + 1, 0);
-        $(`#cwb-through-${module}`).text(`${status.through} 楼`);
-        $(`#cwb-gap-${module}`).text(missingCount ? `${missingCount} 楼待补` : '已全部完成');
+        const unverifiedCount = status.unverified.reduce((count, [start, end]) => count + end - start + 1, 0);
+        $(`#cwb-through-${module}`).text(status.through ? `${status.through} 楼` : status.legacyThrough ? `${status.legacyThrough} 楼（旧）` : '0 楼');
+        $(`#cwb-gap-${module}`).text(unverifiedCount ? `${missingCount - unverifiedCount} 楼待补；${unverifiedCount} 楼旧记录待核验`
+            : missingCount ? `${missingCount} 楼待补${status.legacyFailed.length ? '；有旧失败记录' : ''}` : '当前正文已核验');
         $(`[data-cwb-progress="${module}"]`).attr('data-pending', String(missingCount > 0));
-        $(`#cwb-progress-${module}`).text(`${MODULE_LABELS[module]}：连续成功至第 ${status.through} 楼\n已成功：${displayRanges(status.completed)}\n未确认/待补：${displayRanges(status.missing)}\n已知失败：${displayRanges(status.failed)}${status.latest?.error ? `\n最近错误：${status.latest.error}` : ''}`);
+        $(`#cwb-progress-${module}`).text(`${MODULE_LABELS[module]}：当前正文连续核验至第 ${status.through} 楼\n已核验：${displayRanges(status.completed)}\n未确认/待补：${displayRanges(status.missing)}\n当前失败：${displayRanges(status.failed)}\n旧记录已保存（非当前正文核验）：${displayRanges(status.legacyCompleted)}\n旧失败记录：${displayRanges(status.legacyFailed)}${status.legacyError ? `\n旧错误：${status.legacyError}` : ''}${status.latest?.error ? `\n最近错误：${status.latest.error}` : ''}`);
     }
     return progress;
 }

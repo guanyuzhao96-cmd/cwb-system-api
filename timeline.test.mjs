@@ -1,4 +1,4 @@
-import { MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress } from './module-progress.mjs';
+import { MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { mergeRelationships } from './relationship-utils.mjs';
 import { test } from 'node:test';
@@ -18,7 +18,7 @@ function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     for (const entry of Object.values(data.entries)) entry.key = entry.key?.map(key => key === 'chat' ? 'CWB:角色卡:Test.png' : key === 'other' ? 'CWB:角色卡:Other.png' : key);
     const context = vm.createContext({ crypto: webcrypto, TextEncoder, CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress, parseCustomFormat,
-        MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress,
+        MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,
         structuredClone, getRequestHeaders: () => ({}), world_names: ['main'], extension_settings: {},
@@ -26,7 +26,7 @@ function harness(entries = {}) {
         mergeRanges, parseTaggedRanges, state: { chatId: 'chat', operationOwner: null },
         getContext: () => ({ characterId: 0, characters: [{ avatar: 'Test.png', data: { extensions: { world: 'main' } } }], chat: Array.from({ length: 120 }, (_, i) => ({ mes: String(i) })) }),
         loadWorldInfo: async () => structuredClone(data),
-        saveWorldInfo: async (_, next) => { if (fail) throw Error('save failed'); data = structuredClone(next); saves++; },
+        hostSaveWorldInfo: async (_, next) => { if (fail) throw Error('save failed'); data = structuredClone(next); saves++; },
         createWorldInfoEntry: (_, next) => { const uid = Math.max(-1, ...Object.keys(next.entries).map(Number)) + 1; return next.entries[uid] = { uid }; },
     });
     const source = readFileSync(new URL('./lorebook.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, '');

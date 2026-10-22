@@ -13,6 +13,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     let invalidCombined = false, failApiRequest = false;
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized, booksByName = null;
+    let readFailures = 0, throwOnWrite = false, blockedReadBook = null;
     const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ avatar: 'Test.png', data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
@@ -38,6 +39,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         fetch: async (_url, options = {}) => {
             const name = JSON.parse(options.body ?? '{}').name;
             worldbookReads.push(name);
+            if (name === blockedReadBook) throw new TypeError('Load failed');
+            if (readFailures > 0) { readFailures--; throw new TypeError('Load failed'); }
             return { ok: true, json: async () => structuredClone(booksByName ? booksByName.get(name) : disk) };
         },
     });
@@ -73,7 +76,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const world = {
         selected_world_info: [], world_info: {}, world_names: ['主世界书'],
         loadWorldInfo: async () => structuredClone(cache),
-        saveWorldInfo: async (name, data) => { cache = structuredClone(data); if (!failWrite) { if (booksByName) booksByName.set(name, structuredClone(data)); else disk = structuredClone(data); } },
+        saveWorldInfo: async (name, data) => { if (throwOnWrite) throw new TypeError('Load failed'); cache = structuredClone(data); if (!failWrite) { if (booksByName) booksByName.set(name, structuredClone(data)); else disk = structuredClone(data); } },
         createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid }; },
     };
     const root = dirname(fileURLToPath(import.meta.url));
@@ -177,7 +180,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.profiles.failed)), []);
     assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.timeline.failed)), [[12, 15]]);
     assert.deepEqual(JSON.parse(JSON.stringify(ledgerAfterFailure.relationships.failed)), [[12, 15]]);
-    assert.ok($('#cwb-progress-timeline').text().includes('连续成功至第 12 楼'));
+    assert.ok($('#cwb-progress-timeline').text().includes('当前正文连续核验至第 12 楼'));
 
     // A 30-floor request remains one AI call and exposes a downloadable,
     // content-free diagnostic report when the system API transport fails.
@@ -332,7 +335,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.equal(available.profiles, 1, 'directory-linked profiles are included in the archive viewer and count');
     await modules.get(resolve(root, 'core.js')).namespace.refreshModuleProgress();
     assert.match($('#cwb-archive-availability').text(), /已有档案 1 条、时间线 1 条、关系 1 条/);
-    assert.equal($('#cwb-through-timeline').text(), '0 楼');
+    assert.equal($('#cwb-through-timeline').text(), '25 楼（旧）');
     assert.equal(JSON.stringify(booksByName.get('已有书')), originalExisting, 'reading existing owned records preserves their content');
 
     // Explicit selection wins even when another primary book is bound and the
@@ -364,6 +367,43 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.match(booksByName.get('角色分卷').entries[1].content, /修改后的分卷剧情/);
     assert.equal(booksByName.get('已有书').entries[1].content, '同UID的手工资料', 'viewer writes to the entry source book, not the currently selected central book');
     assert.equal(requests.length, beforeReadRequests, 'location discovery and direct persistence do not call AI');
+
+    // Same metadata shape as the supplied worldbook: Chinese one-based ledger.
+    booksByName.get('已有书').entries[12].content = JSON.stringify({ 存档版本: 3,
+        时间线: { 已保存楼层: '1-25', 失败楼层: '无' },
+        角色档案: { 已保存楼层: '无', 失败楼层: '1-25', 最近更新: { 错误: '未写入本轮资料' } },
+        角色关系: { 已保存楼层: '无', 失败楼层: '1-25' } });
+    contextData.chat = Array.from({ length: 572 }, (_, i) => ({ mes: `正文${i}` }));
+    await modules.get(resolve(root, 'core.js')).namespace.refreshModuleProgress();
+    assert.equal($('#cwb-through-timeline').text(), '25 楼（旧）');
+    assert.equal($('#cwb-gap-timeline').text(), '547 楼待补；25 楼旧记录待核验');
+    assert.match($('#cwb-progress-profiles').text(), /旧失败记录：1-25/);
+    assert.match($('#cwb-progress-profiles').text(), /旧错误：未写入本轮资料/);
+    await progressStore.recordModuleResult('timeline', 0, 9);
+    const legacyReloaded = await progressStore.getModuleProgress();
+    assert.equal(legacyReloaded.timeline.legacy.completed[0][1], 24, 'old history survives subsequent successful writes and reload');
+    await modules.get(resolve(root, 'core.js')).namespace.refreshModuleProgress();
+    assert.match($('#cwb-gap-timeline').text(), /15 楼旧记录待核验/);
+    const readsBeforeRetry = worldbookReads.length;
+    blockedReadBook = '空书';
+    readFailures = 1;
+    await progressStore.getModuleProgress();
+    blockedReadBook = null;
+    assert.equal(worldbookReads.length - readsBeforeRetry, 2, 'one transient read failure is retried once');
+    readFailures = 2;
+    await assert.rejects(progressStore.getModuleProgress(), error => {
+        const report = modules.get(resolve(root, 'error-report.js')).namespace.createErrorReport(error, error.cwbDiagnostics);
+        assert.equal(report.operation.stage, 'Worldbook read');
+        assert.equal(report.operation.requestPath, '/api/worldinfo/get');
+        assert.equal(report.operation.attempts, 2);
+        return /读取失败.*Load failed/.test(error.message);
+    });
+    const beforeFailedWrite = JSON.stringify(booksByName.get('已有书'));
+    throwOnWrite = true;
+    await assert.rejects(progressStore.recordModuleResult('timeline', 10, 24), error => error.cwbDiagnostics?.requestPath === '/api/worldinfo/edit' && /保存结果未确认/.test(error.message));
+    throwOnWrite = false;
+    assert.equal(JSON.stringify(booksByName.get('已有书')), beforeFailedWrite, 'failed persistence does not advance progress');
+    assert.equal(requests.length, beforeReadRequests, 'network handling never repeats AI generation');
 
     contextData.characters[2].data.extensions.world = '';
     booksByName.get('空书').entries[10] = structuredClone(booksByName.get('已有书').entries[10]);

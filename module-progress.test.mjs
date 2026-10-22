@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyModuleResult, moduleStatus, pendingBatches, intersectRanges, mergeModuleProgress } from './module-progress.mjs';
+import { applyModuleResult, moduleStatus, pendingBatches, intersectRanges, mergeModuleProgress, legacyModuleHistory } from './module-progress.mjs';
 
 test('a hole cannot be hidden by later success; repair closes only the selected module gap', () => {
     let progress = {};
@@ -42,4 +42,23 @@ test('refresh merges confirmed legacy coverage into partially populated module p
     assert.deepEqual(merged.timeline.failed, [[80, 99]]);
     assert.deepEqual(merged.relationships.completed, [[0, 99]]);
     assert.equal(moduleStatus(merged, 'relationships', 120).through, 100);
+});
+
+test('Chinese legacy ledger retains success and failures without completing current source floors', () => {
+    const old = { 存档版本: 3, 时间线: { 已保存楼层: '1-25', 失败楼层: '无' },
+        角色档案: { 已保存楼层: '无', 失败楼层: '1-25', 最近更新: { 错误: '未写入本轮资料' } },
+        角色关系: { 已保存楼层: '无', 失败楼层: '1-25' } };
+    const history = legacyModuleHistory(old);
+    assert.deepEqual(history.timeline.completed, [[0, 24]]);
+    assert.deepEqual(history.profiles.failed, [[0, 24]]);
+    const progress = { timeline: { completed: [], failed: [], legacy: history.timeline } };
+    const status = moduleStatus(progress, 'timeline', 572);
+    assert.equal(status.through, 0);
+    assert.equal(status.legacyThrough, 25);
+    assert.deepEqual(status.unverified, [[0, 24]]);
+    assert.ok(pendingBatches(progress, 25, 25)[0].modules.includes('timeline'), 'legacy records still require source verification');
+    progress.timeline.completed = [[0, 9]];
+    assert.deepEqual(moduleStatus(progress, 'timeline', 572).unverified, [[10, 24]]);
+    assert.deepEqual(legacyModuleHistory({ ...old, receipts: {}, legacyModules: history }), history);
+    assert.throws(() => legacyModuleHistory({ 存档版本: 3, 时间线: { 已保存楼层: '不合法' } }), /格式无效/);
 });
