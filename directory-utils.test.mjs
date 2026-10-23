@@ -14,6 +14,15 @@ test('generated directory format is read back for routing', () => {
     assert.deepEqual(namesFromDirectory('<div>姓名："周韵涵"<br>姓名: "Alice Smith"</div>'), ['周韵涵', 'Alice Smith']);
 });
 
+test('generated dynamic archives never become static directory ownership evidence', () => {
+    const names = namesFromRoleEntries([
+        { key: ['CWB:自动档案', 'CWB:角色卡:Test.png', '林清'], comment: '动态-林清', content: '[姓名]:林清' },
+        { key: ['CWB:角色路由索引', '沈雨'], comment: '沈雨' },
+        { key: ['许宁'], comment: '许宁', content: '原始人物设定' },
+    ]);
+    assert.deepEqual([...names.keys()], ['许宁']);
+});
+
 test('route lookup matches names case-insensitively and reports no match', () => {
     const routes = {
         '主世界书': { names: ['赵冠宇'], primary: true },
@@ -36,7 +45,7 @@ test('only person-shaped titles and trigger keys are used; body is ignored', () 
         { comment: '动态-赵冠宇', key: ['赵冠宇', 'CWB:自动档案', 'chat-123'], content: '' },
     ];
     const names = namesFromRoleEntries(entries);
-    assert.deepEqual([...names.keys()].sort(), ['周韵涵', '赵冠宇']);
+    assert.deepEqual([...names.keys()].sort(), ['周韵涵']);
     assert.equal(names.get('周韵涵').length, 1, 'same name in one title and trigger key counts once');
 });
 

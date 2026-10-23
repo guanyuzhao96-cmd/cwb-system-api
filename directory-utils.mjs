@@ -43,6 +43,7 @@ const keysOf = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(e
 const enabled = entry => entry?.enabled !== false && entry?.disable !== true;
 const supportKeys = new Set([
     'CWB:世界书目录', 'CWB:主角档案', 'CWB:故事时间线', 'CWB:角色档案目录', 'CWB:主角关系', 'Amily2角色总集',
+    'CWB:自动档案', 'CWB:角色路由索引', 'CWB:角色关系汇总', 'CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度',
 ]);
 
 export function namesFromRoleEntries(entries) {

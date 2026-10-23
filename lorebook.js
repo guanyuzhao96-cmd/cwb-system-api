@@ -15,20 +15,21 @@ import {
 import { state } from './state.js';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
 import { directoryContent, duplicateLines, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
+import { directoryTarget, profilePayload } from './profile-routing.mjs';
 import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges } from './update-tracker.mjs';
 
 const getKeys = entry => Array.isArray(entry?.key) ? entry.key : (Array.isArray(entry?.keys) ? entry.keys : []);
 const isEnabled = entry => entry?.enabled !== false && entry?.disable !== true;
 export function getCardArchiveKey() { return cardKey(getContext()); }
 const isCurrentCardArchive = entry => owns(entry, getCardArchiveKey());
-const PLUGIN_REFERENCE_KEYS = ['CWB:世界书目录', 'CWB:角色档案目录', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度'];
+const PLUGIN_REFERENCE_KEYS = ['CWB:世界书目录', 'CWB:角色路由索引', 'CWB:角色档案目录', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:更新状态', 'CWB:更新记录', 'CWB:模块进度'];
 const isPluginReferenceEntry = entry => getKeys(entry).some(key => PLUGIN_REFERENCE_KEYS.includes(key));
 const ALWAYS_ON_REFERENCE_KEYS = ['CWB:故事时间线', 'CWB:角色关系汇总'];
 const isAlwaysOnReferenceEntry = entry => getKeys(entry).some(key => ALWAYS_ON_REFERENCE_KEYS.includes(key));
 const GENERATED_ENTRY_TYPES = [
     ['CWB:自动档案', '角色档案'], ['CWB:主角档案', '主角档案'],
     ['CWB:故事时间线', '时间线'], ['CWB:角色关系汇总', '角色关系'],
-    ['CWB:角色档案目录', '档案目录'], ['CWB:更新状态', '更新进度'],
+    ['CWB:角色档案目录', '档案目录'], ['CWB:角色路由索引', '角色路由索引'], ['CWB:更新状态', '更新进度'],
     ['CWB:更新记录', '旧版更新记录'], ['CWB:模块进度', '旧版模块进度'],
     ['Amily2角色总集', '角色总览'],
 ];
@@ -48,8 +49,8 @@ export function getTargetWorldbook(settings) {
     return getPrimaryWorldbook();
 }
 
-let archiveLocation = null;
-export function resetArchiveLocation() { archiveLocation = null; state.routeCache = null; }
+let archiveLocation = null, directoryCacheSignature = null;
+export function resetArchiveLocation() { archiveLocation = null; state.routeCache = null; directoryCacheSignature = null; }
 
 // Candidate discovery is read-only. All central archives use this same result.
 export async function getArchiveWorldbook(settings = extension_settings?.cwb_system_api ?? {}) {
@@ -137,7 +138,7 @@ export async function generateWorldbookDirectories(onProgress = () => {}) {
         onProgress(`正在读取已激活世界书《${bookName}》中的角色条目…`);
         const entries = await getEntries(bookName);
         const names = namesFromRoleEntries(entries);
-        if (!names.size) continue;
+        if (!names.size && !entries.some(entry => getKeys(entry).includes('CWB:世界书目录'))) continue;
         plans.push({ bookName, entries, names: [...names.keys()] });
         for (const [name, sourceEntries] of names) {
             if (!occurrences.has(name)) occurrences.set(name, []);
@@ -170,28 +171,65 @@ export async function generateWorldbookDirectories(onProgress = () => {}) {
     };
 }
 
-export async function discoverWorldbookRoutes(settings = {}) {
-    const primary = getPrimaryWorldbook();
-    const result = {};
-    for (const bookName of await archiveRelatedBooks(settings, true)) {
-        const entries = await getEntries(bookName);
-        if (!entries.some(entry => getKeys(entry).includes('CWB:世界书目录'))) continue;
-        result[bookName] = { names: routeNames(entries), primary: bookName === primary };
+function directorySignature(settings) {
+    return JSON.stringify([getCardArchiveKey(), getPrimaryWorldbook(), settings.worldbookTarget,
+        settings.customWorldbook, getActiveWorldbookNames(), world_names]);
+}
+
+function savedDirectoryRoutes(data) {
+    const entry = Object.values(data.entries).find(row => isCurrentCardArchive(row) && getKeys(row).includes('CWB:角色路由索引'));
+    if (!entry) return {};
+    try { return JSON.parse(entry.content).routes ?? {}; }
+    catch { throw Error('当前角色卡的角色路由索引损坏，已停止整理；原资料保留。'); }
+}
+
+async function persistDirectoryRoutes(settings, routes) {
+    const master = await getArchiveWorldbook(settings);
+    const data = await readWorldbookFromServer(master, false);
+    const existing = Object.values(data.entries).find(row => isCurrentCardArchive(row) && getKeys(row).includes('CWB:角色路由索引'));
+    const patch = { content: JSON.stringify({ version: 1, routes }), comment: 'CWB角色目录路由索引',
+        keys: ['CWB:角色路由索引', getCardArchiveKey()], enabled: false, type: 'selective', preventRecursion: true };
+    if (existing) await patchEntries(master, [{ uid: existing.uid, ...patch }]);
+    else await createEntries(master, [patch]);
+    const stored = await readWorldbookFromServer(master, false);
+    if (!Object.values(stored.entries).some(row => isCurrentCardArchive(row) && getKeys(row).includes('CWB:角色路由索引') && row.content === patch.content)) throw Error('目录索引保存后回读不一致，未开始移动档案。');
+}
+
+async function collectDirectoryRoutes(settings, scanAll = false, onProgress = () => {}) {
+    const owner = getCardArchiveKey(), master = await getArchiveWorldbook(settings);
+    const primaryData = await readWorldbookFromServer(master, false);
+    const known = Object.keys(savedDirectoryRoutes(primaryData));
+    const books = [...new Set([master, ...referencedProfileBooks(primaryData), ...getActiveWorldbookNames(),
+        ...known.filter(book => world_names.includes(book)), ...(scanAll ? listWorldbooks() : [])])];
+    const routes = {}, snapshots = new Map(), failures = [];
+    for (const book of books) {
+        if (owner !== getCardArchiveKey()) throw Error('角色卡已切换，停止扫描。');
+        onProgress(`读取目录 ${snapshots.size + failures.length + 1}/${books.length}：《${book}》`);
+        try {
+            const data = book === master ? primaryData : await readWorldbookFromServer(book, false);
+            snapshots.set(book, data);
+            const entries = Object.values(data.entries);
+            if (entries.some(row => getKeys(row).includes('CWB:世界书目录'))) routes[book] = { names: routeNames(entries) };
+        } catch (error) {
+            if (owner !== getCardArchiveKey()) throw error;
+            failures.push({ book, error: error.message });
+        }
     }
-    state.routeCache = result;
-    return result;
+    return { routes, snapshots, failures };
+}
+
+export async function discoverWorldbookRoutes(settings = {}) {
+    const { routes, failures } = await collectDirectoryRoutes(settings);
+    // Do not retain a partial catalog as an authoritative successful cache.
+    state.routeCache = failures.length ? null : routes;
+    directoryCacheSignature = directorySignature(settings);
+    return routes;
 }
 
 async function routeWorldbook(settings, characterName) {
-    const master = await getArchiveWorldbook(settings);
-    if (settings.worldbookTarget === 'custom' || !settings.multiWorldbookRouting) return master;
-    // Dynamic archives belong to this card, independently of static NPC catalogs.
-    // Keep existing indexed volumes in place; new profiles live in the master.
-    const { entries } = await getCardArchiveEntries(settings);
-    const matches = [...new Set(entries.filter(entry => getKeys(entry).includes('CWB:自动档案')
-        && getKeys(entry).includes(sanitizeName(characterName))).map(entry => entry.bookName))];
-    if (matches.length > 1) throw Error(`角色 ${characterName} 的已有档案分散在多个分卷，停止写入以免覆盖。`);
-    return matches[0] || master;
+    const routes = state.routeCache && directoryCacheSignature === directorySignature(settings)
+        ? state.routeCache : await discoverWorldbookRoutes(settings);
+    return directoryTarget(routes, characterName, await getArchiveWorldbook(settings));
 }
 
 // Installed books are not dependencies of the selected character's archive.
@@ -207,6 +245,89 @@ async function archiveRelatedBooks(settings, includeActive = false) {
 export async function routeSummary(settings = {}) {
     const routes = await discoverWorldbookRoutes(settings);
     return Object.entries(routes).map(([book, route]) => `${book}: ${route.names.slice(0, 30).join('、') || '目录已生成，暂无角色'}`).join('\n') || '当前没有已生成的目录。';
+}
+
+function dynamicProfileName(entry) {
+    const parsed = parseCustomFormat(entry.content ?? '');
+    const name = parsed?.姓名 || getKeys(entry).find(key => !String(key).startsWith('CWB:') && !/^\d+-\d+$/.test(String(key)));
+    if (!name) throw Error(`档案 UID ${entry.uid} 缺少可确认姓名，原条目保留。`);
+    return String(name).trim();
+}
+
+/** Explicit user action: scan catalogs once, then move only this card's profiles. */
+export async function organizeCharacterProfiles(settings, onProgress = () => {}) {
+    const owner = getCardArchiveKey();
+    const assertOwner = () => { if (owner !== getCardArchiveKey()) throw Error('角色卡已切换，停止整理；已写入资料保留。'); };
+    const master = await getArchiveWorldbook(settings);
+    const { routes, snapshots, failures } = await collectDirectoryRoutes(settings, true, onProgress);
+    assertOwner();
+    await persistDirectoryRoutes(settings, routes);
+    state.routeCache = failures.length ? null : routes;
+    directoryCacheSignature = directorySignature(settings);
+    const result = { moved: 0, unchanged: 0, issues: failures.map(item => `《${item.book}》读取失败：${item.error}`) };
+    const touched = new Set();
+    const profiles = [...snapshots].flatMap(([book, data]) => Object.values(data.entries)
+        .filter(row => owns(row, owner) && getKeys(row).includes('CWB:自动档案')).map(row => ({ book, entry: structuredClone(row) })));
+    for (const { book: source, entry } of profiles) {
+        assertOwner();
+        try {
+            const name = dynamicProfileName(entry), targetBook = directoryTarget(routes, name, master);
+            if (source === targetBook) { result.unchanged++; continue; }
+            onProgress(`整理 ${name}：《${source}》→《${targetBook}》`);
+            // Re-read both sides: no stale snapshot may replace concurrent edits.
+            const sourceData = await readWorldbookFromServer(source, false);
+            const sourceRow = Object.values(sourceData.entries).find(row => Number(row.uid) === Number(entry.uid));
+            if (!sourceRow || !owns(sourceRow, owner) || profilePayload(sourceRow) !== profilePayload(entry)) throw Error(`${name} 的源档案在扫描后变化，跳过该条。`);
+            const targetData = await readWorldbookFromServer(targetBook, false);
+            const matches = Object.values(targetData.entries).filter(row => owns(row, owner) && getKeys(row).includes('CWB:自动档案') && dynamicProfileName(row) === name);
+            if (matches.length > 1 || matches.some(row => profilePayload(row) !== profilePayload(entry))) throw Error(`${name} 的目标书已有不同内容或多个档案，保留两边资料，请手动核对。`);
+            const targetRow = matches[0] || createWorldInfoEntry(targetBook, targetData);
+            if (!targetRow) throw Error(`${name} 无法创建目标条目。`);
+            if (!matches.length) {
+                const uid = targetRow.uid;
+                const targetKey = Object.keys(targetData.entries).find(key => targetData.entries[key] === targetRow);
+                if (targetKey === undefined) throw Error(`${name} 目标 UID 分配失败，源条目保留。`);
+                targetData.entries[targetKey] = { ...structuredClone(entry), uid };
+                assertOwner();
+                await saveWorldInfo(targetBook, targetData, true);
+            }
+            const verify = await readWorldbookFromServer(targetBook, false);
+            const saved = Object.values(verify.entries).find(row => Number(row.uid) === Number(targetRow.uid));
+            if (!saved || !owns(saved, owner) || profilePayload(saved) !== profilePayload(entry)) throw Error(`${name} 目标回读不一致，源条目未删除。`);
+            assertOwner();
+            // Make the destination discoverable before deleting the source.
+            await updateMasterDirectory(settings, [source, targetBook]);
+            const finalSource = await readWorldbookFromServer(source, false);
+            const sourceKey = Object.keys(finalSource.entries).find(key => Number(finalSource.entries[key].uid) === Number(entry.uid));
+            if (sourceKey === undefined || !owns(finalSource.entries[sourceKey], owner) || profilePayload(finalSource.entries[sourceKey]) !== profilePayload(entry)) throw Error(`${name} 源档案变化，未删除。`);
+            // Re-check destination immediately before the destructive half.
+            const finalTarget = await readWorldbookFromServer(targetBook, false);
+            if (!Object.values(finalTarget.entries).some(row => owns(row, owner) && getKeys(row).includes('CWB:自动档案') && profilePayload(row) === profilePayload(entry))) throw Error(`${name} 目标档案变化，源条目保留。`);
+            delete finalSource.entries[sourceKey];
+            assertOwner();
+            await saveWorldInfo(source, finalSource, true);
+            const sourceStored = await readWorldbookFromServer(source, false);
+            if (Object.values(sourceStored.entries).some(row => Number(row.uid) === Number(entry.uid))) throw Error(`${name} 源条目移除未确认，两边资料请核对。`);
+            result.moved++;
+            touched.add(source); touched.add(targetBook);
+        } catch (error) {
+            assertOwner();
+            result.issues.push(`《${source}》UID ${entry.uid}：${error.message}`);
+        }
+    }
+    // Keep the lookup index truthful even after an interrupted individual move.
+    assertOwner();
+    await updateMasterDirectory(settings, [...new Set([...profiles.map(item => item.book), ...touched])]);
+    for (const book of touched) {
+        const entries = await getEntries(book);
+        const names = [...new Set(entries.filter(row => owns(row, owner) && getKeys(row).includes('CWB:自动档案')).map(dynamicProfileName))];
+        if (names.length) await updateRosterForBook(book, names, 0, 0, true);
+        else {
+            const rosters = entries.filter(row => owns(row, owner) && getKeys(row).includes('Amily2角色总集'));
+            if (rosters.length) await patchEntries(book, rosters.map(row => ({ uid: row.uid, enabled: false })));
+        }
+    }
+    return result;
 }
 
 export async function getEntries(bookName) {
@@ -418,11 +539,12 @@ export async function saveCharacterDescription(settings, characterName, content,
     const safeName = sanitizeName(characterName);
     const floorRange = `${startFloor + 1}-${endFloor + 1}`;
     const entries = await getEntries(bookName);
-    const existing = entries.find(entry => isEnabled(entry)
-        && getKeys(entry).includes('CWB:自动档案')
+    const matches = entries.filter(entry => getKeys(entry).includes('CWB:自动档案')
         && isCurrentCardArchive(entry)
         && getKeys(entry).includes(safeName)
         && !getKeys(entry).includes('Amily2角色总集'));
+    if (matches.length > 1) throw Error(`角色 ${characterName} 的目标书存在多个动态档案，未覆盖，请先核对。`);
+    const existing = matches[0];
     const entryData = {
         comment: `动态-${safeName}`,
         content,
@@ -438,6 +560,14 @@ export async function saveCharacterDescription(settings, characterName, content,
     else {
         const depths = entries.filter(entry => isCurrentCardArchive(entry)).map(entry => Number(entry.depth)).filter(Number.isFinite);
         await createEntries(bookName, [{ ...entryData, depth: Math.max(7000, ...depths) + 1 }]);
+    }
+    // Index the first successful write to a new volume even if a later profile
+    // in the same AI batch fails. No subsequent bulk roster save is required.
+    const master = await getArchiveWorldbook(settings);
+    const masterData = await readWorldbookFromServer(master, false);
+    if (bookName !== master && !referencedProfileBooks(masterData).includes(bookName)) {
+        await verifyProfileContent(settings, characterName, content);
+        await updateMasterDirectory(settings, [bookName]);
     }
     return safeName;
 }
@@ -559,7 +689,7 @@ export async function updateRoster(settings, processedNames, startFloor, endFloo
     }
     if (!grouped.size) throw new Error('无法确定写入世界书。');
     for (const [bookName, namesForBook] of grouped) await updateRosterForBook(bookName, namesForBook, startFloor, endFloor);
-    if (settings.multiWorldbookRouting) await updateMasterDirectory(settings, [...grouped.keys()]);
+    await updateMasterDirectory(settings, [...grouped.keys()]);
 }
 
 /** Create one compact index in the current character's primary worldbook. */
@@ -606,9 +736,11 @@ export async function updateMasterDirectory(settings, updatedBooks = []) {
     };
     if (existing) await patchEntries(masterBook, [{ uid: existing.uid, ...data }]);
     else await createEntries(masterBook, [data]);
+    const verified = await getEntries(masterBook);
+    if (!verified.some(row => isCurrentCardArchive(row) && getKeys(row).includes('CWB:角色档案目录') && row.content === content)) throw Error('档案目录回读不一致，未确认目录更新。');
 }
 
-async function updateRosterForBook(bookName, processedNames, startFloor, endFloor) {
+async function updateRosterForBook(bookName, processedNames, startFloor, endFloor, replace = false) {
     const context = getContext();
     const chatId = getCardArchiveKey();
     const comment = `Amily2角色总集-${chatId}-角色总览`;
@@ -621,7 +753,7 @@ async function updateRosterForBook(bookName, processedNames, startFloor, endFloo
     if (existing) {
         for (const line of String(existing.content ?? '').split('\n')) {
             const match = line.match(/^\[([^:]+):/);
-            if (match) names.add(match[1].trim());
+            if (match && !replace) names.add(match[1].trim());
         }
         const completed = String(existing.content ?? '').match(/【前(\d+)楼角色世界书已更新完成】/);
         if (completed) oldEnd = Number(completed[1]);

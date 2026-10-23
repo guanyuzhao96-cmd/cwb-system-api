@@ -11,7 +11,7 @@ import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrat
 import { testSystemApi } from './api.js';
 import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
 import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
-import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, getProgressRecoveryCandidates, listWorldbooks, routeSummary, resetArchiveLocation } from './lorebook.js';
+import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, getProgressRecoveryCandidates, listWorldbooks, routeSummary, resetArchiveLocation, organizeCharacterProfiles } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { notify } from './utils.js';
 import { openViewer, updatePluginButton } from './viewer.js';
@@ -56,7 +56,7 @@ function saveFromUi() {
     value.enabled = $('#cwb-enabled').prop('checked');
     value.autoUpdate = $('#cwb-auto-update').prop('checked');
     value.incremental = $('#cwb-incremental').prop('checked');
-    value.multiWorldbookRouting = $('#cwb-multi-routing').prop('checked');
+    value.multiWorldbookRouting = true;
     value.threshold = Math.max(1, Number($('#cwb-threshold').val()) || 20);
     value.scanDepth = Math.max(1, Number($('#cwb-scan-depth').val()) || 6);
     value.responseLength = Math.max(0, Number($('#cwb-response-length').val()) || 0);
@@ -78,7 +78,6 @@ function loadUi() {
     $('#cwb-enabled').prop('checked', value.enabled);
     $('#cwb-auto-update').prop('checked', value.autoUpdate);
     $('#cwb-incremental').prop('checked', value.incremental);
-    $('#cwb-multi-routing').prop('checked', value.multiWorldbookRouting);
     $('#cwb-threshold').val(value.threshold);
     $('#cwb-scan-depth').val(value.scanDepth);
     $('#cwb-response-length').val(value.responseLength);
@@ -244,6 +243,18 @@ function bindUi() {
         finally { button.html(original); }
     });
     $('#cwb-open-viewer').on('click', () => openViewer(settings()));
+    $('#cwb-organize-profiles').on('click', function () {
+        runButton($(this), '整理中…', async () => {
+            const release = acquireOperationLock(state, '一键整理动态档案');
+            try {
+                const result = await organizeCharacterProfiles(settings(), message => $('#cwb-status').text(message));
+                const summary = `整理完成：已移回对应世界书 ${result.moved} 条，原位置正确 ${result.unchanged} 条，待核对 ${result.issues.length} 项。`;
+                $('#cwb-status').text(summary);
+                $('#cwb-route-status').text([summary, ...result.issues].join('\n'));
+                notify(result.issues.length ? 'warning' : 'success', summary);
+            } finally { release(); }
+        });
+    });
     $('#cwb-convert-format').on('click', function () {
         runButton($(this), '转换中…', async () => {
             const release = acquireOperationLock(state, '旧格式转换');

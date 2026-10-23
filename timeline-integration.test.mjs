@@ -14,6 +14,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized, booksByName = null;
     let readFailures = 0, readTimeouts = 0, throwOnWrite = false, blockedReadBook = null;
+    let blockedWriteBook = null, ignoredWriteBook = null, protectedSourceUid = null;
     const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ avatar: 'Test.png', data: { extensions: { world: '主世界书' } } }], chat: [] };
     const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
     function $(key) {
@@ -82,8 +83,12 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const world = {
         selected_world_info: [], world_info: {}, world_names: ['主世界书'],
         loadWorldInfo: async () => structuredClone(cache),
-        saveWorldInfo: async (name, data) => { if (throwOnWrite) throw new TypeError('Load failed'); cache = structuredClone(data); if (!failWrite) { if (booksByName) booksByName.set(name, structuredClone(data)); else disk = structuredClone(data); } },
-        createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid }; },
+        saveWorldInfo: async (name, data) => {
+            if (throwOnWrite || name === blockedWriteBook || (name === '已有书' && protectedSourceUid !== null && !data.entries[protectedSourceUid])) throw new TypeError('Load failed');
+            cache = structuredClone(data);
+            if (!failWrite && name !== ignoredWriteBook) { if (booksByName) booksByName.set(name, structuredClone(data)); else disk = structuredClone(data); }
+        },
+        createWorldInfoEntry: (_, data) => { const uid = Math.max(-1, ...Object.keys(data.entries).map(Number)) + 1; return data.entries[uid] = { uid, nativeCreationDefault: true }; },
     };
     const root = dirname(fileURLToPath(import.meta.url));
     async function load(id) {
@@ -326,6 +331,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         13: { uid: 13, key: ['CWB:角色档案目录', 'CWB:角色卡:Test2.png'], content: '[角色甲] → 世界书《角色分卷》中的「动态-角色甲」' },
     };
     booksByName.get('角色分卷').entries[1] = { uid: 1, key: ['CWB:自动档案', 'CWB:角色卡:Test2.png', '角色甲'], content: '[姓名]:角色甲\n[剧情.0]:已有的重要剧情' };
+    booksByName.get('角色分卷').entries[2] = { uid: 2, key: ['CWB:世界书目录'], content: '【小故事线目录】\n姓名: "角色甲"' };
     booksByName.get('其他卡书').entries[10] = { uid: 10, key: ['CWB:故事时间线', 'CWB:角色卡:Other.png'], content: '其他卡的资料' };
     extension_settings.cwb_system_api.worldbookTarget = 'primary';
     progressStore.resetArchiveLocation();
@@ -364,7 +370,8 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.equal(Object.values(booksByName.get('空书').entries).length, 0, 'primary book must not receive accidental writes');
     assert.equal(booksByName.get('其他卡书').entries[10].content, '其他卡的资料');
     assert.ok(Object.values(booksByName.get('已有书').entries).some(entry => entry.key.includes('CWB:主角档案')));
-    assert.ok(Object.values(booksByName.get('已有书').entries).some(entry => entry.key.includes('CWB:自动档案')));
+    assert.ok(!Object.values(booksByName.get('已有书').entries).some(entry => entry.key.includes('CWB:自动档案')));
+    assert.match(booksByName.get('角色分卷').entries[1].content, /角色关键剧情/);
     assert.equal((await progressStore.getCardArchiveEntries()).entries.some(entry => entry.bookName === '角色分卷'), true);
     booksByName.get('已有书').entries[1] = { uid: 1, key: ['手工'], content: '同UID的手工资料' };
     await modules.get(resolve(root, 'viewer.js')).namespace.openViewer(extension_settings.cwb_system_api);
@@ -403,6 +410,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     readTimeouts = 2;
     await assert.rejects(progressStore.getModuleProgress(), error => error.cwbDiagnostics.attempts === 2 && /超过60秒/.test(error.message));
     // A stale installed-book name must never become a dependency of this card.
+    contextData.characters[2].data.extensions.world = '已有书';
     blockedReadBook = '空书';
     const relatedReadStart = worldbookReads.length;
     const scopedSettings = { worldbookTarget: 'custom', customWorldbook: '已有书', multiWorldbookRouting: true, incremental: true };
@@ -413,15 +421,13 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     await progressStore.manageChatEntries(scopedSettings);
     assert.ok(!worldbookReads.slice(relatedReadStart).includes('空书'), 'unrelated unreadable installed book is never fetched');
     blockedReadBook = null;
-    // Primary mode also writes new profiles without static NPC directories.
+    // No directory is an explicit error, never an implicit master-book write.
     contextData.characters[2].data.extensions.world = '已有书';
     progressStore.resetArchiveLocation();
     blockedReadBook = '空书';
     const primarySettings = { ...scopedSettings, worldbookTarget: 'primary' };
-    await progressStore.saveCharacterDescription(primarySettings, '新角色', '[姓名]:新角色\n[剧情.0]:2025-09-01｜关键剧情', 0, 24);
-    await progressStore.verifyProfileContent(primarySettings, '新角色', '[姓名]:新角色\n[剧情.0]:2025-09-01｜关键剧情');
-    await progressStore.updateRoster(primarySettings, ['新角色'], 0, 24);
-    assert.ok(Object.values(booksByName.get('已有书').entries).some(entry => entry.key?.includes('新角色')));
+    await assert.rejects(progressStore.saveCharacterDescription(primarySettings, '新角色', '[姓名]:新角色\n[剧情.0]:2025-09-01｜关键剧情', 0, 24), /未匹配到世界书目录/);
+    assert.ok(!Object.values(booksByName.get('已有书').entries).some(entry => entry.key?.includes('新角色')));
     blockedReadBook = null;
     readFailures = 2;
     await assert.rejects(progressStore.getModuleProgress(), error => {
@@ -450,25 +456,93 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const utils = modules.get(resolve(root, 'utils.js')).namespace;
     const suppliedParts = parser.parseCombinedParts(suppliedReply);
     assert.equal(suppliedParts.profiles.value.length, 9);
+    const ordinaryNames = suppliedParts.profiles.value.map(block => utils.parseCustomFormat(block)).filter(row => row.档案类型 !== '主角').map(row => row.姓名);
+    booksByName.get('角色分卷').entries[2].content += '\n' + ordinaryNames.map(name => `姓名: "${name}"`).join('\n');
+    progressStore.resetArchiveLocation();
     const writesBeforeBatch = requests.length;
     blockedReadBook = '空书';
     await modules.get(resolve(root, 'core.js')).namespace.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true });
     assert.equal(requests.length - writesBeforeBatch, 1);
     for (const block of suppliedParts.profiles.value) {
         const name = utils.parseCustomFormat(block).姓名;
-        assert.ok(Object.values(booksByName.get('已有书').entries).some(entry => entry.key?.includes(name) && entry.content.includes('[剧情.0]')), `profile persisted: ${name}`);
+        const target = utils.parseCustomFormat(block).档案类型 === '主角' ? '已有书' : '角色分卷';
+        assert.ok(Object.values(booksByName.get(target).entries).some(entry => entry.key?.includes(name) && entry.content.includes('[剧情.0]')), `profile persisted in ${target}: ${name}`);
     }
     const savedBatchProgress = await progressStore.getModuleProgress();
     for (const module of ['profiles', 'timeline', 'relationships']) assert.equal(savedBatchProgress[module].completed[0][1], 24);
     throwOnWrite = true;
     await assert.rejects(modules.get(resolve(root, 'core.js')).namespace.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true, modules: ['profiles'] }), error =>
         error.cwbDiagnostics.stage === 'Worldbook write'
-        && error.cwbDiagnostics.worldbookName === '已有书'
+        && error.cwbDiagnostics.worldbookName === '角色分卷'
         && error.cwbDiagnostics.requestPath === '/api/worldinfo/edit'
         && error.stack.includes('Caused by:'));
     throwOnWrite = false;
     suppliedReply = null;
     blockedReadBook = null;
+
+    const ownerKey = 'CWB:角色卡:Test2.png';
+    const makeProfile = (uid, name, content = '原始关键剧情') => ({ uid, key: ['CWB:自动档案', ownerKey, name, '1-25'],
+        comment: `动态-${name}`, content: `[姓名]:${name}\n[剧情.0]:${content}`, disable: false, constant: false,
+        extensions: { preserved: { custom: true } }, order: 123, depth: 7001 });
+    booksByName.get('角色分卷').entries[2].content += '\n姓名: "迁移甲"\n姓名: "冲突乙"\n姓名: "重试丁"';
+    booksByName.get('已有书').entries[1000] = makeProfile(1000, '迁移甲');
+    booksByName.get('已有书').entries[1001] = makeProfile(1001, '冲突乙');
+    booksByName.get('角色分卷').entries[1002] = makeProfile(1002, '冲突乙', '目标已有不同剧情');
+    booksByName.get('已有书').entries[1003] = makeProfile(1003, '未登记丙');
+    booksByName.get('已有书').entries[1004] = { ...makeProfile(1004, '迁移甲'), key: ['CWB:自动档案', 'CWB:角色卡:Other.png', '迁移甲'] };
+    const protectedEntries = [1001, 1003, 1004].map(uid => JSON.stringify(booksByName.get('已有书').entries[uid]));
+    const beforeOrganizeAi = requests.length;
+    const mainRecords = () => JSON.stringify(Object.values(booksByName.get('已有书').entries).filter(entry =>
+        ['CWB:主角档案', 'CWB:故事时间线', 'CWB:角色关系汇总', 'CWB:更新状态'].some(key => entry.key?.includes(key))));
+    const protectedMainRecords = mainRecords();
+    blockedReadBook = '空书';
+    const organized = await progressStore.organizeCharacterProfiles(scopedSettings);
+    assert.equal(organized.moved, 1, JSON.stringify(organized.issues));
+    assert.ok(organized.issues.some(issue => issue.includes('冲突乙')));
+    assert.ok(organized.issues.some(issue => issue.includes('未登记丙')));
+    assert.ok(!booksByName.get('已有书').entries[1000]);
+    const moved = Object.values(booksByName.get('角色分卷').entries).find(entry => entry.key?.includes('迁移甲'));
+    assert.equal(JSON.stringify(moved.extensions), JSON.stringify({ preserved: { custom: true } }));
+    assert.equal(moved.order, 123);
+    assert.deepEqual([1001, 1003, 1004].map(uid => JSON.stringify(booksByName.get('已有书').entries[uid])), protectedEntries);
+    assert.equal((await progressStore.organizeCharacterProfiles(scopedSettings)).moved, 0, 'second click does not duplicate or remigrate');
+    assert.equal(requests.length, beforeOrganizeAi, 'organizing never calls AI');
+    assert.equal(mainRecords(), protectedMainRecords, 'organizing preserves protagonist, timeline, relationships and progress');
+    assert.equal(typeof $('#cwb-organize-profiles').handlers.click, 'function');
+
+    // Failed destination save/readback never removes the source.
+    booksByName.get('已有书').entries[1005] = makeProfile(1005, '重试丁');
+    blockedWriteBook = '角色分卷';
+    const failedMove = await progressStore.organizeCharacterProfiles(scopedSettings);
+    assert.equal(failedMove.moved, 0);
+    assert.ok(booksByName.get('已有书').entries[1005]);
+    blockedWriteBook = null;
+    ignoredWriteBook = '角色分卷';
+    const unconfirmed = await progressStore.organizeCharacterProfiles(scopedSettings);
+    assert.equal(unconfirmed.moved, 0);
+    assert.ok(unconfirmed.issues.some(issue => issue.includes('目标回读不一致')));
+    assert.ok(booksByName.get('已有书').entries[1005]);
+    ignoredWriteBook = null;
+    // An interruption after copying retains both sides; retry removes only the
+    // identical source after re-verification and does not create another copy.
+    protectedSourceUid = 1005;
+    await progressStore.organizeCharacterProfiles(scopedSettings);
+    assert.ok(booksByName.get('已有书').entries[1005]);
+    assert.equal(Object.values(booksByName.get('角色分卷').entries).filter(entry => entry.key?.includes('重试丁')).length, 1);
+    protectedSourceUid = null;
+    assert.equal((await progressStore.organizeCharacterProfiles(scopedSettings)).moved, 1);
+    assert.ok(!booksByName.get('已有书').entries[1005]);
+    assert.equal(Object.values(booksByName.get('角色分卷').entries).filter(entry => entry.key?.includes('重试丁')).length, 1);
+    blockedReadBook = null;
+    booksByName.get('角色分卷').entries[2].content += '\n姓名: "按钮角色"';
+    booksByName.get('已有书').entries[1006] = makeProfile(1006, '按钮角色');
+    const organizeButton = $('#cwb-organize-profiles');
+    organizeButton.handlers.click.call(organizeButton);
+    for (let i = 0; i < 200 && organizeButton.prop('disabled'); i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(organizeButton.prop('disabled'), false);
+    assert.ok(!booksByName.get('已有书').entries[1006], 'one-click UI performs the move');
+    assert.ok(Object.values(booksByName.get('角色分卷').entries).some(entry => entry.key?.includes('按钮角色')));
+    assert.equal(requests.length, beforeOrganizeAi);
 
     contextData.characters[2].data.extensions.world = '';
     booksByName.get('空书').entries[10] = structuredClone(booksByName.get('已有书').entries[10]);

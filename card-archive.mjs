@@ -36,6 +36,9 @@ export function migrateOwnership(data, { owner, exclusivePrimary, legacyOwners =
         if (!marker) continue;
         const owners = keys.filter(key => String(key).startsWith(CARD_PREFIX));
         if (owners.length && !owns(entry, owner)) continue;
+        // An explicit card owner is already authoritative. Reordering its keys
+        // on read would mutate verified profiles during a cross-book move.
+        if (owns(entry, owner)) continue;
         if (!owners.length && !exclusivePrimary && !keys.some(key => legacyOwners.includes(key))) continue;
         const name = ['CWB:自动档案', 'CWB:主角档案'].includes(marker)
             ? String(entry.content ?? '').match(/\[(?:姓名|name)\]\s*[:：]\s*([^\n]+)/)?.[1]?.trim() : null;

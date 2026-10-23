@@ -8,7 +8,7 @@
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
   "version": "0.12.4",
-  "description": "0.12.4角色卡存档版修订5：档案读取与路由限制于当前存档关联书，保留原始保存异常与请求诊断。",
+  "description": "0.12.4角色卡存档版修订6：普通角色动态档案按世界书目录保存；新增一键整理，目标回读核对后移除源档案。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/guanyuzhao96-cmd/cwb-system-api"
 }

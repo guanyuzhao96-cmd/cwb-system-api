@@ -6,7 +6,7 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订5</span><h2>角色卡世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订6</span><h2>角色卡世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
@@ -23,6 +23,7 @@
                 <button id="cwb-batch-update" class="menu_button cwb-primary"><i class="fa-solid fa-layer-group" aria-hidden="true"></i> 补齐缺漏</button>
                 <button id="cwb-manual-update" class="menu_button"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 更新最近楼层</button>
                 <button id="cwb-open-viewer" class="menu_button"><i class="fa-solid fa-address-card" aria-hidden="true"></i> 查看档案</button>
+                <button id="cwb-organize-profiles" class="menu_button">一键整理动态档案</button>
             </div>
             <div class="cwb-auto-bar">
                 <label class="cwb-option"><input id="cwb-auto-update" type="checkbox"><span><b>自动更新</b><small>达到楼层数后检查并补齐</small></span></label>
@@ -84,9 +85,9 @@
                         <label>最大回复 Token<input id="cwb-response-length" class="text_pole" type="number" min="0" value="0"></label>
                         </div>
                         <label class="cwb-option"><input id="cwb-incremental" type="checkbox"> 增量融合旧档案</label>
-                        <label class="cwb-option"><input id="cwb-multi-routing" type="checkbox"> 保留已有档案分卷位置（新档案写入当前存档）</label>
+                        <p class="cwb-help">普通角色动态档案按姓名匹配各自世界书目录；主角、时间线、关系及进度保存在主存档。无匹配或同名冲突时保留原资料。</p>
                         <div class="cwb-grid cwb-target-grid">
-                            <label>写入目标
+                            <label>主存档位置
                                 <select id="cwb-worldbook-target" class="text_pole">
                                     <option value="primary">自动定位角色卡已有存档</option>
                                     <option value="custom">指定世界书</option>
@@ -106,6 +107,7 @@
                             <button id="cwb-generate-directories" class="menu_button">扫描并生成目录</button>
                             <button id="cwb-scan-routes" class="menu_button">查看已有目录</button>
                         </div>
+                        <p class="cwb-help">整理会扫描已有世界书目录，将当前角色卡放错位置的普通角色档案移回对应书。目标写入并回读核对后才移除源条目；内容冲突项保留并列出。不调用 AI，不修改手工设定。</p>
                         <pre id="cwb-route-status" class="cwb-route-status" aria-live="polite">尚未扫描</pre>
                     </div>
                     <div class="cwb-subsection">

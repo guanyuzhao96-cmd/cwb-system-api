@@ -47,6 +47,13 @@ test('shared books never absorb foreign or ambiguous owners', () => {
     assert.equal(data.entries[3].key.length, 3);
 });
 
+test('already card-owned profiles retain custom keys and metadata on read', () => {
+    const data = { entries: { 7: { uid: 7, key: ['CWB:自动档案', owner, '林清', '1-25', '自定关键词'], content: '[姓名]:林清', extensions: { custom: true } } } };
+    const original = structuredClone(data);
+    assert.deepEqual(migrateOwnership(data, { owner, exclusivePrimary: true }), []);
+    assert.deepEqual(data, original);
+});
+
 test('source receipts survive copy and append; changed prefixes and distinct chats have gaps', async () => {
     const chat = [{ mes: '第一件事' }, { mes: '第二件事' }];
     const hashes = await sourceHashes(chat, digest);
