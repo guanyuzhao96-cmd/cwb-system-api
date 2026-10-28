@@ -1,12 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+    directoryBooks,
     directoryContent,
     duplicateLines,
     findRoutedBook,
     namesFromDirectory,
     namesFromRoleEntries,
 } from './directory-utils.mjs';
+
+test('directory exclusions match complete book names and preserve the remaining scan order', () => {
+    assert.deepEqual(directoryBooks(['人物书', '功能书', '功能书扩展', '人物书'], ['功能书']), ['人物书', '功能书扩展']);
+    assert.deepEqual(directoryBooks(['人物书'], undefined), ['人物书']);
+    assert.deepEqual(directoryBooks(['人物书'], ['人物书']), []);
+});
 
 test('generated directory format is read back for routing', () => {
     const content = directoryContent(['周韵涵', 'Alice Smith']);

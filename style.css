@@ -122,3 +122,4 @@
 @media(prefers-reduced-motion:no-preference) {
     .cwb-panel .menu_button, .cwb-progress-tile { transition:background-color .15s,border-color .15s; }
 }
+.cwb-panel .cwb-excluded-books { width:100%; min-height:150px; }

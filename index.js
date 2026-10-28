@@ -25,6 +25,7 @@ const defaults = {
     responseLength: 0,
     worldbookTarget: 'primary',
     customWorldbook: '',
+    excludedWorldbooks: [],
     multiWorldbookRouting: true,
     worldbookRoutes: {},
     breakPrompt: cwbCompleteDefaultSettings.cwb_break_armor_prompt,
@@ -62,6 +63,8 @@ function saveFromUi() {
     value.responseLength = Math.max(0, Number($('#cwb-response-length').val()) || 0);
     value.worldbookTarget = $('#cwb-worldbook-target').val();
     value.customWorldbook = $('#cwb-custom-worldbook').val() || '';
+    const excluded = $('#cwb-excluded-worldbooks').val();
+    value.excludedWorldbooks = Array.isArray(excluded) ? [...new Set(excluded)] : [];
     value.breakPrompt = $('#cwb-break-prompt').val();
     value.fullPrompt = $('#cwb-full-prompt').val();
     value.incrementalPrompt = $('#cwb-incremental-prompt').val();
@@ -86,6 +89,11 @@ function loadUi() {
     select.append('<option value="">请选择</option>');
     listWorldbooks().forEach(name => select.append($('<option>').val(name).text(name)));
     select.val(value.customWorldbook);
+    const excludedSelect = $('#cwb-excluded-worldbooks').empty();
+    const excluded = Array.isArray(value.excludedWorldbooks) ? value.excludedWorldbooks.filter(name => typeof name === 'string') : [];
+    const available = listWorldbooks();
+    [...new Set([...available, ...excluded])].forEach(name => excludedSelect.append($('<option>').val(name).text(available.includes(name) ? name : `${name}（当前未找到）`)));
+    excludedSelect.val(excluded);
     $('#cwb-break-prompt').val(value.breakPrompt);
     $('#cwb-full-prompt').val(value.fullPrompt);
     $('#cwb-incremental-prompt').val(value.incrementalPrompt);
@@ -291,6 +299,7 @@ function bindUi() {
                 $('#cwb-route-status').text('正在读取当前激活的世界书…');
                 const result = await generateWorldbookDirectories(message => $('#cwb-route-status').text(message));
                 const lines = [`已扫描激活世界书：${result.activeBooks.join('、')}`];
+                if (result.excludedBooks.length) lines.push(`按设置排除：${result.excludedBooks.join('、')}`);
                 if (result.generated.length) lines.push(`已生成目录：${result.generated.map(item => `${item.bookName}（${item.count}名）`).join('；')}`);
                 if (result.skippedBooks.length) lines.push(`没有识别到角色条目，未生成目录：${result.skippedBooks.join('、')}`);
                 if (result.duplicates.length) lines.push('重复角色（未写入目录，请手动处理）：', ...result.duplicates);

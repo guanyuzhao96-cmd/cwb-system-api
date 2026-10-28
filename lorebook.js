@@ -14,7 +14,7 @@ import {
 } from '/scripts/world-info.js';
 import { state } from './state.js';
 import { notify, parseCustomFormat, sanitizeName } from './utils.js';
-import { directoryContent, duplicateLines, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
+import { directoryBooks, directoryContent, duplicateLines, namesFromDirectory, namesFromRoleEntries } from './directory-utils.mjs';
 import { directoryTarget, profilePayload } from './profile-routing.mjs';
 import { mergeRanges, missingRanges, overlappingRanges, parseTaggedRanges } from './update-tracker.mjs';
 
@@ -129,9 +129,10 @@ function getActiveWorldbookNames() {
     return [...active].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
-export async function generateWorldbookDirectories(onProgress = () => {}) {
-    const targetBooks = getActiveWorldbookNames();
-    if (!targetBooks.length) throw new Error('当前没有已激活的世界书。请检查全局选择、当前角色、当前聊天或当前 Persona 的世界书绑定。');
+export async function generateWorldbookDirectories(onProgress = () => {}, settings = extension_settings?.cwb_system_api ?? {}) {
+    const active = getActiveWorldbookNames();
+    const targetBooks = directoryBooks(active, settings.excludedWorldbooks);
+    if (!targetBooks.length) throw new Error('没有可扫描的世界书：请检查激活绑定和“排除世界书”设置。');
     const plans = [];
     const occurrences = new Map();
     for (const bookName of targetBooks) {
@@ -165,6 +166,7 @@ export async function generateWorldbookDirectories(onProgress = () => {}) {
     state.routeCache = null;
     return {
         activeBooks: targetBooks,
+        excludedBooks: active.filter(book => !targetBooks.includes(book)),
         generated,
         skippedBooks: targetBooks.filter(bookName => !generated.some(item => item.bookName === bookName)),
         duplicates: duplicateLines(duplicates),
@@ -173,7 +175,7 @@ export async function generateWorldbookDirectories(onProgress = () => {}) {
 
 function directorySignature(settings) {
     return JSON.stringify([getCardArchiveKey(), getPrimaryWorldbook(), settings.worldbookTarget,
-        settings.customWorldbook, getActiveWorldbookNames(), world_names]);
+        settings.customWorldbook, getActiveWorldbookNames(), world_names, settings.excludedWorldbooks]);
 }
 
 function savedDirectoryRoutes(data) {
@@ -199,8 +201,8 @@ async function collectDirectoryRoutes(settings, scanAll = false, onProgress = ()
     const owner = getCardArchiveKey(), master = await getArchiveWorldbook(settings);
     const primaryData = await readWorldbookFromServer(master, false);
     const known = Object.keys(savedDirectoryRoutes(primaryData));
-    const books = [...new Set([master, ...referencedProfileBooks(primaryData), ...getActiveWorldbookNames(),
-        ...known.filter(book => world_names.includes(book)), ...(scanAll ? listWorldbooks() : [])])];
+    const books = directoryBooks([master, ...referencedProfileBooks(primaryData), ...getActiveWorldbookNames(),
+        ...known.filter(book => world_names.includes(book)), ...(scanAll ? listWorldbooks() : [])], settings.excludedWorldbooks);
     const routes = {}, snapshots = new Map(), failures = [];
     for (const book of books) {
         if (owner !== getCardArchiveKey()) throw Error('角色卡已切换，停止扫描。');

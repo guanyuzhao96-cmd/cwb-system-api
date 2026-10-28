@@ -6,7 +6,7 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订6</span><h2>角色卡世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订7</span><h2>角色卡世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
@@ -102,6 +102,9 @@
                     </div>
                     <div class="cwb-subsection">
                         <h3>目录管理</h3>
+                        <label for="cwb-excluded-worldbooks">排除世界书（可多选）</label>
+                        <select id="cwb-excluded-worldbooks" class="text_pole cwb-excluded-books" multiple size="6" aria-describedby="cwb-excluded-books-help"></select>
+                        <p id="cwb-excluded-books-help" class="cwb-help">选中的书不参与目录生成、角色归属匹配和一键整理扫描。设置自动保存，取消选择后恢复扫描。已有目录和档案保留；主存档读写、已有档案查看不受影响。</p>
                         <p class="cwb-help">扫描已激活世界书中的角色标题和关键词，生成目录；重复角色会列出并跳过。</p>
                         <div class="cwb-secondary-actions">
                             <button id="cwb-generate-directories" class="menu_button">扫描并生成目录</button>

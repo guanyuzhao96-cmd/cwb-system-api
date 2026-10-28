@@ -1,3 +1,8 @@
+export function directoryBooks(names, excluded = []) {
+    const blocked = new Set(Array.isArray(excluded) ? excluded : []);
+    return [...new Set(names)].filter(name => !blocked.has(name));
+}
+
 export function namesFromDirectory(content) {
     const text = String(content ?? '')
         .replace(/<\s*br\s*\/?>/gi, '\n')

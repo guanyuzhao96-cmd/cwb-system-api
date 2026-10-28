@@ -16,7 +16,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     let readFailures = 0, readTimeouts = 0, throwOnWrite = false, blockedReadBook = null;
     let blockedWriteBook = null, ignoredWriteBook = null, protectedSourceUid = null;
     const contextData = { chatId: 'integration-chat', chatMetadata: { integrity: 'stable-integration-chat' }, characterId: 0, name1: '主角', characters: [{ avatar: 'Test.png', data: { extensions: { world: '主世界书' } } }], chat: [] };
-    const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词' } };
+    const extension_settings = { cwb_system_api: { fullPrompt: '旧的自定义全量提示词', incrementalPrompt: '旧的自定义增量提示词', timelineIncrementalPrompt: '旧自定义时间线提示词', excludedWorldbooks: ['以前排除的功能书'] } };
     function $(key) {
         if (typeof key === 'object') return key;
         if (!nodes.has(key)) nodes.set(key, {
@@ -100,6 +100,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         return mod;
     }
     const index = await load(resolve(root, 'index.js')); await index.link((specifier, parent) => load(specifier.startsWith('/') ? specifier : resolve(dirname(parent.identifier), specifier))); await index.evaluate(); await initialized();
+    assert.equal($('#cwb-excluded-worldbooks').val().join(','), '以前排除的功能书', 'saved exclusions restore even if the book is temporarily absent');
     for (const key of ['fullPrompt', 'incrementalPrompt']) {
         assert.ok(extension_settings.cwb_system_api[key].startsWith('旧的自定义'));
         assert.ok(extension_settings.cwb_system_api[key].includes('CWB角色档案整理规则'));
@@ -233,7 +234,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '自动阈值新剧情' })));
     const beforeAuto = requests.length;
     modules.get(resolve(root, 'core.js')).namespace.maybeAutoUpdate({ ...batchSettings, enabled: true, autoUpdate: true });
-    await new Promise(resolve => setTimeout(resolve, 1350));
+    const autoState = modules.get(resolve(root, 'state.js')).namespace.state;
+    for (let i = 0; i < 500; i++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        if (requests.length > beforeAuto && !autoState.operationOwner) break;
+    }
     assert.equal(requests.length - beforeAuto, 1, 'automatic threshold update uses one combined call and skips completed floors');
     const progressStore = modules.get(resolve(root, 'lorebook.js')).namespace;
     const owner = 'CWB:角色卡:Test.png';
@@ -543,6 +548,42 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     assert.ok(!booksByName.get('已有书').entries[1006], 'one-click UI performs the move');
     assert.ok(Object.values(booksByName.get('角色分卷').entries).some(entry => entry.key?.includes('按钮角色')));
     assert.equal(requests.length, beforeOrganizeAi);
+
+    // A functional book is excluded even when active and in an old saved index.
+    world.world_names.push('功能书');
+    world.selected_world_info.push('功能书', '角色分卷');
+    booksByName.set('功能书', { entries: {
+        0: { uid: 0, key: ['CWB:世界书目录'], content: '姓名: "角色甲"\n姓名: "排除角色"' },
+        1: makeProfile(1, '排除角色'),
+    } });
+    const savedIndex = Object.values(booksByName.get('已有书').entries).find(entry => entry.key?.includes('CWB:角色路由索引'));
+    const storedIndex = JSON.parse(savedIndex.content);
+    storedIndex.routes['功能书'] = { names: ['角色甲', '排除角色'] };
+    savedIndex.content = JSON.stringify(storedIndex);
+    assert.ok((await progressStore.discoverWorldbookRoutes(scopedSettings))['功能书'], 'prime the cache before excluding');
+    const functionalBefore = JSON.stringify(booksByName.get('功能书'));
+    const exclusions = { ...scopedSettings, excludedWorldbooks: ['功能书'] };
+    blockedReadBook = '功能书';
+    const exclusionReads = worldbookReads.length;
+    await progressStore.saveCharacterDescription(exclusions, '角色甲', '[姓名]:角色甲\n[剧情.0]:只更新角色所属书', 0, 24);
+    await assert.rejects(progressStore.saveCharacterDescription(exclusions, '排除角色', '[姓名]:排除角色\n[剧情.0]:不应保存', 0, 24), /未匹配到世界书目录/);
+    await progressStore.organizeCharacterProfiles(exclusions);
+    const generated = await progressStore.generateWorldbookDirectories(() => {}, exclusions);
+    assert.ok(generated.excludedBooks.includes('功能书'));
+    assert.ok(!worldbookReads.slice(exclusionReads).includes('功能书'), 'excluded books are never fetched by any catalog scan');
+    assert.equal(JSON.stringify(booksByName.get('功能书')), functionalBefore, 'existing catalog and archive stay untouched');
+    assert.equal(requests.length, beforeOrganizeAi, 'exclusion and scanning never call AI');
+    const beforeEmptyScan = worldbookReads.length;
+    await assert.rejects(progressStore.generateWorldbookDirectories(() => {}, { ...scopedSettings, excludedWorldbooks: [...world.world_names] }), /没有可扫描的世界书/);
+    assert.equal(worldbookReads.length, beforeEmptyScan, 'excluding all active books stops before any read or write');
+    blockedReadBook = null;
+    $('#cwb-excluded-worldbooks').val(['功能书']);
+    $('#cwb-system-settings').handlers['input change']();
+    assert.equal(extension_settings.cwb_system_api.excludedWorldbooks.join(','), '功能书', 'UI selection persists');
+    $('#cwb-excluded-worldbooks').val([]);
+    $('#cwb-system-settings').handlers['input change']();
+    assert.equal(extension_settings.cwb_system_api.excludedWorldbooks.length, 0, 'clearing the multi-select restores scanning');
+    assert.ok((await progressStore.discoverWorldbookRoutes(extension_settings.cwb_system_api))['功能书'], 'cleared exclusions allow catalog discovery again');
 
     contextData.characters[2].data.extensions.world = '';
     booksByName.get('空书').entries[10] = structuredClone(booksByName.get('已有书').entries[10]);
