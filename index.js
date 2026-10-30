@@ -10,7 +10,7 @@ import {
 import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt, ensureProfilePromptRules, ensureTimelinePromptRules } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
-import { batchUpdate, maybeAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
+import { batchUpdate, maybeAutoUpdate, cancelAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
 import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, getProgressRecoveryCandidates, listWorldbooks, routeSummary, resetArchiveLocation, organizeCharacterProfiles } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
 import { notify } from './utils.js';
@@ -54,6 +54,8 @@ function settings() {
 
 function saveFromUi() {
     const value = settings();
+    const previousAuto = value.enabled && value.autoUpdate;
+    const previousThreshold = value.threshold;
     value.enabled = $('#cwb-enabled').prop('checked');
     value.autoUpdate = $('#cwb-auto-update').prop('checked');
     value.incremental = $('#cwb-incremental').prop('checked');
@@ -74,6 +76,8 @@ function saveFromUi() {
     saveSettingsDebounced();
     $('#cwb-custom-worldbook-wrap').toggle(value.worldbookTarget === 'custom');
     updatePluginButton();
+    if (!value.enabled || !value.autoUpdate) maybeAutoUpdate(settings);
+    else if (!previousAuto || previousThreshold !== value.threshold) maybeAutoUpdate(settings);
 }
 
 function loadUi() {
@@ -319,8 +323,18 @@ async function init() {
     bindUi();
     refreshChatState();
     await onChatChanged(settings()).catch(error => console.warn('[CWB] 初始化聊天状态失败', error));
-    eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(() => onChatChanged(settings()).catch(console.error), 200));
-    eventSource.on(event_types.MESSAGE_RECEIVED, () => maybeAutoUpdate(settings()));
+    eventSource.on(event_types.CHAT_CHANGED, () => {
+        cancelAutoUpdate();
+        setTimeout(async () => {
+            try { await onChatChanged(settings()); maybeAutoUpdate(settings); }
+            catch (error) { console.error(error); }
+        }, 200);
+    });
+    eventSource.on(event_types.MESSAGE_RECEIVED, () => maybeAutoUpdate(settings));
+    // Verified against SillyTavern 1.13.5: fires when the generation stop button
+    // is hidden, covering completion paths without a new MESSAGE_RECEIVED.
+    if (event_types.GENERATION_ENDED) eventSource.on(event_types.GENERATION_ENDED, () => maybeAutoUpdate(settings));
+    maybeAutoUpdate(settings);
     console.info('[CWB] 角色世界书（系统 API 版）已加载。');
 }
 

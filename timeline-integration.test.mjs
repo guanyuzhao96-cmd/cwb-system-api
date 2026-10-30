@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 test('settings button -> real API wrapper -> incremental prompt -> server readback, three rounds', { skip: !vm.SourceTextModule && 'Requires --experimental-vm-modules' }, async () => {
     const nodes = new Map(), requests = [], modules = new Map(), worldbookReads = [];
-    let invalidCombined = false, failApiRequest = false, suppliedReply = null;
+    let invalidCombined = false, failApiRequest = false, suppliedReply = null, echoGenerationEnded = false;
+    const hostHandlers = new Map();
     let relationRound = 0;
     let disk = { entries: {} }, cache = structuredClone(disk), failWrite = false, initialized, booksByName = null;
     let readFailures = 0, readTimeouts = 0, throwOnWrite = false, blockedReadBook = null;
@@ -34,7 +35,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const document = { getElementById: id => { if (!documentNodes.has(id)) documentNodes.set(id, { open: false, scrollIntoView() { this.scrolled = true; } }); return documentNodes.get(id); } };
     let lastConfirmation = '';
     const context = vm.createContext({ crypto: webcrypto, TextEncoder, document, console, structuredClone, AbortController,
-        setTimeout: (fn, ms) => setTimeout(fn, ms === 30000 || ms === 60000 ? 10 : ms), clearTimeout, $, window: {
+        setTimeout: (fn, ms) => setTimeout(fn, ms === 1200 ? 5 : ms === 30000 || ms === 60000 ? 10 : ms), clearTimeout, $, window: {
         jQuery: f => initialized = f,
         confirm: message => { lastConfirmation = message; return true; },
     },
@@ -51,9 +52,12 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         },
     });
     const script = {
-        eventSource: { on() {} }, event_types: {}, saveSettingsDebounced() {}, getRequestHeaders: () => ({}),
+        eventSource: { on: (event, fn) => hostHandlers.set(event, fn) },
+        event_types: { MESSAGE_RECEIVED: 'message_received', GENERATION_ENDED: 'generation_ended', CHAT_CHANGED: 'chat_id_changed' },
+        saveSettingsDebounced() {}, getRequestHeaders: () => ({}),
         generateRaw: async options => {
             requests.push(options);
+            if (echoGenerationEnded) hostHandlers.get('generation_ended')?.();
             if (failApiRequest) throw new TypeError('Load failed');
             if (suppliedReply !== null) return suppliedReply;
             if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
@@ -241,6 +245,81 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     }
     assert.equal(requests.length - beforeAuto, 1, 'automatic threshold update uses one combined call and skips completed floors');
     const progressStore = modules.get(resolve(root, 'lorebook.js')).namespace;
+    const autoCore = modules.get(resolve(root, 'core.js')).namespace;
+    async function waitForAuto(predicate) {
+        for (let i = 0; i < 500; i++) {
+            if (predicate()) return;
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        assert.ok(predicate(), `automatic update did not settle: ${$('#cwb-auto-status').text()}`);
+    }
+    const liveSettings = extension_settings.cwb_system_api;
+    Object.assign(liveSettings, { enabled: true, autoUpdate: true, threshold: 4 });
+    // Later successes in other modules must not hide a failed profile range.
+    await progressStore.recordModuleResult('profiles', 0, 3, '模拟保存失败');
+    autoCore.cancelAutoUpdate();
+    const beforeGapAuto = requests.length;
+    hostHandlers.get('generation_ended')();
+    await waitForAuto(() => requests.length > beforeGapAuto && !autoState.operationOwner);
+    assert.equal(requests.length - beforeGapAuto, 1, 'generation completion repairs only the failed module gap');
+    assert.equal((await progressStore.getModuleProgress()).profiles.failed.length, 0);
+
+    // The receive event during another operation is retained until lock release.
+    const releaseBusy = modules.get(resolve(root, 'state.js')).namespace.acquireOperationLock(autoState, '测试中的手工操作');
+    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '操作期间新增剧情' })));
+    const beforeBusyAuto = requests.length;
+    hostHandlers.get('message_received')();
+    await waitForAuto(() => $('#cwb-auto-status').text().includes('等待当前操作'));
+    assert.equal(requests.length, beforeBusyAuto);
+    releaseBusy();
+    await waitForAuto(() => requests.length > beforeBusyAuto && !autoState.operationOwner);
+    assert.equal(requests.length - beforeBusyAuto, 1, 'release rechecks the queued threshold without another incoming message');
+
+    // Our own generation-ended event must not keep retrying the same failed AI
+    // output; failure remains visible and is retried only with new input/settings.
+    invalidCombined = true;
+    echoGenerationEnded = true;
+    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '本轮无效格式模拟' })));
+    const beforeFailedAuto = requests.length;
+    hostHandlers.get('generation_ended')();
+    await waitForAuto(() => requests.length > beforeFailedAuto && !autoState.operationOwner && $('#cwb-auto-status').text().includes('自动更新失败'));
+    hostHandlers.get('generation_ended')();
+    hostHandlers.get('message_received')();
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.equal(requests.length - beforeFailedAuto, 1, 'the same failed source never causes an automatic AI retry loop');
+    invalidCombined = false;
+    echoGenerationEnded = false;
+    await autoCore.batchUpdate(liveSettings);
+    autoCore.cancelAutoUpdate();
+
+    // A switch/disable before the debounce fires cancels pending automation.
+    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '等待但尚未触发的剧情' })));
+    const beforeCancelAuto = requests.length;
+    hostHandlers.get('message_received')();
+    liveSettings.autoUpdate = false;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(requests.length, beforeCancelAuto, 'settings are read live at execution time');
+    liveSettings.autoUpdate = true;
+    hostHandlers.get('message_received')();
+    const previousChatId = contextData.chatId;
+    contextData.chatId = 'debounce-switch';
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(requests.length, beforeCancelAuto, 'a pending check cannot follow the user into a different chat');
+    contextData.chatId = previousChatId;
+    liveSettings.autoUpdate = false;
+    autoCore.cancelAutoUpdate();
+    await autoCore.batchUpdate(batchSettings);
+    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '打开自动更新后的待处理剧情' })));
+    const beforeEnableAuto = requests.length;
+    $('#cwb-enabled').prop('checked', true);
+    $('#cwb-auto-update').prop('checked', true);
+    $('#cwb-threshold').val(4);
+    $('#cwb-system-settings').handlers['input change']();
+    await waitForAuto(() => requests.length > beforeEnableAuto && !autoState.operationOwner);
+    assert.equal(requests.length - beforeEnableAuto, 1, 'enabling automation in the UI checks an existing ready backlog without another host message');
+    $('#cwb-auto-update').prop('checked', false);
+    $('#cwb-system-settings').handlers['input change']();
+    assert.match($('#cwb-auto-status').text(), /已关闭/);
     const owner = 'CWB:角色卡:Test.png';
     assert.ok(Object.values(disk.entries).some(entry => entry.key.includes('CWB:更新状态') && entry.key.includes(owner)));
     assert.ok(Object.values(disk.entries).every(entry => !entry.key.some(key => String(key).startsWith('CWB:聊天身份:'))));

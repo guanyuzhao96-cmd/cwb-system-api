@@ -1,12 +1,12 @@
 import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
-import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches } from './module-progress.mjs';
+import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches, automaticUpdateStatus } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
 import { callSystemApi } from './api.js';
 import { createErrorReport } from './error-report.js';
-import { state, acquireOperationLock } from './state.js';
+import { state, acquireOperationLock, onOperationIdle } from './state.js';
 import { parseTimelineRecords, formatTimelineRecords, compactTimelineContext } from './timeline-utils.mjs';
 import {
     getLastUpdatedFloor,
@@ -36,6 +36,38 @@ import { formatRanges, overlappingRanges, missingRanges } from './update-tracker
 import { getCardArchiveKey } from './lorebook.js';
 
 let autoTimer = null;
+let autoIdleSubscription = null;
+let autoSettingsProvider = null;
+let autoLastAttempt = null;
+let autoChecking = false;
+
+export function cancelAutoUpdate() {
+    clearTimeout(autoTimer);
+    autoTimer = null;
+    autoIdleSubscription?.();
+    autoIdleSubscription = null;
+    autoSettingsProvider = null;
+    autoLastAttempt = null;
+}
+
+function automaticSource(settings) {
+    const context = getContext();
+    return JSON.stringify([currentChatId(), settings.threshold, settings.worldbookTarget,
+        settings.customWorldbook, settings.excludedWorldbooks, settings.fullPrompt,
+        settings.incrementalPrompt, settings.timelineIncrementalPrompt, settings.incremental,
+        settings.breakPrompt, settings.responseLength, settings.scanDepth,
+        (context?.chat ?? []).map(message => [!!message.is_user, !!message.is_system, message.name ?? '', message.mes ?? ''])]);
+}
+
+function deferAutoUpdate() {
+    $('#cwb-auto-status').text('自动更新：等待当前操作结束后检查。');
+    autoIdleSubscription ??= onOperationIdle(target => {
+        if (target !== state) return;
+        autoIdleSubscription?.();
+        autoIdleSubscription = null;
+        if (autoSettingsProvider) maybeAutoUpdate(autoSettingsProvider);
+    });
+}
 
 function currentChatId() {
     const context = getContext();
@@ -427,22 +459,64 @@ export async function refreshTimeline(settings, onProgress = () => {}, endIndex 
     }
 }
 
-export async function maybeAutoUpdate(settings) {
+export function maybeAutoUpdate(settingsOrProvider) {
+    const provider = typeof settingsOrProvider === 'function' ? settingsOrProvider : () => settingsOrProvider;
+    const settings = provider();
+    if (!settings?.enabled || !settings.autoUpdate) {
+        cancelAutoUpdate();
+        $('#cwb-auto-status').text('自动更新已关闭。');
+        return;
+    }
+    autoSettingsProvider = provider;
     clearTimeout(autoTimer);
+    let owner;
+    try { owner = currentChatId(); }
+    catch { $('#cwb-auto-status').text('自动更新：等待选择角色卡。'); return; }
     autoTimer = setTimeout(async () => {
-        if (!settings.enabled || !settings.autoUpdate || state.operationOwner || state.updating || state.batchRunning || state.repairing) return;
+        autoTimer = null;
+        const currentSettings = provider();
+        if (!currentSettings?.enabled || !currentSettings.autoUpdate) { cancelAutoUpdate(); return; }
+        if (autoChecking || state.operationOwner || state.updating || state.batchRunning || state.repairing || state.timelineUpdating || state.relationshipUpdating) {
+            deferAutoUpdate();
+            return;
+        }
+        let signature;
+        autoChecking = true;
         try {
+            if (currentChatId() !== owner) return;
             refreshChatState();
+            signature = automaticSource(currentSettings);
+            // Generation-ended/received may both fire, including for our own
+            // quiet API call. Never retry the same failed source in a loop.
+            if (autoLastAttempt?.signature === signature) return;
             const progress = await getModuleProgress();
-            const threshold = Math.max(1, Number(settings.threshold) || 20);
-            const latestAttempt = Math.max(0, ...Object.values(progress).flatMap(item => [item.latest?.end !== undefined ? item.latest.end + 1 : 0, ...(item.completed ?? []).map(([, end]) => end + 1)]));
-            const pending = state.messages.length - latestAttempt;
-            setStatus(`总层数 ${state.messages.length}；新增待处理 ${Math.max(0, pending)}；缺口可手动补漏。`);
-            if (pending >= threshold) await batchUpdate(settings);
+            const latestSettings = provider();
+            if (!latestSettings?.enabled || !latestSettings.autoUpdate || currentChatId() !== owner) return;
+            if (signature !== automaticSource(latestSettings)) { maybeAutoUpdate(provider); return; }
+            if (state.operationOwner) { deferAutoUpdate(); return; }
+            const status = automaticUpdateStatus(progress, state.messages.length, latestSettings.threshold);
+            $('#cwb-auto-status').text(`自动更新：${status.pending} 楼待核验，触发阈值 ${status.threshold} 楼。`);
+            if (status.ready) {
+                autoLastAttempt = { signature };
+                $('#cwb-auto-status').text('自动更新进行中…');
+                const result = await batchUpdate(latestSettings);
+                $('#cwb-auto-status').text(result?.stopped ? '自动更新已停止。' : '自动更新完成。');
+            }
         } catch (error) {
+            if (signature) autoLastAttempt = { signature };
             console.error('[CWB] 自动更新失败', error);
             notify('error', `自动更新失败：${error.message}`);
             setStatus(`自动更新失败：${error.message}`);
+            $('#cwb-auto-status').text('自动更新失败，可手动补齐；相同正文不会反复调用 AI。');
+            if (!error.cwbReportGenerated) createErrorReport(error, error.cwbDiagnostics || { stage: 'Auto update' });
+        } finally {
+            autoChecking = false;
+            // A second event may arrive during the asynchronous progress read,
+            // before a plugin operation lock exists. Keep that recheck too.
+            if (autoIdleSubscription && !state.operationOwner && autoSettingsProvider) {
+                autoIdleSubscription(); autoIdleSubscription = null;
+                maybeAutoUpdate(autoSettingsProvider);
+            }
         }
     }, 1200);
 }
@@ -458,7 +532,7 @@ export async function batchUpdate(settings, onProgress) {
     try {
         const progress = await refreshModuleProgress();
         const plan = pendingBatches(progress, state.messages.length, Math.max(1, Number(settings.threshold) || 20));
-        if (!plan.length) { setStatus('三项均已覆盖全部聊天，无需重复更新，AI 调用 0 次。'); return; }
+        if (!plan.length) { setStatus('三项均已覆盖全部聊天，无需重复更新，AI 调用 0 次。'); return { stopped: false }; }
         for (let index = 0; index < plan.length; index++) {
             if (state.batchStopRequested) break;
             assertCurrentChat(chatId);
@@ -467,6 +541,7 @@ export async function batchUpdate(settings, onProgress) {
             await updateRangeUnlocked(settings, batch.start, batch.end, { silent: true, modules: batch.modules });
         }
         if (!state.batchStopRequested) notify('success', '批量补齐完成，已完成内容没有重复生成。');
+        return { stopped: state.batchStopRequested };
     } finally {
         state.batchRunning = false;
         state.batchStopRequested = false;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyModuleResult, moduleStatus, pendingBatches, intersectRanges, mergeModuleProgress, legacyModuleHistory } from './module-progress.mjs';
+import { applyModuleResult, moduleStatus, pendingBatches, intersectRanges, mergeModuleProgress, legacyModuleHistory, automaticUpdateStatus } from './module-progress.mjs';
 
 test('a hole cannot be hidden by later success; repair closes only the selected module gap', () => {
     let progress = {};
@@ -26,6 +26,17 @@ test('100 completed floors resume at 101; repeated batch makes no requests', () 
     assert.deepEqual(plan.map(batch => [batch.start, batch.end]), [[100, 119], [120, 139]]);
     for (const batch of plan) for (const module of batch.modules) progress = applyModuleResult(progress, module, batch.start, batch.end);
     assert.deepEqual(pendingBatches(JSON.parse(JSON.stringify(progress)), 140, 20), []);
+});
+
+test('automatic threshold uses unverified floors rather than the furthest attempt in any module', () => {
+    let progress = {};
+    for (const module of ['profiles', 'timeline', 'relationships']) progress = applyModuleResult(progress, module, 0, 99);
+    progress = applyModuleResult(progress, 'profiles', 0, 24, '保存失败');
+    assert.deepEqual(automaticUpdateStatus(progress, 100, 25), { pending: 25, threshold: 25, ready: true });
+    progress = applyModuleResult(progress, 'profiles', 0, 24);
+    assert.equal(automaticUpdateStatus(progress, 100, 25).ready, false);
+    assert.equal(automaticUpdateStatus(progress, 110, 25).pending, 10, 'a floor missing in three modules is counted once');
+    assert.equal(automaticUpdateStatus(progress, 125, 25).ready, true);
 });
 
 test('legacy migration only trusts intersected confirmed ranges, including disjoint gaps', () => {

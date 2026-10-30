@@ -65,6 +65,13 @@ export function moduleStatus(progress, module, total) {
 }
 export function displayRanges(ranges) { return ranges.map(([a, b]) => `${a + 1}-${b + 1}`).join('、') || '无'; }
 
+export function automaticUpdateStatus(progress, total, threshold = 20) {
+    const missing = mergeRanges(Object.keys(MODULE_LABELS).flatMap(module => moduleStatus(progress, module, total).missing));
+    const pending = missing.reduce((count, [start, end]) => count + end - start + 1, 0);
+    const size = Math.max(1, Number(threshold) || 20);
+    return { pending, threshold: size, ready: pending >= size };
+}
+
 export function intersectRanges(a, b) {
     return mergeRanges((a ?? []).flatMap(([x, y]) => (b ?? []).map(([u, v]) => [Math.max(x, u), Math.min(y, v)]).filter(([start, end]) => start <= end)));
 }

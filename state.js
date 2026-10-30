@@ -11,6 +11,12 @@ export const state = {
     routeCache: null,
 };
 
+const idleListeners = new Set();
+export function onOperationIdle(listener) {
+    idleListeners.add(listener);
+    return () => idleListeners.delete(listener);
+}
+
 export function acquireOperationLock(targetState, owner) {
     if (targetState.operationOwner) throw new Error(`当前正在执行“${targetState.operationOwner}”，请完成后再启动新操作。`);
     targetState.operationOwner = owner;
@@ -18,6 +24,9 @@ export function acquireOperationLock(targetState, owner) {
     return () => {
         if (released) return;
         released = true;
-        if (targetState.operationOwner === owner) targetState.operationOwner = null;
+        if (targetState.operationOwner === owner) {
+            targetState.operationOwner = null;
+            for (const listener of [...idleListeners]) listener(targetState);
+        }
     };
 }
