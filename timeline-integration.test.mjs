@@ -61,7 +61,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             if (failApiRequest) throw new TypeError('Load failed');
             if (suppliedReply !== null) return suppliedReply;
             if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
-                if (invalidCombined) return '[--档案无变化--]';
+                if (invalidCombined) { invalidCombined = false; return '[--档案无变化--]'; }
                 relationRound++;
                 const input = options.prompt.map(x => x.content).join('\n');
                 const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
@@ -279,14 +279,14 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     // output; failure remains visible and is retried only with new input/settings.
     invalidCombined = true;
     echoGenerationEnded = true;
-    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '本轮无效格式模拟' })));
+    contextData.chat.push(...Array.from({ length: 8 }, () => ({ mes: '本轮无效格式模拟' })));
     const beforeFailedAuto = requests.length;
     hostHandlers.get('generation_ended')();
-    await waitForAuto(() => requests.length > beforeFailedAuto && !autoState.operationOwner && $('#cwb-auto-status').text().includes('自动更新失败'));
+    await waitForAuto(() => requests.length > beforeFailedAuto && !autoState.operationOwner && $('#cwb-auto-status').text().includes('自动更新部分完成'));
     hostHandlers.get('generation_ended')();
     hostHandlers.get('message_received')();
     await new Promise(resolve => setTimeout(resolve, 40));
-    assert.equal(requests.length - beforeFailedAuto, 1, 'the same failed source never causes an automatic AI retry loop');
+    assert.equal(requests.length - beforeFailedAuto, 2, 'the later batch runs once, and the same failed source does not loop');
     invalidCombined = false;
     echoGenerationEnded = false;
     await autoCore.batchUpdate(liveSettings);
@@ -561,6 +561,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         && error.cwbDiagnostics.requestPath === '/api/worldinfo/edit'
         && error.stack.includes('Caused by:'));
     throwOnWrite = false;
+    suppliedReply = ['无目录角色', '角色甲'].map(name =>
+        `[--角色档案开始--]\n[档案类型]:角色\n[姓名]:${name}\n[剧情.0]:2025-09-02｜路由失败后的可保存剧情\n[--角色档案结束--]`).join('\n');
+    await assert.rejects(autoCore.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true, modules: ['profiles'] }), /已保存 1 份档案；未保存：无目录角色/);
+    assert.match(booksByName.get('角色分卷').entries[1].content, /路由失败后的可保存剧情/);
+    assert.equal((await progressStore.getModuleProgress()).profiles.failed[0][1], 24);
     suppliedReply = null;
     blockedReadBook = null;
 

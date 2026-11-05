@@ -230,17 +230,28 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         return { block: cleaned, name, isUser: type === '主角' || type === 'USER' || name === (getContext()?.name1 || '用户') };
                     }).filter(Boolean);
                     let userUpdated = false;
+                    const profileErrors = [];
                     for (const { block, name, isUser } of prepared) {
                         assertCurrentChat(chatId);
-                        const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
-                        assertCurrentChat(chatId);
-                        if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，缺失时先激活目标世界书并扫描生成目录。`);
-                        await verifyProfileContent(settings, name, block, isUser);
-                        assertCurrentChat(chatId);
-                        if (isUser) userUpdated = true; else names.push(saved);
+                        try {
+                            const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
+                            assertCurrentChat(chatId);
+                            if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，缺失时先激活目标世界书并扫描生成目录。`);
+                            await verifyProfileContent(settings, name, block, isUser);
+                            assertCurrentChat(chatId);
+                            if (isUser) userUpdated = true; else names.push(saved);
+                        } catch (error) {
+                            assertCurrentChat(chatId);
+                            profileErrors.push(new Error(`${name}：${error.message}`, { cause: error }));
+                        }
                     }
                     if (names.length) { assertCurrentChat(chatId); await updateRoster(settings, [...new Set(names)], start, end); assertCurrentChat(chatId); }
                     else if (userUpdated && settings.multiWorldbookRouting) { assertCurrentChat(chatId); await updateMasterDirectory(settings); assertCurrentChat(chatId); }
+                    if (profileErrors.length) {
+                        const error = new Error(`已保存 ${names.length + Number(userUpdated)} 份档案；未保存：${profileErrors.map(item => item.message).join('；')}`, { cause: profileErrors[0] });
+                        error.cwbDiagnostics = profileErrors[0].cause?.cwbDiagnostics;
+                        throw error;
+                    }
                 } else if (module === 'timeline') {
                     const events = parseTimelineResponse(JSON.stringify(part.value));
                     const unique = uniqueTimelineEntries(events, oldTimeline);
@@ -287,6 +298,8 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
             };
             createErrorReport(reportError, reportError.cwbDiagnostics);
             reportError.cwbReportGenerated = true;
+            reportError.cwbBatchModuleFailure = true;
+            reportError.cwbSuccessfulModules = successes.length;
             throw reportError;
         }
         if (!silent) notify('success', message);
@@ -499,8 +512,8 @@ export function maybeAutoUpdate(settingsOrProvider) {
             if (status.ready) {
                 autoLastAttempt = { signature };
                 $('#cwb-auto-status').text('自动更新进行中…');
-                const result = await batchUpdate(latestSettings);
-                $('#cwb-auto-status').text(result?.stopped ? '自动更新已停止。' : '自动更新完成。');
+                const result = await batchUpdate(latestSettings, undefined, { automatic: true });
+                $('#cwb-auto-status').text(result?.stopped ? '自动更新已停止。' : result?.failures?.length ? `自动更新部分完成：${result.failures.join('；')}` : '自动更新完成。');
             }
         } catch (error) {
             if (signature) autoLastAttempt = { signature };
@@ -521,7 +534,7 @@ export function maybeAutoUpdate(settingsOrProvider) {
     }, 1200);
 }
 
-export async function batchUpdate(settings, onProgress) {
+export async function batchUpdate(settings, onProgress, { automatic = false } = {}) {
     if (state.operationOwner === '批量更新' && state.batchRunning) { state.batchStopRequested = true; return; }
     const release = acquireOperationLock(state, '批量更新');
     refreshChatState();
@@ -533,15 +546,25 @@ export async function batchUpdate(settings, onProgress) {
         const progress = await refreshModuleProgress();
         const plan = pendingBatches(progress, state.messages.length, Math.max(1, Number(settings.threshold) || 20));
         if (!plan.length) { setStatus('三项均已覆盖全部聊天，无需重复更新，AI 调用 0 次。'); return { stopped: false }; }
+        const failures = [];
         for (let index = 0; index < plan.length; index++) {
             if (state.batchStopRequested) break;
             assertCurrentChat(chatId);
             const batch = plan[index];
             onProgress?.(index + 1, plan.length);
-            await updateRangeUnlocked(settings, batch.start, batch.end, { silent: true, modules: batch.modules });
+            try {
+                await updateRangeUnlocked(settings, batch.start, batch.end, { silent: true, modules: batch.modules });
+            } catch (error) {
+                assertCurrentChat(chatId);
+                if (!automatic || !error.cwbBatchModuleFailure) throw error;
+                failures.push(error.message);
+                // A globally invalid response should stop rather than spending calls on the backlog.
+                if (!error.cwbSuccessfulModules && batch.modules.length === 3) throw error;
+            }
         }
-        if (!state.batchStopRequested) notify('success', '批量补齐完成，已完成内容没有重复生成。');
-        return { stopped: state.batchStopRequested };
+        if (failures.length) setStatus(`自动更新部分完成；${failures.join('；')}`);
+        else if (!state.batchStopRequested) notify('success', '批量补齐完成，已完成内容没有重复生成。');
+        return { stopped: state.batchStopRequested, failures };
     } finally {
         state.batchRunning = false;
         state.batchStopRequested = false;
