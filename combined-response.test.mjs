@@ -42,3 +42,12 @@ test('timeline prompts retain only concise key information and major events', ()
         assert.match(prompt, /完整姓名.*不用简称、缩写/);
     }
 });
+
+test('known alternate envelopes parse, but absent and truncated profiles still fail', async () => {
+    const { parseCombinedParts } = await import('./combined-response.mjs');
+    const profile = '===角色档案===\n[档案类型]:角色\n[姓名]:角色甲\n[剧情.0]:2025-09-01｜确认的重要变化\n===角色档案结束===';
+    const reply = valid.replace('[--档案无变化--]', profile);
+    assert.equal(parseCombinedParts(reply).profiles.value.length, 1);
+    assert.ok(parseCombinedParts(valid.replace('[--档案无变化--]', '')).profiles.error);
+    assert.ok(parseCombinedParts(reply.replace('===角色档案结束===', '')).profiles.error);
+});
