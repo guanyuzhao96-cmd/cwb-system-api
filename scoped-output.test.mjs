@@ -50,3 +50,13 @@ test('two selected modules omit the unselected output', () => {
     assert.ok(prompt.includes('[--时间线增量开始--]'));
     assert.ok(prompt.includes('[--关系增量开始--]'));
 });
+
+test('explicit structured archive JSON is accepted without inventing missing sections', () => {
+    const parsed = parseCombinedParts(JSON.stringify({ 角色档案: [{ 档案类型: '角色', 姓名: '角色甲', 剧情: ['2025-09-01｜重要约定'] }], 时间线: [], 关系更新: [], 删除关系: [] }));
+    assert.equal(parsed.profiles.value.length, 1);
+    assert.ok(parsed.profiles.value[0].includes('[剧情.0]:'));
+    assert.deepEqual(parsed.timeline.value.时间线, []);
+    assert.deepEqual(parseCombinedParts('{"档案":[]}').profiles.value, []);
+    assert.ok(parseCombinedParts('{"时间线":[]}').profiles.error);
+    assert.ok(parseCombinedParts('{"档案":[{}]}').profiles.error);
+});

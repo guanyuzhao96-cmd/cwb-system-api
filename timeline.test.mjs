@@ -1,10 +1,11 @@
+import { archiveText, archiveMessages, archiveBatches } from './archive-input.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, outputProtocolFor, combinedGuidance, parseCombinedParts } from './combined-response.mjs';
 import { mergeRelationships } from './relationship-utils.mjs';
 import { test } from 'node:test';
 import { webcrypto } from 'node:crypto';
 import { CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress } from './card-archive.mjs';
-import { parseCustomFormat } from './utils.js';
+import { parseCustomFormat, buildCustomFormat } from './utils.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -17,8 +18,8 @@ import { acquireOperationLock } from './state.js';
 function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     for (const entry of Object.values(data.entries)) entry.key = entry.key?.map(key => key === 'chat' ? 'CWB:角色卡:Test.png' : key === 'other' ? 'CWB:角色卡:Other.png' : key);
-    const context = vm.createContext({ crypto: webcrypto, TextEncoder, CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress, parseCustomFormat,
-        MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory,
+    const context = vm.createContext({ crypto: webcrypto, TextEncoder, CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress, parseCustomFormat, buildCustomFormat,
+        archiveText, archiveMessages, archiveBatches, MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,
         structuredClone, getRequestHeaders: () => ({}), world_names: ['main'], extension_settings: {},

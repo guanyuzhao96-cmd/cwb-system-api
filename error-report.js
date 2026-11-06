@@ -1,4 +1,4 @@
-const REPORT_VERSION = '0.12.4-card-r12';
+const REPORT_VERSION = '0.12.4-card-r13';
 let latestReportJson = null;
 let latestReportName = null;
 
@@ -39,6 +39,7 @@ export function createErrorReport(error, details = {}) {
             requestDurationMs: Number.isFinite(details.requestDurationMs) ? details.requestDurationMs : null,
             responseCharacters: Number.isFinite(details.responseCharacters) ? details.responseCharacters : null,
             outputParts: details.outputParts ?? null,
+            inputCharacters: Number.isFinite(details.inputCharacters) ? details.inputCharacters : null,
             transport: details.transport ?? null,
             finishReason: details.finishReason ?? null,
         },

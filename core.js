@@ -1,3 +1,4 @@
+import { archiveText, archiveMessages, archiveBatches } from './archive-input.mjs';
 import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches, automaticUpdateStatus } from './module-progress.mjs';
 import { outputProtocolFor, combinedGuidance, parseCombinedParts } from './combined-response.mjs';
@@ -93,7 +94,7 @@ function formatMessages(messages) {
     const context = getContext();
     return messages.map(message => {
         const speaker = message.is_user ? (context?.name1 || '用户') : (message.name || context?.name2 || '角色');
-        return `【${speaker}】：\n${String(message.message ?? '').trim()}`;
+        return `【${speaker}】：\n${archiveText(message.message ?? message.mes)}`;
     }).filter(text => text.trim()).join('\n\n');
 }
 
@@ -164,11 +165,34 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
     const targets = [...new Set(modules)].filter(module => MODULE_LABELS[module]);
     if (!targets.length) throw Error('未选择更新模块。');
     const chatId = state.chatId;
+    const inputBatches = archiveBatches(state.messages, start, end);
+    if (inputBatches.length > 1) {
+        const saved = [], errors = [];
+        for (const batch of inputBatches) {
+            assertCurrentChat(chatId);
+            try { saved.push(...await updateRangeUnlocked(settings, batch.start, batch.end, { silent: true, modules: targets })); }
+            catch (error) {
+                if (!error.cwbBatchModuleFailure) throw error;
+                errors.push(error);
+            }
+        }
+        const summary = `第 ${start + 1}-${end + 1} 楼按正文长度拆为 ${inputBatches.length} 次 AI 请求；${errors.length ? errors.map(error => error.message).join('；') : '均已保存并核验'}`;
+        setStatus(summary);
+        if (errors.length) {
+            const error = new Error(summary, { cause: errors[0] });
+            error.cwbReportGenerated = true;
+            error.cwbBatchModuleFailure = true;
+            error.cwbSuccessfulModules = inputBatches.length > errors.length ? targets.length : 0;
+            throw error;
+        }
+        if (!silent) notify('success', summary);
+        return [...new Set(saved)];
+    }
     state.updating = true;
     const names = [], failures = [], successes = [], moduleErrors = [];
     try {
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
-        const selected = state.messages.slice(start, end + 1);
+        const selected = archiveMessages(state.messages.slice(start, end + 1));
         const oldProfiles = targets.includes('profiles') ? (await getTriggeredOldProfiles(settings, selected)).map(sanitizeProfileContent).filter(Boolean) : [];
         const oldTimeline = targets.includes('timeline') ? (await getTimelineEntries()).map(entry => entry.content).join('\n') : '';
         const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
@@ -181,6 +205,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
         messages.push({ role: 'system', content: outputProtocolFor(targets) + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分无需输出，插件不会写入其内容或进度。` });
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
+        const inputCharacters = selected.reduce((sum, message) => sum + String(message.message ?? '').length, 0);
         const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
         setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：AI 请求中，输入约 ${requestChars} 字符…`);
         let response;
@@ -235,6 +260,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         if (!cleaned || !hasProfileFacts(cleaned)) return null;
                         return { block: cleaned, name, isUser: type === '主角' || type === 'USER' || name === (getContext()?.name1 || '用户') };
                     }).filter(Boolean);
+                    if (part.value.length && !prepared.length) throw Error('档案区块没有有效剧情字段，未把空档案记为成功；请查看AI原文。');
                     let userUpdated = false;
                     const profileErrors = [];
                     for (const { block, name, isUser } of prepared) {
@@ -301,6 +327,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                 batchFloors: end - start + 1,
                 totalChatFloors: state.messages.length,
                 requestCharacters: requestChars || null,
+                inputCharacters,
                 ...responseDetails,
                 responseCharacters: response.length,
                 outputParts: Object.fromEntries(targets.map(module => [module, parts[module].error || 'recognized'])),

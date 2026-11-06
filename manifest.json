@@ -8,7 +8,7 @@
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
   "version": "0.12.4",
-  "description": "0.12.4角色卡存档版修订12：聊天补全直接读取原始正文，避免宿主AI输出正则删除档案；报告返回通道与模型结束原因。",
+  "description": "0.12.4角色卡存档版修订13：提取真实剧情、按正文长度自动分批，兼容结构化档案JSON，并加入真实聊天从空世界书开始的回放测试。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/guanyuzhao96-cmd/cwb-system-api"
 }

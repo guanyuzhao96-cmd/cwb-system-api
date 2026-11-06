@@ -5,7 +5,7 @@ export function normalizeOutput(response) {
         .replace(/\[\s*--\s*(角色档案开始|角色档案结束|时间线增量开始|时间线增量结束|关系增量开始|关系增量结束|档案无变化)\s*--\s*]/g, '[--$1--]');
 }
 
-import { extractCharacterBlocks } from './utils.js';
+import { extractCharacterBlocks, buildCustomFormat } from './utils.js';
 
 export const COMBINED_OUTPUT_PROTOCOL = `本次必须在同一条回复中输出三部分，输出格式以本条为准，覆盖前文要求独立时间线档案块的旧格式。
 第一部分：角色与主角档案，必须使用以下完整区块，不得只输出总结或JSON：
@@ -46,9 +46,13 @@ export function parseCombinedResponse(response) {
 
 export function parseCombinedParts(response) {
     const text = normalizeOutput(response);
+    const jsonText = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    let structured;
+    if (jsonText.startsWith('{')) { try { structured = JSON.parse(jsonText); } catch {} }
     const read = (kind, validate) => {
         try {
             const start = `[--${kind}增量开始--]`, end = `[--${kind}增量结束--]`;
+            if (structured && (kind === '时间线' ? Object.hasOwn(structured, '时间线') : Object.hasOwn(structured, '关系更新'))) { validate(structured); return { value: structured }; }
             const pieces = text.split(start);
             if (pieces.length !== 2 || pieces[1].split(end).length !== 2) throw Error(`${kind}增量区块缺失或重复`);
             const value = JSON.parse(pieces[1].split(end)[0].trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
@@ -61,8 +65,32 @@ export function parseCombinedParts(response) {
     const blocks = extractCharacterBlocks(profileArea);
     const begins = [...profileArea.matchAll(/\[--(?:角色档案开始|Amily2::CHAR_START)--]/g)].length;
     const ends = [...profileArea.matchAll(/\[--(?:角色档案结束|Amily2::CHAR_END)--]/g)].length;
-    const profiles = begins !== blocks.length || ends !== blocks.length ? { error: '角色档案区块被截断' } : blocks.length ? { value: blocks }
+    let profiles = begins !== blocks.length || ends !== blocks.length ? { error: '角色档案区块被截断' } : blocks.length ? { value: blocks }
         : (profileArea.includes('[--档案无变化--]') || /^(?:本次|本轮)?(?:没有|无)角色档案(?:新增或实质变化|变化)[。！!]?$/u.test(profileArea.trim())) ? { value: [] } : { error: '角色档案缺失且没有无变化标记' };
+    if (profiles.error && !begins && !ends && structured) {
+        const rows = structured.角色档案 ?? structured.档案;
+        if (Array.isArray(rows)) {
+            try {
+                const keys = /^(?:档案类型|姓名|性经历人数|(?:角色已知信息|角色未知信息|性经历人员|额外补充|剧情)(?:\.\d+)?)$/;
+                const value = rows.map(row => {
+                    if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.姓名 !== 'string' || !row.姓名.trim()) throw Error('JSON档案缺少合法姓名');
+                    const clean = Object.fromEntries(Object.entries(row).filter(([key]) => keys.test(key)));
+                    for (const [key, item] of Object.entries(clean)) {
+                        const scalar = typeof item === 'string' || typeof item === 'number';
+                        const list = Array.isArray(item) && item.every(value => typeof value === 'string');
+                        if (!scalar && !list) throw Error('JSON档案字段必须为文本、数字或文本数组');
+                        if (['姓名', '档案类型'].includes(key) && typeof item !== 'string') throw Error('JSON档案身份字段必须为文本');
+                    }
+                    return buildCustomFormat(clean);
+                });
+                profiles = { value };
+            } catch (error) { profiles = { error: error.message }; }
+        }
+    }
+    if (profiles.error === '角色档案缺失且没有无变化标记') {
+        const reason = /^\s*(?:抱歉|对不起|很抱歉|I(?:'m| am) sorry)/i.test(text) ? '模型返回了拒绝或说明文本' : structured ? 'JSON中没有角色档案/档案数组' : '回复没有完整档案区块或明确无变化标记';
+        profiles.error += `（${reason}；返回 ${text.length} 字符）`;
+    }
     return {
         profiles,
         timeline: read('时间线', value => {
