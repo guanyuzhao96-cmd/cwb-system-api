@@ -1,6 +1,6 @@
 import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches, automaticUpdateStatus } from './module-progress.mjs';
-import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
+import { outputProtocolFor, combinedGuidance, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
@@ -175,11 +175,11 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         assertCurrentChat(chatId);
         const messages = [];
         if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
-        if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
-        if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
-        if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
+        if (targets.includes('profiles')) messages.push({ role: 'system', content: combinedGuidance(settings.incremental ? settings.incrementalPrompt : settings.fullPrompt) });
+        if (targets.includes('timeline')) messages.push({ role: 'system', content: combinedGuidance(settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT) });
+        if (targets.includes('relationships')) messages.push({ role: 'system', content: combinedGuidance(RELATIONSHIP_PROMPT) });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
-        messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
+        messages.push({ role: 'system', content: outputProtocolFor(targets) + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分无需输出，插件不会写入其内容或进度。` });
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
         const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
         setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：AI 请求中，输入约 ${requestChars} 字符…`);
@@ -214,6 +214,10 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         assertCurrentChat(chatId);
         const parts = parseCombinedParts(response);
         $('#cwb-timeline-debug').text(`统一更新：AI 1 次，第 ${start + 1}-${end + 1} 楼\n${response}`);
+        if (targets.some(module => parts[module].error)) {
+            const log = document.getElementById('cwb-ai-log');
+            if (log) log.open = true;
+        }
         for (const module of targets) {
             try {
                 assertCurrentChat(chatId);
@@ -295,6 +299,8 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                 batchFloors: end - start + 1,
                 totalChatFloors: state.messages.length,
                 requestCharacters: requestChars || null,
+                responseCharacters: response.length,
+                outputParts: Object.fromEntries(targets.map(module => [module, parts[module].error || 'recognized'])),
             };
             createErrorReport(reportError, reportError.cwbDiagnostics);
             reportError.cwbReportGenerated = true;

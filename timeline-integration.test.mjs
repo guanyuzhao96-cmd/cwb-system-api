@@ -60,7 +60,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             if (echoGenerationEnded) hostHandlers.get('generation_ended')?.();
             if (failApiRequest) throw new TypeError('Load failed');
             if (suppliedReply !== null) return suppliedReply;
-            if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
+            if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分') || options.systemPrompt.includes('【CWB档案专用输出协议】') || options.systemPrompt.includes('必须输出完整区块')) {
                 if (invalidCombined) { invalidCombined = false; return '[--档案无变化--]'; }
                 relationRound++;
                 const input = options.prompt.map(x => x.content).join('\n');
@@ -554,6 +554,28 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     }
     const savedBatchProgress = await progressStore.getModuleProgress();
     for (const module of ['profiles', 'timeline', 'relationships']) assert.equal(savedBatchProgress[module].completed[0][1], 24);
+
+    // Screenshot regression: 153 floors saved, only profiles missing on 154–176.
+    const beforeScopedChat = contextData.chat;
+    const beforeScopedReply = suppliedReply;
+    contextData.chat = Array.from({ length: 176 }, (_, i) => ({ mes: '第' + (i + 1) + '楼的重要约定' }));
+    suppliedReply = '[--角色档案开始--]\n[档案类型]:主角\n[姓名]:主角\n[剧情.0]:2025-09-02｜作出重要约定并承担持续责任\n[--角色档案结束--]';
+    const beforeScopedCalls = requests.length;
+    const beforeScopedTimeline = JSON.stringify(await progressStore.getTimelineEntries());
+    const beforeScopedRelations = await progressStore.getRelationshipSummary();
+    await autoCore.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 153, 175, { silent: true, modules: ['profiles'] });
+    assert.equal(requests.length - beforeScopedCalls, 1);
+    const scopedPrompt = requests.at(-1).systemPrompt;
+    assert.ok(scopedPrompt.includes('【CWB档案专用输出协议】'));
+    assert.ok(!scopedPrompt.includes('[--时间线增量开始--]'));
+    assert.ok(!scopedPrompt.includes('[--关系增量开始--]'));
+    assert.ok((await progressStore.getModuleProgress()).profiles.completed.some(([a, b]) => a <= 153 && b >= 175));
+    assert.equal(JSON.stringify(await progressStore.getTimelineEntries()), beforeScopedTimeline);
+    assert.equal(await progressStore.getRelationshipSummary(), beforeScopedRelations);
+    suppliedReply = '[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--档案无变化--]';
+    await autoCore.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 153, 175, { silent: true, modules: ['profiles'] });
+    contextData.chat = beforeScopedChat;
+    suppliedReply = beforeScopedReply;
     throwOnWrite = true;
     await assert.rejects(modules.get(resolve(root, 'core.js')).namespace.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true, modules: ['profiles'] }), error =>
         error.cwbDiagnostics.stage === 'Worldbook write'
