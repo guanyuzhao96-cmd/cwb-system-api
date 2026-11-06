@@ -1,3 +1,4 @@
+import { prepareArchiveMessages, SUMMARY_SOURCE_GUIDANCE } from './archive-source.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { mergeRelationships } from './relationship-utils.mjs';
@@ -18,7 +19,7 @@ function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     for (const entry of Object.values(data.entries)) entry.key = entry.key?.map(key => key === 'chat' ? 'CWB:角色卡:Test.png' : key === 'other' ? 'CWB:角色卡:Other.png' : key);
     const context = vm.createContext({ crypto: webcrypto, TextEncoder, CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress, parseCustomFormat,
-        MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory,
+        prepareArchiveMessages, SUMMARY_SOURCE_GUIDANCE, MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,
         structuredClone, getRequestHeaders: () => ({}), world_names: ['main'], extension_settings: {},

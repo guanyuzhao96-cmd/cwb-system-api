@@ -1,3 +1,4 @@
+import { prepareArchiveMessages, SUMMARY_SOURCE_GUIDANCE } from './archive-source.mjs';
 import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches, automaticUpdateStatus } from './module-progress.mjs';
 import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
@@ -93,7 +94,8 @@ function formatMessages(messages) {
     const context = getContext();
     return messages.map(message => {
         const speaker = message.is_user ? (context?.name1 || '用户') : (message.name || context?.name2 || '角色');
-        return `【${speaker}】：\n${String(message.message ?? '').trim()}`;
+        const source = message.archiveSourceKind === 'summary' ? '【保留的剧情总结】' : message.archiveSourceKind === 'missing' ? '【本楼无可用剧情来源】' : '';
+        return `【${speaker}】：${source}\n${String(message.message ?? '').trim()}`;
     }).filter(text => text.trim()).join('\n\n');
 }
 
@@ -171,12 +173,13 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         // active bindings. Refresh once per batch, then reuse it for all roles.
         state.routeCache = null;
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
-        const selected = state.messages.slice(start, end + 1);
+        const selected = prepareArchiveMessages(state.messages.slice(start, end + 1));
         const oldProfiles = targets.includes('profiles') ? (await getTriggeredOldProfiles(settings, selected)).map(sanitizeProfileContent).filter(Boolean) : [];
         const oldTimeline = targets.includes('timeline') ? (await getTimelineEntries()).map(entry => entry.content).join('\n') : '';
         const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
         assertCurrentChat(chatId);
         const messages = [];
+        messages.push({ role: 'system', content: SUMMARY_SOURCE_GUIDANCE });
         if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
         if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
