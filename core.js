@@ -167,6 +167,9 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
     state.updating = true;
     const names = [], failures = [], successes = [], moduleErrors = [];
     try {
+        // Directory bodies can be edited without changing the list of books or
+        // active bindings. Refresh once per batch, then reuse it for all roles.
+        state.routeCache = null;
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
         const selected = state.messages.slice(start, end + 1);
         const oldProfiles = targets.includes('profiles') ? (await getTriggeredOldProfiles(settings, selected)).map(sanitizeProfileContent).filter(Boolean) : [];

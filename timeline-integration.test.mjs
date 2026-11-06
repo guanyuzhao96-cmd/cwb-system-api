@@ -503,7 +503,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     await progressStore.discoverWorldbookRoutes(scopedSettings);
     await progressStore.updateMasterDirectory(scopedSettings);
     await progressStore.manageChatEntries(scopedSettings);
-    assert.ok(!worldbookReads.slice(relatedReadStart).includes('空书'), 'unrelated unreadable installed book is never fetched');
+    assert.ok(worldbookReads.slice(relatedReadStart).includes('空书'), 'directory discovery examines inactive installed books; unrelated read failures do not prevent card reads');
     blockedReadBook = null;
     // No directory is an explicit error, never an implicit master-book write.
     contextData.characters[2].data.extensions.world = '已有书';
@@ -563,6 +563,22 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     throwOnWrite = false;
     suppliedReply = null;
     blockedReadBook = null;
+
+    // Existing directory in an inactive book, absent from all saved indexes.
+    world.world_names.push('未激活角色书');
+    booksByName.set('未激活角色书', { entries: {
+        0: { uid: 0, key: ['CWB:世界书目录'], content: '姓名: "初始角色"', disable: true },
+    } });
+    assert.ok(!world.selected_world_info.includes('未激活角色书'));
+    assert.ok((await progressStore.discoverWorldbookRoutes(scopedSettings))['未激活角色书'].names.includes('初始角色'));
+    // Editing only the body leaves the old cache signature unchanged.
+    booksByName.get('未激活角色书').entries[0].content += '\n姓名: "新登记角色"';
+    suppliedReply = '[--角色档案开始--]\n[档案类型]:角色\n[姓名]:新登记角色\n[剧情.0]:2025-09-01｜作出重要决定并改变后续走向\n[--角色档案结束--]';
+    const beforeInactiveUpdate = requests.length;
+    await modules.get(resolve(root, 'core.js')).namespace.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true, modules: ['profiles'] });
+    assert.equal(requests.length - beforeInactiveUpdate, 1);
+    assert.ok(Object.values(booksByName.get('未激活角色书').entries).some(entry => entry.key?.includes('新登记角色') && entry.content.includes('[剧情.0]')), 'inactive book and edited directory body route and read back through a real update');
+    suppliedReply = null;
 
     const ownerKey = 'CWB:角色卡:Test2.png';
     const makeProfile = (uid, name, content = '原始关键剧情') => ({ uid, key: ['CWB:自动档案', ownerKey, name, '1-25'],

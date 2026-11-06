@@ -221,7 +221,9 @@ async function collectDirectoryRoutes(settings, scanAll = false, onProgress = ()
 }
 
 export async function discoverWorldbookRoutes(settings = {}) {
-    const { routes, failures } = await collectDirectoryRoutes(settings);
+    // A directory is an explicit routing declaration even if its book is not
+    // currently injected into the conversation or present in an older index.
+    const { routes, failures } = await collectDirectoryRoutes(settings, true);
     // Do not retain a partial catalog as an authoritative successful cache.
     state.routeCache = failures.length ? null : routes;
     directoryCacheSignature = directorySignature(settings);
