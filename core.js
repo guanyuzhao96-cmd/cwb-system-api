@@ -1,7 +1,6 @@
-import { archiveText, archiveMessages, archiveBatches } from './archive-input.mjs';
 import { PROFILE_RULES, sanitizeProfileContent, hasProfileFacts } from './profile-utils.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, pendingBatches, automaticUpdateStatus } from './module-progress.mjs';
-import { outputProtocolFor, combinedGuidance, parseCombinedParts } from './combined-response.mjs';
+import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { RELATIONSHIP_PROMPT, mergeRelationships } from './relationship-utils.mjs';
 import { DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES } from './defaults.js';
 import { getContext } from '/scripts/extensions.js';
@@ -94,7 +93,7 @@ function formatMessages(messages) {
     const context = getContext();
     return messages.map(message => {
         const speaker = message.is_user ? (context?.name1 || '用户') : (message.name || context?.name2 || '角色');
-        return `【${speaker}】：\n${archiveText(message.message ?? message.mes)}`;
+        return `【${speaker}】：\n${String(message.message ?? '').trim()}`;
     }).filter(text => text.trim()).join('\n\n');
 }
 
@@ -165,53 +164,28 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
     const targets = [...new Set(modules)].filter(module => MODULE_LABELS[module]);
     if (!targets.length) throw Error('未选择更新模块。');
     const chatId = state.chatId;
-    const inputBatches = archiveBatches(state.messages, start, end);
-    if (inputBatches.length > 1) {
-        const saved = [], errors = [];
-        for (const batch of inputBatches) {
-            assertCurrentChat(chatId);
-            try { saved.push(...await updateRangeUnlocked(settings, batch.start, batch.end, { silent: true, modules: targets })); }
-            catch (error) {
-                if (!error.cwbBatchModuleFailure) throw error;
-                errors.push(error);
-            }
-        }
-        const summary = `第 ${start + 1}-${end + 1} 楼按正文长度拆为 ${inputBatches.length} 次 AI 请求；${errors.length ? errors.map(error => error.message).join('；') : '均已保存并核验'}`;
-        setStatus(summary);
-        if (errors.length) {
-            const error = new Error(summary, { cause: errors[0] });
-            error.cwbReportGenerated = true;
-            error.cwbBatchModuleFailure = true;
-            error.cwbSuccessfulModules = inputBatches.length > errors.length ? targets.length : 0;
-            throw error;
-        }
-        if (!silent) notify('success', summary);
-        return [...new Set(saved)];
-    }
     state.updating = true;
     const names = [], failures = [], successes = [], moduleErrors = [];
     try {
         await getModuleProgress(); // Fail before spending tokens if reliable progress cannot be read.
-        const selected = archiveMessages(state.messages.slice(start, end + 1));
+        const selected = state.messages.slice(start, end + 1);
         const oldProfiles = targets.includes('profiles') ? (await getTriggeredOldProfiles(settings, selected)).map(sanitizeProfileContent).filter(Boolean) : [];
         const oldTimeline = targets.includes('timeline') ? (await getTimelineEntries()).map(entry => entry.content).join('\n') : '';
         const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
         assertCurrentChat(chatId);
         const messages = [];
         if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
-        if (targets.includes('profiles')) messages.push({ role: 'system', content: combinedGuidance(settings.incremental ? settings.incrementalPrompt : settings.fullPrompt) });
-        if (targets.includes('timeline')) messages.push({ role: 'system', content: combinedGuidance(settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT) });
-        if (targets.includes('relationships')) messages.push({ role: 'system', content: combinedGuidance(RELATIONSHIP_PROMPT) });
+        if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
+        if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
+        if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
-        messages.push({ role: 'system', content: outputProtocolFor(targets) + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分无需输出，插件不会写入其内容或进度。` });
+        messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });
         messages.push({ role: 'user', content: `【当前用户主角姓名】${getContext()?.name1 || '用户'}\n【旧角色档案】\n${oldProfiles.join('\n') || '无'}\n【已有时间线（节选）】\n${targets.includes('timeline') ? compactTimelineContext(oldTimeline) : '无'}\n【已有关系】\n${oldRelationships || '无'}\n【本轮新增聊天：第 ${start + 1}-${end + 1} 楼】\n${formatMessages(selected)}` });
-        const inputCharacters = selected.reduce((sum, message) => sum + String(message.message ?? '').length, 0);
         const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
         setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：AI 请求中，输入约 ${requestChars} 字符…`);
         let response;
-        let responseDetails = {};
         const requestStartedAt = Date.now();
-        try { response = await callSystemApi(messages, settings.responseLength, details => { responseDetails = details; }); }
+        try { response = await callSystemApi(messages, settings.responseLength); }
         catch (error) {
             const progressErrors = [];
             if (state.chatId === chatId) {
@@ -224,8 +198,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
             setStatus(message);
             const reportedError = new Error(message, { cause: error });
             reportedError.cwbDiagnostics = {
-                ...responseDetails,
-                stage: 'SillyTavern AI request',
+                stage: 'SillyTavern generateRaw AI request',
                 modules: targets.map(module => MODULE_LABELS[module]),
                 startFloor: start + 1,
                 endFloor: end + 1,
@@ -240,16 +213,12 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         }
         assertCurrentChat(chatId);
         const parts = parseCombinedParts(response);
-        $('#cwb-timeline-debug').text(`统一更新：AI 1 次，第 ${start + 1}-${end + 1} 楼\n通道：${responseDetails.transport || 'unknown'}；结束原因：${responseDetails.finishReason || 'unknown'}；返回 ${response.length} 字符\n${response}`);
-        if (targets.some(module => parts[module].error)) {
-            const log = document.getElementById('cwb-ai-log');
-            if (log) log.open = true;
-        }
+        $('#cwb-timeline-debug').text(`统一更新：AI 1 次，第 ${start + 1}-${end + 1} 楼\n${response}`);
         for (const module of targets) {
             try {
                 assertCurrentChat(chatId);
                 const part = parts[module];
-                if (part.error) throw Error(part.error + (['length', 'max_tokens'].includes(responseDetails.finishReason) ? '；模型达到回复长度上限，输出可能被截断，请调高最大回复Token或缩小批次。' : '') + (responseDetails.transport === 'generateRaw-host-cleanup' ? '；当前为文本补全通道，返回内容仍经过宿主AI输出正则。' : ''));
+                if (part.error) throw Error(part.error);
                 if (module === 'profiles') {
                     const prepared = part.value.map(block => {
                         const parsed = parseCustomFormat(block);
@@ -260,30 +229,18 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                         if (!cleaned || !hasProfileFacts(cleaned)) return null;
                         return { block: cleaned, name, isUser: type === '主角' || type === 'USER' || name === (getContext()?.name1 || '用户') };
                     }).filter(Boolean);
-                    if (part.value.length && !prepared.length) throw Error('档案区块没有有效剧情字段，未把空档案记为成功；请查看AI原文。');
                     let userUpdated = false;
-                    const profileErrors = [];
                     for (const { block, name, isUser } of prepared) {
                         assertCurrentChat(chatId);
-                        try {
-                            const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
-                            assertCurrentChat(chatId);
-                            if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，缺失时先激活目标世界书并扫描生成目录。`);
-                            await verifyProfileContent(settings, name, block, isUser);
-                            assertCurrentChat(chatId);
-                            if (isUser) userUpdated = true; else names.push(saved);
-                        } catch (error) {
-                            assertCurrentChat(chatId);
-                            profileErrors.push(new Error(`${name}：${error.message}`, { cause: error }));
-                        }
+                        const saved = isUser ? await saveUserDescription(settings, name, block, start, end) : await saveCharacterDescription(settings, name, block, start, end);
+                        assertCurrentChat(chatId);
+                        if (!saved) throw Error(`角色 ${name} 未出现在可用目录中；请在“世界书设置 → 查看已有目录”确认，缺失时先激活目标世界书并扫描生成目录。`);
+                        await verifyProfileContent(settings, name, block, isUser);
+                        assertCurrentChat(chatId);
+                        if (isUser) userUpdated = true; else names.push(saved);
                     }
                     if (names.length) { assertCurrentChat(chatId); await updateRoster(settings, [...new Set(names)], start, end); assertCurrentChat(chatId); }
                     else if (userUpdated && settings.multiWorldbookRouting) { assertCurrentChat(chatId); await updateMasterDirectory(settings); assertCurrentChat(chatId); }
-                    if (profileErrors.length) {
-                        const error = new Error(`已保存 ${names.length + Number(userUpdated)} 份档案；未保存：${profileErrors.map(item => item.message).join('；')}`, { cause: profileErrors[0] });
-                        error.cwbDiagnostics = profileErrors[0].cause?.cwbDiagnostics;
-                        throw error;
-                    }
                 } else if (module === 'timeline') {
                     const events = parseTimelineResponse(JSON.stringify(part.value));
                     const unique = uniqueTimelineEntries(events, oldTimeline);
@@ -327,15 +284,9 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                 batchFloors: end - start + 1,
                 totalChatFloors: state.messages.length,
                 requestCharacters: requestChars || null,
-                inputCharacters,
-                ...responseDetails,
-                responseCharacters: response.length,
-                outputParts: Object.fromEntries(targets.map(module => [module, parts[module].error || 'recognized'])),
             };
             createErrorReport(reportError, reportError.cwbDiagnostics);
             reportError.cwbReportGenerated = true;
-            reportError.cwbBatchModuleFailure = true;
-            reportError.cwbSuccessfulModules = successes.length;
             throw reportError;
         }
         if (!silent) notify('success', message);
@@ -548,8 +499,8 @@ export function maybeAutoUpdate(settingsOrProvider) {
             if (status.ready) {
                 autoLastAttempt = { signature };
                 $('#cwb-auto-status').text('自动更新进行中…');
-                const result = await batchUpdate(latestSettings, undefined, { automatic: true });
-                $('#cwb-auto-status').text(result?.stopped ? '自动更新已停止。' : result?.failures?.length ? `自动更新部分完成：${result.failures.join('；')}` : '自动更新完成。');
+                const result = await batchUpdate(latestSettings);
+                $('#cwb-auto-status').text(result?.stopped ? '自动更新已停止。' : '自动更新完成。');
             }
         } catch (error) {
             if (signature) autoLastAttempt = { signature };
@@ -570,7 +521,7 @@ export function maybeAutoUpdate(settingsOrProvider) {
     }, 1200);
 }
 
-export async function batchUpdate(settings, onProgress, { automatic = false } = {}) {
+export async function batchUpdate(settings, onProgress) {
     if (state.operationOwner === '批量更新' && state.batchRunning) { state.batchStopRequested = true; return; }
     const release = acquireOperationLock(state, '批量更新');
     refreshChatState();
@@ -582,25 +533,15 @@ export async function batchUpdate(settings, onProgress, { automatic = false } = 
         const progress = await refreshModuleProgress();
         const plan = pendingBatches(progress, state.messages.length, Math.max(1, Number(settings.threshold) || 20));
         if (!plan.length) { setStatus('三项均已覆盖全部聊天，无需重复更新，AI 调用 0 次。'); return { stopped: false }; }
-        const failures = [];
         for (let index = 0; index < plan.length; index++) {
             if (state.batchStopRequested) break;
             assertCurrentChat(chatId);
             const batch = plan[index];
             onProgress?.(index + 1, plan.length);
-            try {
-                await updateRangeUnlocked(settings, batch.start, batch.end, { silent: true, modules: batch.modules });
-            } catch (error) {
-                assertCurrentChat(chatId);
-                if (!automatic || !error.cwbBatchModuleFailure) throw error;
-                failures.push(error.message);
-                // A globally invalid response should stop rather than spending calls on the backlog.
-                if (!error.cwbSuccessfulModules && batch.modules.length === 3) throw error;
-            }
+            await updateRangeUnlocked(settings, batch.start, batch.end, { silent: true, modules: batch.modules });
         }
-        if (failures.length) setStatus(`自动更新部分完成；${failures.join('；')}`);
-        else if (!state.batchStopRequested) notify('success', '批量补齐完成，已完成内容没有重复生成。');
-        return { stopped: state.batchStopRequested, failures };
+        if (!state.batchStopRequested) notify('success', '批量补齐完成，已完成内容没有重复生成。');
+        return { stopped: state.batchStopRequested };
     } finally {
         state.batchRunning = false;
         state.batchStopRequested = false;

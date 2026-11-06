@@ -1,11 +1,10 @@
-import { archiveText, archiveMessages, archiveBatches } from './archive-input.mjs';
 import { MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory } from './module-progress.mjs';
-import { COMBINED_OUTPUT_PROTOCOL, outputProtocolFor, combinedGuidance, parseCombinedParts } from './combined-response.mjs';
+import { COMBINED_OUTPUT_PROTOCOL, parseCombinedParts } from './combined-response.mjs';
 import { mergeRelationships } from './relationship-utils.mjs';
 import { test } from 'node:test';
 import { webcrypto } from 'node:crypto';
 import { CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress } from './card-archive.mjs';
-import { parseCustomFormat, buildCustomFormat } from './utils.js';
+import { parseCustomFormat } from './utils.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -18,8 +17,8 @@ import { acquireOperationLock } from './state.js';
 function harness(entries = {}) {
     let data = { entries: structuredClone(entries) }, saves = 0, fail = false;
     for (const entry of Object.values(data.entries)) entry.key = entry.key?.map(key => key === 'chat' ? 'CWB:角色卡:Test.png' : key === 'other' ? 'CWB:角色卡:Other.png' : key);
-    const context = vm.createContext({ crypto: webcrypto, TextEncoder, CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress, parseCustomFormat, buildCustomFormat,
-        archiveText, archiveMessages, archiveBatches, MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory,
+    const context = vm.createContext({ crypto: webcrypto, TextEncoder, CARD_PREFIX, archiveCharacter, cardKey, owns, migrateOwnership, sourceHashes, receiptProgress, parseCustomFormat,
+        MODULE_LABELS, moduleStatus, displayRanges, applyModuleResult, intersectRanges, pendingBatches, mergeModuleProgress, legacyModuleHistory,
         DEFAULT_TIMELINE_INCREMENTAL_PROMPT, TIMELINE_CONCISION_RULES, PROFILE_RULES, sanitizeProfileContent, hasProfileFacts,
         parseTimelineRecords, formatTimelineRecords, compactTimelineContext, acquireOperationLock,
         structuredClone, getRequestHeaders: () => ({}), world_names: ['main'], extension_settings: {},
@@ -193,7 +192,7 @@ test('unified no-profile update still saves timeline and relationships with exac
         getRelationshipSummary: async () => '',
         callSystemApi: async () => { calls++; return '[--档案无变化--]\n[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--关系增量开始--]\n{"关系更新":[],"删除关系":[]}\n[--关系增量结束--]'; },
         recordChatUpdateRange: async () => {}, notify() {},
-        COMBINED_OUTPUT_PROTOCOL, outputProtocolFor, combinedGuidance, parseCombinedParts, RELATIONSHIP_PROMPT: '', mergeRelationships,
+        COMBINED_OUTPUT_PROTOCOL, parseCombinedParts, RELATIONSHIP_PROMPT: '', mergeRelationships,
     });
     vm.runInContext(readFileSync(new URL('./core.js', import.meta.url), 'utf8').replace(/^import[\s\S]*?;\n/gm, '').replace(/export /g, ''), h.context);
     h.context.saveTimeline = async () => timelineWrites++;

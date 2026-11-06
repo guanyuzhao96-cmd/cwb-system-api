@@ -1,4 +1,4 @@
-const REPORT_VERSION = '0.12.4-card-r13';
+const REPORT_VERSION = '0.12.4-card-r8';
 let latestReportJson = null;
 let latestReportName = null;
 
@@ -37,11 +37,6 @@ export function createErrorReport(error, details = {}) {
             totalChatFloors: Number.isFinite(details.totalChatFloors) ? details.totalChatFloors : null,
             requestCharacters: Number.isFinite(details.requestCharacters) ? details.requestCharacters : null,
             requestDurationMs: Number.isFinite(details.requestDurationMs) ? details.requestDurationMs : null,
-            responseCharacters: Number.isFinite(details.responseCharacters) ? details.responseCharacters : null,
-            outputParts: details.outputParts ?? null,
-            inputCharacters: Number.isFinite(details.inputCharacters) ? details.inputCharacters : null,
-            transport: details.transport ?? null,
-            finishReason: details.finishReason ?? null,
         },
         error: errorDetails(error),
         privacy: '报告不包含聊天正文、完整提示词、世界书条目内容或聊天标识。',

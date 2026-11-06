@@ -52,19 +52,16 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         },
     });
     const script = {
-        eventSource: { on: (event, fn) => hostHandlers.set(event, fn), removeListener: (event, fn) => { if (hostHandlers.get(event) === fn) hostHandlers.delete(event); } },
-        event_types: { MESSAGE_RECEIVED: 'message_received', GENERATION_ENDED: 'generation_ended', CHAT_CHANGED: 'chat_id_changed', CHAT_COMPLETION_SETTINGS_READY: 'chat_completion_settings_ready' },
-        main_api: 'openai',
-        createRawPrompt: (prompt, _api, _instruct, _quiet, system) => [{ role: 'system', content: system }, ...prompt],
-        extractMessageFromData: data => data.choices[0].message.content,
+        eventSource: { on: (event, fn) => hostHandlers.set(event, fn) },
+        event_types: { MESSAGE_RECEIVED: 'message_received', GENERATION_ENDED: 'generation_ended', CHAT_CHANGED: 'chat_id_changed' },
         saveSettingsDebounced() {}, getRequestHeaders: () => ({}),
         generateRaw: async options => {
             requests.push(options);
             if (echoGenerationEnded) hostHandlers.get('generation_ended')?.();
             if (failApiRequest) throw new TypeError('Load failed');
             if (suppliedReply !== null) return suppliedReply;
-            if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分') || options.systemPrompt.includes('【CWB档案专用输出协议】') || options.systemPrompt.includes('必须输出完整区块')) {
-                if (invalidCombined) { invalidCombined = false; return '[--档案无变化--]'; }
+            if (options.systemPrompt.includes('本次必须在同一条回复中输出三部分')) {
+                if (invalidCombined) return '[--档案无变化--]';
                 relationRound++;
                 const input = options.prompt.map(x => x.content).join('\n');
                 const latest = [...input.matchAll(/新增事件([一二三])/g)].at(-1)?.[1];
@@ -85,18 +82,6 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             return JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] });
         },
     };
-    // Model replies are raw; the obsolete generateRaw path simulates a global
-    // AI_OUTPUT regex that strips profile envelopes before the plugin sees them.
-    const modelReply = script.generateRaw;
-    let cleanedPathCalls = 0;
-    script.generateRaw = async options => { cleanedPathCalls++; return (await modelReply(options)).replace(/\[--角色档案开始--][\s\S]*?\[--角色档案结束--]/g, ''); };
-    const openai = { sendOpenAIRequest: async (_type, messages) => {
-        const data = { messages: [...messages], max_tokens: 2048 };
-        hostHandlers.get('chat_completion_settings_ready')?.(data);
-        const content = await modelReply({ prompt: messages.filter(item => item.role !== 'system'), systemPrompt: messages.filter(item => item.role === 'system').map(item => item.content).join('\n\n'), responseLength: data.max_tokens });
-        assert.equal(cleanedPathCalls, 0, 'archive generation must bypass host AI_OUTPUT cleanup');
-        return { choices: [{ message: { content }, finish_reason: 'stop' }] };
-    } };
     const extensions = { extension_settings, getContext: () => contextData,
         renderExtensionTemplateAsync: async () => readFile(new URL('./settings.html', import.meta.url), 'utf8') };
     const world = {
@@ -112,7 +97,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const root = dirname(fileURLToPath(import.meta.url));
     async function load(id) {
         if (modules.has(id)) return modules.get(id);
-        const mock = id === '/script.js' ? script : id === '/scripts/extensions.js' ? extensions : id === '/scripts/world-info.js' ? world : id === '/scripts/openai.js' ? openai : null;
+        const mock = id === '/script.js' ? script : id === '/scripts/extensions.js' ? extensions : id === '/scripts/world-info.js' ? world : null;
         const mod = mock ? new vm.SyntheticModule(Object.keys(mock), function () { for (const [k, v] of Object.entries(mock)) this.setExport(k, v); }, { context, identifier: id })
             : new vm.SourceTextModule(readFileSync(id, 'utf8'), { context, identifier: id });
         modules.set(id, mod);
@@ -294,14 +279,14 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     // output; failure remains visible and is retried only with new input/settings.
     invalidCombined = true;
     echoGenerationEnded = true;
-    contextData.chat.push(...Array.from({ length: 8 }, () => ({ mes: '本轮无效格式模拟' })));
+    contextData.chat.push(...Array.from({ length: 4 }, () => ({ mes: '本轮无效格式模拟' })));
     const beforeFailedAuto = requests.length;
     hostHandlers.get('generation_ended')();
-    await waitForAuto(() => requests.length > beforeFailedAuto && !autoState.operationOwner && $('#cwb-auto-status').text().includes('自动更新部分完成'));
+    await waitForAuto(() => requests.length > beforeFailedAuto && !autoState.operationOwner && $('#cwb-auto-status').text().includes('自动更新失败'));
     hostHandlers.get('generation_ended')();
     hostHandlers.get('message_received')();
     await new Promise(resolve => setTimeout(resolve, 40));
-    assert.equal(requests.length - beforeFailedAuto, 2, 'the later batch runs once, and the same failed source does not loop');
+    assert.equal(requests.length - beforeFailedAuto, 1, 'the same failed source never causes an automatic AI retry loop');
     invalidCombined = false;
     echoGenerationEnded = false;
     await autoCore.batchUpdate(liveSettings);
@@ -569,28 +554,6 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     }
     const savedBatchProgress = await progressStore.getModuleProgress();
     for (const module of ['profiles', 'timeline', 'relationships']) assert.equal(savedBatchProgress[module].completed[0][1], 24);
-
-    // Screenshot regression: 153 floors saved, only profiles missing on 154–176.
-    const beforeScopedChat = contextData.chat;
-    const beforeScopedReply = suppliedReply;
-    contextData.chat = Array.from({ length: 176 }, (_, i) => ({ mes: '第' + (i + 1) + '楼的重要约定' }));
-    suppliedReply = '[--角色档案开始--]\n[档案类型]:主角\n[姓名]:主角\n[剧情.0]:2025-09-02｜作出重要约定并承担持续责任\n[--角色档案结束--]';
-    const beforeScopedCalls = requests.length;
-    const beforeScopedTimeline = JSON.stringify(await progressStore.getTimelineEntries());
-    const beforeScopedRelations = await progressStore.getRelationshipSummary();
-    await autoCore.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 153, 175, { silent: true, modules: ['profiles'] });
-    assert.equal(requests.length - beforeScopedCalls, 1);
-    const scopedPrompt = requests.at(-1).systemPrompt;
-    assert.ok(scopedPrompt.includes('【CWB档案专用输出协议】'));
-    assert.ok(!scopedPrompt.includes('[--时间线增量开始--]'));
-    assert.ok(!scopedPrompt.includes('[--关系增量开始--]'));
-    assert.ok((await progressStore.getModuleProgress()).profiles.completed.some(([a, b]) => a <= 153 && b >= 175));
-    assert.equal(JSON.stringify(await progressStore.getTimelineEntries()), beforeScopedTimeline);
-    assert.equal(await progressStore.getRelationshipSummary(), beforeScopedRelations);
-    suppliedReply = '[--时间线增量开始--]\n{"时间线":[]}\n[--时间线增量结束--]\n[--档案无变化--]';
-    await autoCore.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 153, 175, { silent: true, modules: ['profiles'] });
-    contextData.chat = beforeScopedChat;
-    suppliedReply = beforeScopedReply;
     throwOnWrite = true;
     await assert.rejects(modules.get(resolve(root, 'core.js')).namespace.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true, modules: ['profiles'] }), error =>
         error.cwbDiagnostics.stage === 'Worldbook write'
@@ -598,11 +561,6 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         && error.cwbDiagnostics.requestPath === '/api/worldinfo/edit'
         && error.stack.includes('Caused by:'));
     throwOnWrite = false;
-    suppliedReply = ['无目录角色', '角色甲'].map(name =>
-        `[--角色档案开始--]\n[档案类型]:角色\n[姓名]:${name}\n[剧情.0]:2025-09-02｜路由失败后的可保存剧情\n[--角色档案结束--]`).join('\n');
-    await assert.rejects(autoCore.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true, modules: ['profiles'] }), /已保存 1 份档案；未保存：无目录角色/);
-    assert.match(booksByName.get('角色分卷').entries[1].content, /路由失败后的可保存剧情/);
-    assert.equal((await progressStore.getModuleProgress()).profiles.failed[0][1], 24);
     suppliedReply = null;
     blockedReadBook = null;
 
