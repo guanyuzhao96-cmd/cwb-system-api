@@ -6,12 +6,21 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订8.3</span><h2>角色卡世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订8.4</span><h2>角色卡世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
             <p id="cwb-archive-availability" class="cwb-caption" role="status">已有资料待读取；下方楼层表示更新进度，不是资料数量。</p>
             <button id="cwb-download-error-report" class="menu_button cwb-full-width" hidden>下载最近一次错误报告</button>
+            <details class="cwb-section" id="cwb-ai-replies">
+                <summary>查看 AI 回复正文</summary>
+                <div class="cwb-section-body">
+                    <p class="cwb-caption">显示插件实际收到的完整回复；每次请求按楼层依次保留，失败后自动展开。仅保留在当前页面，刷新前请复制或下载。这里的内容可能已被酒馆输出正则处理。</p>
+                    <button type="button" id="cwb-copy-ai-replies" class="menu_button">复制 AI 回复</button>
+                    <button type="button" id="cwb-download-ai-replies" class="menu_button">下载 AI 回复</button>
+                    <textarea id="cwb-ai-reply-text" class="text_pole textarea_compact" rows="12" readonly aria-label="AI 完整回复正文" placeholder="尚未收到 AI 回复，请先执行一次更新。"></textarea>
+                </div>
+            </details>
 
             <section class="cwb-progress-overview" aria-label="三项更新进度">
                 <button type="button" class="cwb-progress-tile" data-cwb-progress="profiles" aria-label="查看角色档案进度与补漏"><span>角色档案</span><strong id="cwb-through-profiles">—</strong><small id="cwb-gap-profiles">待读取</small></button>

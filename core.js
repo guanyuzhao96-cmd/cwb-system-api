@@ -278,6 +278,8 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
         setStatus(message);
         if (failures.length) {
+            const replySection = document.getElementById('cwb-ai-replies');
+            if (replySection) replySection.open = true;
             const failedModules = targets.filter(module => failures.some(failure => failure.startsWith(`${MODULE_LABELS[module]}：`)));
             const reportError = new Error(message, { cause: moduleErrors[0] });
             if (moduleErrors[0]?.stack) reportError.stack += `\nCaused by: ${moduleErrors[0].stack}`;

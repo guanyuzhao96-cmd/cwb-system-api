@@ -1,4 +1,5 @@
 import { generateRaw } from '/script.js';
+import { recordAiReply } from './ai-replies.mjs';
 
 export function isSystemApiReady() {
     return true;
@@ -9,6 +10,7 @@ export async function callSystemApi(messages, responseLength = null) {
     const systemMessages = messages.filter(message => message.role === 'system').map(message => message.content);
     const promptMessages = messages.filter(message => message.role !== 'system');
     let result;
+    const range = messages.map(message => String(message.content ?? '')).join('\n').match(/第\s*\d+\s*[-–]\s*\d+\s*楼/)?.[0] || '';
     try {
         result = await generateRaw({
             prompt: promptMessages,
@@ -17,10 +19,16 @@ export async function callSystemApi(messages, responseLength = null) {
             trimNames: false,
         });
     } catch (error) {
+        recordAiReply('', range, error?.message || String(error));
         console.error('[CWB] SillyTavern generateRaw request failed', error);
         throw new Error(`酒馆系统 API 请求失败：${error?.message || String(error)}`, { cause: error });
     }
-    if (!String(result ?? '').trim()) throw new Error('系统 API 未返回有效内容。');
+    recordAiReply(result, range);
+    if (!String(result ?? '').trim()) {
+        const section = document.getElementById('cwb-ai-replies');
+        if (section) section.open = true;
+        throw new Error('系统 API 未返回有效内容。');
+    }
     return String(result).trim();
 }
 

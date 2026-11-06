@@ -8,7 +8,7 @@
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
   "version": "0.12.4",
-  "description": "0.12.4角色卡存档版修订8.3：优先读取dream_body正文，仅正文缺失或为空时读取plot_summary总结。",
+  "description": "0.12.4角色卡存档版修订8.4：新增AI完整回复查看、复制和下载，失败时自动展开，按批次保留。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/guanyuzhao96-cmd/cwb-system-api"
 }

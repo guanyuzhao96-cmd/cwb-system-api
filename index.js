@@ -10,6 +10,7 @@ import {
 import { cwbCompleteDefaultSettings, DEFAULT_TIMELINE_INCREMENTAL_PROMPT, migrateBuiltinProfilePrompt, ensureProfilePromptRules, ensureTimelinePromptRules } from './defaults.js';
 import { testSystemApi } from './api.js';
 import { createErrorReport, downloadLatestErrorReport } from './error-report.js';
+import { downloadAiReplies, replyLogText } from './ai-replies.mjs';
 import { batchUpdate, maybeAutoUpdate, cancelAutoUpdate, onChatChanged, refreshChatState, updateRange, updateRecent, refreshTimeline, updateRelationships, refreshModuleProgress, retryMissingModule } from './core.js';
 import { cleanupProfileFields, convertLegacyEntries, copyProgressFromChat, deleteGeneratedContent, generateWorldbookDirectories, getGeneratedContentPreview, getProgressRecoveryCandidates, listWorldbooks, routeSummary, resetArchiveLocation, organizeCharacterProfiles } from './lorebook.js';
 import { MODULE_NAME, state, acquireOperationLock } from './state.js';
@@ -219,6 +220,21 @@ function bindUi() {
     });
     $('#cwb-download-error-report').on('click', function () {
         if (!downloadLatestErrorReport()) notify('warning', '当前没有可下载的错误报告。');
+    });
+    $('#cwb-download-ai-replies').on('click', () => {
+        if (!downloadAiReplies()) notify('warning', '当前页面还没有记录 AI 回复，请先执行一次更新。');
+    });
+    $('#cwb-copy-ai-replies').on('click', async () => {
+        const text = replyLogText();
+        if (!text) { notify('warning', '当前页面还没有记录 AI 回复。'); return; }
+        try {
+            await navigator.clipboard.writeText(text);
+            notify('success', '已复制 AI 回复正文。');
+        } catch {
+            const field = document.getElementById('cwb-ai-reply-text');
+            field?.focus(); field?.select();
+            notify('info', '请长按文本框复制，或点击下载 AI 回复。');
+        }
     });
     $('#cwb-manual-update').on('click', function () {
         runButton($(this), '更新中…', () => updateRecent(settings()));
