@@ -52,8 +52,11 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
         },
     });
     const script = {
-        eventSource: { on: (event, fn) => hostHandlers.set(event, fn) },
-        event_types: { MESSAGE_RECEIVED: 'message_received', GENERATION_ENDED: 'generation_ended', CHAT_CHANGED: 'chat_id_changed' },
+        eventSource: { on: (event, fn) => hostHandlers.set(event, fn), removeListener: (event, fn) => { if (hostHandlers.get(event) === fn) hostHandlers.delete(event); } },
+        event_types: { MESSAGE_RECEIVED: 'message_received', GENERATION_ENDED: 'generation_ended', CHAT_CHANGED: 'chat_id_changed', CHAT_COMPLETION_SETTINGS_READY: 'chat_completion_settings_ready' },
+        main_api: 'openai',
+        createRawPrompt: (prompt, _api, _instruct, _quiet, system) => [{ role: 'system', content: system }, ...prompt],
+        extractMessageFromData: data => data.choices[0].message.content,
         saveSettingsDebounced() {}, getRequestHeaders: () => ({}),
         generateRaw: async options => {
             requests.push(options);
@@ -82,6 +85,18 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
             return JSON.stringify({ 时间线: latest ? [{ 日期: '日期未知', 人物: '主角', 事件: `新增事件${latest}` }] : [] });
         },
     };
+    // Model replies are raw; the obsolete generateRaw path simulates a global
+    // AI_OUTPUT regex that strips profile envelopes before the plugin sees them.
+    const modelReply = script.generateRaw;
+    let cleanedPathCalls = 0;
+    script.generateRaw = async options => { cleanedPathCalls++; return (await modelReply(options)).replace(/\[--角色档案开始--][\s\S]*?\[--角色档案结束--]/g, ''); };
+    const openai = { sendOpenAIRequest: async (_type, messages) => {
+        const data = { messages: [...messages], max_tokens: 2048 };
+        hostHandlers.get('chat_completion_settings_ready')?.(data);
+        const content = await modelReply({ prompt: messages.filter(item => item.role !== 'system'), systemPrompt: messages.filter(item => item.role === 'system').map(item => item.content).join('\n\n'), responseLength: data.max_tokens });
+        assert.equal(cleanedPathCalls, 0, 'archive generation must bypass host AI_OUTPUT cleanup');
+        return { choices: [{ message: { content }, finish_reason: 'stop' }] };
+    } };
     const extensions = { extension_settings, getContext: () => contextData,
         renderExtensionTemplateAsync: async () => readFile(new URL('./settings.html', import.meta.url), 'utf8') };
     const world = {
@@ -97,7 +112,7 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     const root = dirname(fileURLToPath(import.meta.url));
     async function load(id) {
         if (modules.has(id)) return modules.get(id);
-        const mock = id === '/script.js' ? script : id === '/scripts/extensions.js' ? extensions : id === '/scripts/world-info.js' ? world : null;
+        const mock = id === '/script.js' ? script : id === '/scripts/extensions.js' ? extensions : id === '/scripts/world-info.js' ? world : id === '/scripts/openai.js' ? openai : null;
         const mod = mock ? new vm.SyntheticModule(Object.keys(mock), function () { for (const [k, v] of Object.entries(mock)) this.setExport(k, v); }, { context, identifier: id })
             : new vm.SourceTextModule(readFileSync(id, 'utf8'), { context, identifier: id });
         modules.set(id, mod);

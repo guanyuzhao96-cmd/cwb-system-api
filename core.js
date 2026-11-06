@@ -184,8 +184,9 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         const requestChars = messages.reduce((total, message) => total + String(message.content ?? '').length, 0);
         setStatus(`正在统一更新第 ${start + 1}-${end + 1} 楼：AI 请求中，输入约 ${requestChars} 字符…`);
         let response;
+        let responseDetails = {};
         const requestStartedAt = Date.now();
-        try { response = await callSystemApi(messages, settings.responseLength); }
+        try { response = await callSystemApi(messages, settings.responseLength, details => { responseDetails = details; }); }
         catch (error) {
             const progressErrors = [];
             if (state.chatId === chatId) {
@@ -198,7 +199,8 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
             setStatus(message);
             const reportedError = new Error(message, { cause: error });
             reportedError.cwbDiagnostics = {
-                stage: 'SillyTavern generateRaw AI request',
+                ...responseDetails,
+                stage: 'SillyTavern AI request',
                 modules: targets.map(module => MODULE_LABELS[module]),
                 startFloor: start + 1,
                 endFloor: end + 1,
@@ -213,7 +215,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         }
         assertCurrentChat(chatId);
         const parts = parseCombinedParts(response);
-        $('#cwb-timeline-debug').text(`统一更新：AI 1 次，第 ${start + 1}-${end + 1} 楼\n${response}`);
+        $('#cwb-timeline-debug').text(`统一更新：AI 1 次，第 ${start + 1}-${end + 1} 楼\n通道：${responseDetails.transport || 'unknown'}；结束原因：${responseDetails.finishReason || 'unknown'}；返回 ${response.length} 字符\n${response}`);
         if (targets.some(module => parts[module].error)) {
             const log = document.getElementById('cwb-ai-log');
             if (log) log.open = true;
@@ -222,7 +224,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
             try {
                 assertCurrentChat(chatId);
                 const part = parts[module];
-                if (part.error) throw Error(part.error);
+                if (part.error) throw Error(part.error + (['length', 'max_tokens'].includes(responseDetails.finishReason) ? '；模型达到回复长度上限，输出可能被截断，请调高最大回复Token或缩小批次。' : '') + (responseDetails.transport === 'generateRaw-host-cleanup' ? '；当前为文本补全通道，返回内容仍经过宿主AI输出正则。' : ''));
                 if (module === 'profiles') {
                     const prepared = part.value.map(block => {
                         const parsed = parseCustomFormat(block);
@@ -299,6 +301,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
                 batchFloors: end - start + 1,
                 totalChatFloors: state.messages.length,
                 requestCharacters: requestChars || null,
+                ...responseDetails,
                 responseCharacters: response.length,
                 outputParts: Object.fromEntries(targets.map(module => [module, parts[module].error || 'recognized'])),
             };

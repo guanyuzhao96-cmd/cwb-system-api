@@ -1,3 +1,9 @@
+## 0.12.4 角色卡存档版 · 修订12（2026-11-06）
+
+修复聊天补全返回正文被宿主 AI 输出正则预处理的问题。仅设置 trimNames:false 不会禁用正则；现在聊天补全在宿主原生请求返回后直接提取原文，再交给档案解析器。用户的正则及聊天显示设置不变，不新增 AI 重试。报告与 AI 日志新增返回通道、回复长度和结束原因；解析失败且 finish_reason 为 length/max_tokens 时明确提示长度截断。
+
+验证依据：SillyTavern 1.13.5 public/script.js 的 generateRaw、cleanUpMessage、createRawPrompt、extractMessageFromData 以及 public/scripts/openai.js 的 sendOpenAIRequest。固定版本宿主源码复现测试使用 CWB_HOST_SCRIPT_FIXTURE 指向已检查的 public/script.js，默认测试不会联网下载或运行外部代码。测试中模拟一条删除档案区块的 AI 输出正则，证明旧通道会丢档案、新通道会保留；这不等同于已读取用户安装的具体正则，也不等同于云酒馆实测。
+
 ## 0.12.4 角色卡存档版 · 修订11（2026-11-06）
 
 只补档案时仅要求档案，不再要求已完成的时间线和关系；组合请求移除内置独立时间线提示词中“不生成角色档案”等冲突指令。档案及无变化标记允许出现在其他模块之后，完整且明确的“本次没有角色档案变化”回复也可识别。缺失、含糊或截断回复仍保留待补。格式失败自动展开 AI 原文；报告新增回复长度和各模块识别结果，不包含正文。正常更新仍调用 AI 一次，不暗中追加重试。
@@ -256,7 +262,7 @@ v0.5 默认提示词只维护三类信息：`SEX` 性经历事实摘要与次数
 
 ## API 行为
 
-内部使用 SillyTavern 原生 `generateRaw()`，因此会沿用当前主 API、当前模型、采样预设和 instruct 状态。插件只允许可选地限制最大回复 Token，不保存任何 API 密钥。
+聊天补全（`main_api === openai`）使用 SillyTavern 1.13.5 的 `createRawPrompt`、`sendOpenAIRequest(quiet, ...)` 与 `extractMessageFromData`，沿用当前聊天补全模型和采样设置，直接读取返回正文，不执行 `cleanUpMessage` 的全局/角色 AI 输出正则。原来的 `generateRaw({trimNames:false})` 仍会执行这些正则，不能用于保护机器可读档案。文本补全继续走宿主 `generateRaw`，报告明确标记该通道仍包含宿主清理。最大回复 Token 的临时覆盖只匹配本次请求，不修改全局预设；结束时移除监听。插件不保存 API 密钥。
 ## 0.10.5 时间线同日合并
 
 - 时间线统一为“日期｜事件”，同一天关键进展合并记录，日期只出现一次。

@@ -8,7 +8,7 @@
   "css": "style.css",
   "author": "OpenAI Codex（基于 Amily2 CWB 逻辑复刻）",
   "version": "0.12.4",
-  "description": "0.12.4角色卡存档版修订11：按待补模块生成输出协议，清除组合请求的独立输出冲突，修复回复顺序和明确无变化文本识别。",
+  "description": "0.12.4角色卡存档版修订12：聊天补全直接读取原始正文，避免宿主AI输出正则删除档案；报告返回通道与模型结束原因。",
   "minSillyTavernVersion": "1.13.5",
   "homePage": "https://github.com/guanyuzhao96-cmd/cwb-system-api"
 }
