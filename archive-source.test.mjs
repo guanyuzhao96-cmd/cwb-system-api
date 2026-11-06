@@ -7,8 +7,8 @@ test('summary-only floor preserves confirmed facts without body or variable patc
     const value = '<plot_summary>2025-09-01｜甲将重要证据交给乙，乙据此决定申诉</plot_summary><UpdateVariable><JSONPatch>private-state</JSONPatch></UpdateVariable>';
     assert.deepEqual(archiveSource(value), { kind: 'summary', text: '2025-09-01｜甲将重要证据交给乙，乙据此决定申诉' });
 });
-test('summary wins over body and duplicate summaries are not repeated', () => {
-    assert.deepEqual(archiveSource('<dream_body>过程细节</dream_body><plot_summary>决定申诉</plot_summary><plot_summary>决定申诉</plot_summary>'), { kind: 'summary', text: '决定申诉' });
+test('nonempty dream_body wins over summaries', () => {
+    assert.deepEqual(archiveSource('<dream_body>过程细节</dream_body><plot_summary>决定申诉</plot_summary><plot_summary>决定申诉</plot_summary>'), { kind: 'body', text: '过程细节' });
 });
 test('mixed body, user message and missing-source floors keep their positions and raw receipts', () => {
     const input = [{ mes: '计划寻找证据', is_user: true }, { mes: '<dream_body>找到证据</dream_body>' }, { mes: '<dream_plot><UpdateVariable><Analysis>状态</Analysis></UpdateVariable></dream_plot><StatusPlaceHolderImpl/>' }];
@@ -33,6 +33,8 @@ test('optional private summary-only chat preserves all floors and each retained 
         const chunks = [...row.mes.matchAll(/<plot_summary>([\s\S]*?)<\/plot_summary>/g)].map(m => m[1].trim()).filter(Boolean);
         if (!chunks.length) return;
         count++;
+        const bodies = [...row.mes.matchAll(/<dream_body\b[^>]*>([\s\S]*?)<\/dream_body\s*>/gi)].map(m => archiveSource(m[0])).filter(source => source.kind === 'body');
+        if (bodies.length) { assert.equal(prepared[index].archiveSourceKind, 'body'); return; }
         assert.equal(prepared[index].archiveSourceKind, 'summary');
         for (const chunk of chunks) assert.ok(prepared[index].message.includes(chunk));
         assert.ok(!prepared[index].message.includes('<UpdateVariable>'));
@@ -40,4 +42,8 @@ test('optional private summary-only chat preserves all floors and each retained 
     assert.ok(count > 0);
     assert.equal(JSON.stringify(rows), original);
     console.log(JSON.stringify({ privateSummaryFloors: rows.length, summariesRead: count }));
+});
+
+test('empty or machine-only dream_body falls back to deduplicated summaries', () => {
+ assert.deepEqual(archiveSource('<dream_body>  <UpdateVariable>补丁</UpdateVariable></dream_body><plot_summary>确认事实</plot_summary><plot_summary>确认事实</plot_summary>'), {kind:'summary',text:'确认事实'});
 });

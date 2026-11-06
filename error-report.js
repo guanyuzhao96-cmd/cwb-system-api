@@ -1,4 +1,4 @@
-const REPORT_VERSION = '0.12.4-card-r8.2';
+const REPORT_VERSION = '0.12.4-card-r8.3';
 let latestReportJson = null;
 let latestReportName = null;
 

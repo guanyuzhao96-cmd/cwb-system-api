@@ -6,6 +6,8 @@ export function archiveSource(value) {
     const raw = String(value ?? '');
     // Ignore examples or summary-like tags embedded in machine output.
     const clean = raw.replace(machineBlocks, '');
+    const bodies = [...clean.matchAll(/<dream_body\b[^>]*>([\s\S]*?)<\/dream_body\s*>/gi)].map(match => match[1].replace(summaries, '').trim()).filter(Boolean);
+    if (bodies.length) return { kind: 'body', text: bodies.join('\n\n') };
     const parts = [...clean.matchAll(summaries)].map(match => match[1].trim()).filter(Boolean);
     if (parts.length) return { kind: 'summary', text: [...new Set(parts)].join('\n\n') };
     const text = clean.replace(/<details\b[^>]*>[\s\S]*?<\/details\s*>/gi, '')
