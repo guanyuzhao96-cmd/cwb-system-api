@@ -56,7 +56,7 @@ function automaticSource(settings) {
     return JSON.stringify([currentChatId(), settings.threshold, settings.worldbookTarget,
         settings.customWorldbook, settings.excludedWorldbooks, settings.fullPrompt,
         settings.incrementalPrompt, settings.timelineIncrementalPrompt, settings.incremental,
-        settings.breakPrompt, settings.responseLength, settings.scanDepth,
+        settings.breakPrompt, settings.customPreamble, settings.responseLength, settings.scanDepth,
         (context?.chat ?? []).map(message => [!!message.is_user, !!message.is_system, message.name ?? '', message.mes ?? ''])]);
 }
 
@@ -179,6 +179,7 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         const oldRelationships = targets.includes('relationships') ? await getRelationshipSummary() : '';
         assertCurrentChat(chatId);
         const messages = [];
+        if (settings.customPreamble?.trim()) messages.push({ role: 'system', content: settings.customPreamble.trim() });
         messages.push({ role: 'system', content: SUMMARY_SOURCE_GUIDANCE });
         if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
@@ -278,8 +279,6 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         const message = `第 ${start + 1}-${end + 1} 楼，AI 1 次；成功：${successes.join('、') || '无'}${failures.length ? `；待手动补漏：${failures.join('；')}` : ''}`;
         setStatus(message);
         if (failures.length) {
-            const replySection = document.getElementById('cwb-ai-replies');
-            if (replySection) replySection.open = true;
             const failedModules = targets.filter(module => failures.some(failure => failure.startsWith(`${MODULE_LABELS[module]}：`)));
             const reportError = new Error(message, { cause: moduleErrors[0] });
             if (moduleErrors[0]?.stack) reportError.stack += `\nCaused by: ${moduleErrors[0].stack}`;

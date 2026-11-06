@@ -12,7 +12,7 @@ test('reply history preserves whitespace, unsafe markup and failed requests with
         assert.ok(field.value.endsWith(raw));
         assert.equal(field.innerHTML, undefined, 'model text is never interpreted as HTML');
         recordAiReply('', '第 26-50 楼', '连接失败');
-        assert.equal(section.open, true);
+        assert.equal(section.open, false, 'failed replies preserve the collapsed state');
         recordAiReply('下一批成功', '第 51-75 楼');
         assert.ok(replyLogText().includes(raw));
         assert.ok(replyLogText().includes('没有收到回复：连接失败'));

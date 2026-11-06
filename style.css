@@ -43,6 +43,7 @@
 .cwb-section > summary > span { font-size:11px; font-weight:400; opacity:.55; }
 .cwb-section > summary > .cwb-section-title { font-size:14px; font-weight:650; color:inherit; opacity:1; }
 .cwb-section-body { padding:0 0 16px; min-width:0; }
+.cwb-panel details:not([open]) > .cwb-section-body { display:none; }
 .cwb-subsection { padding-top:12px; margin-top:12px; border-top:1px solid var(--cwb-line); min-width:0; }
 .cwb-section-body > .cwb-subsection:first-child { padding-top:0; margin-top:0; border-top:0; }
 .cwb-subsection > h3 { margin:0 0 9px; font-size:13px; line-height:1.4; font-weight:650; }

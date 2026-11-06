@@ -25,8 +25,6 @@ export async function callSystemApi(messages, responseLength = null) {
     }
     recordAiReply(result, range);
     if (!String(result ?? '').trim()) {
-        const section = document.getElementById('cwb-ai-replies');
-        if (section) section.open = true;
         throw new Error('系统 API 未返回有效内容。');
     }
     return String(result).trim();

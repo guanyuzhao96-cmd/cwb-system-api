@@ -8,10 +8,6 @@ export function recordAiReply(text, range = '', error = '') {
     if (typeof document === 'undefined') return;
     const field = document.getElementById('cwb-ai-reply-text');
     if (field) field.value = replyLogText();
-    if (error) {
-        const section = document.getElementById('cwb-ai-replies');
-        if (section) section.open = true;
-    }
 }
 export function downloadAiReplies() {
     if (!replies.length) return false;

@@ -6,7 +6,7 @@
         </div>
         <div class="inline-drawer-content">
             <header class="cwb-dashboard-head">
-                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订8.4</span><h2>角色卡世界书</h2></div>
+                <div><span class="cwb-eyebrow">WORLD BOOK · 0.12.4 角色卡存档版 · 修订8.5</span><h2>角色卡世界书</h2></div>
                 <label class="cwb-enabled"><input id="cwb-enabled" type="checkbox"><span>启用</span></label>
             </header>
             <div id="cwb-status" class="cwb-status" role="status" aria-live="polite">待读取当前聊天进度</div>
@@ -15,7 +15,7 @@
             <details class="cwb-section" id="cwb-ai-replies">
                 <summary>查看 AI 回复正文</summary>
                 <div class="cwb-section-body">
-                    <p class="cwb-caption">显示插件实际收到的完整回复；每次请求按楼层依次保留，失败后自动展开。仅保留在当前页面，刷新前请复制或下载。这里的内容可能已被酒馆输出正则处理。</p>
+                    <p class="cwb-caption">点击标题展开，显示插件实际收到的完整回复；每次请求按楼层依次保留。仅保留在当前页面，刷新前请复制或下载。这里的内容可能已被酒馆输出正则处理。</p>
                     <button type="button" id="cwb-copy-ai-replies" class="menu_button">复制 AI 回复</button>
                     <button type="button" id="cwb-download-ai-replies" class="menu_button">下载 AI 回复</button>
                     <textarea id="cwb-ai-reply-text" class="text_pole textarea_compact" rows="12" readonly aria-label="AI 完整回复正文" placeholder="尚未收到 AI 回复，请先执行一次更新。"></textarea>
@@ -126,6 +126,7 @@
                     <div class="cwb-subsection">
                         <h3>提示词</h3>
                     <p class="cwb-help">修改后自动保存，下次更新档案时生效。</p>
+                    <details class="cwb-prompt-editor"><summary>破限词（可选前置文本）</summary><label class="cwb-sr-only" for="cwb-custom-preamble">破限词</label><textarea id="cwb-custom-preamble" rows="5" class="text_pole textarea_compact" placeholder="在此填写自定义前置文本，留空则不发送。"></textarea><p class="cwb-help">独立保存，更新档案时放在前置提示词之前发送，不覆盖下面已有的规则。</p></details>
                     <details class="cwb-prompt-editor"><summary>前置提示词</summary><label class="cwb-sr-only" for="cwb-break-prompt">前置提示词</label><textarea id="cwb-break-prompt" rows="3" class="text_pole textarea_compact"></textarea></details>
                     <details class="cwb-prompt-editor"><summary>全量生成</summary><label class="cwb-sr-only" for="cwb-full-prompt">全量生成</label><textarea id="cwb-full-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></details>
                     <details class="cwb-prompt-editor"><summary>角色增量规则</summary><label class="cwb-sr-only" for="cwb-incremental-prompt">角色增量规则</label><textarea id="cwb-incremental-prompt" rows="8" class="text_pole textarea_compact cwb-prompt-large"></textarea></details>

@@ -30,6 +30,7 @@ const defaults = {
     multiWorldbookRouting: true,
     worldbookRoutes: {},
     breakPrompt: cwbCompleteDefaultSettings.cwb_break_armor_prompt,
+    customPreamble: '',
     fullPrompt: cwbCompleteDefaultSettings.cwb_char_card_prompt,
     incrementalPrompt: cwbCompleteDefaultSettings.cwb_incremental_char_card_prompt,
     timelineIncrementalPrompt: DEFAULT_TIMELINE_INCREMENTAL_PROMPT,
@@ -69,6 +70,7 @@ function saveFromUi() {
     const excluded = $('#cwb-excluded-worldbooks').val();
     value.excludedWorldbooks = Array.isArray(excluded) ? [...new Set(excluded)] : [];
     value.breakPrompt = $('#cwb-break-prompt').val();
+    value.customPreamble = $('#cwb-custom-preamble').val() || '';
     value.fullPrompt = $('#cwb-full-prompt').val();
     value.incrementalPrompt = $('#cwb-incremental-prompt').val();
     value.timelineIncrementalPrompt = $('#cwb-timeline-incremental-prompt').val();
@@ -100,6 +102,7 @@ function loadUi() {
     [...new Set([...available, ...excluded])].forEach(name => excludedSelect.append($('<option>').val(name).text(available.includes(name) ? name : `${name}（当前未找到）`)));
     excludedSelect.val(excluded);
     $('#cwb-break-prompt').val(value.breakPrompt);
+    $('#cwb-custom-preamble').val(value.customPreamble || '');
     $('#cwb-full-prompt').val(value.fullPrompt);
     $('#cwb-incremental-prompt').val(value.incrementalPrompt);
     $('#cwb-timeline-incremental-prompt').val(value.timelineIncrementalPrompt);
@@ -293,6 +296,7 @@ function bindUi() {
     $('#cwb-reset-prompts').on('click', () => {
         const value = settings();
         value.breakPrompt = defaults.breakPrompt;
+        value.customPreamble = defaults.customPreamble;
         value.fullPrompt = defaults.fullPrompt;
         value.incrementalPrompt = defaults.incrementalPrompt;
         value.timelineIncrementalPrompt = defaults.timelineIncrementalPrompt;
