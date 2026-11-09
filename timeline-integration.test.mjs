@@ -547,6 +547,9 @@ test('settings button -> real API wrapper -> incremental prompt -> server readba
     blockedReadBook = '空书';
     await modules.get(resolve(root, 'core.js')).namespace.updateRange({ ...extension_settings.cwb_system_api, ...scopedSettings }, 0, 24, { silent: true });
     assert.equal(requests.length - writesBeforeBatch, 1);
+    const combinedPrompt = requests.at(-1).systemPrompt;
+    assert.match(combinedPrompt, /逐一找出行动者、对话发起者、回应者、知情者和直接受影响的人/);
+    assert.doesNotMatch(combinedPrompt, /本次是独立的时间线请求，不生成角色档案/);
     for (const block of suppliedParts.profiles.value) {
         const name = utils.parseCustomFormat(block).姓名;
         const target = utils.parseCustomFormat(block).档案类型 === '主角' ? '已有书' : '角色分卷';

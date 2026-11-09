@@ -183,7 +183,14 @@ async function updateRangeUnlocked(settings, startIndex, endIndex, { silent = fa
         messages.push({ role: 'system', content: SUMMARY_SOURCE_GUIDANCE });
         if (settings.breakPrompt?.trim()) messages.push({ role: 'system', content: settings.breakPrompt.trim() });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: settings.incremental ? settings.incrementalPrompt : settings.fullPrompt });
-        if (targets.includes('timeline')) messages.push({ role: 'system', content: settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT });
+        if (targets.includes('timeline')) {
+            const timelinePrompt = settings.timelineIncrementalPrompt?.trim() || DEFAULT_TIMELINE_INCREMENTAL_PROMPT;
+            // Standalone timeline instructions must not suppress profiles in a combined request.
+            messages.push({ role: 'system', content: timelinePrompt.replace(
+                '本次是独立的时间线请求，不生成角色档案，不续写故事。',
+                '这段规则仅用于时间线部分，其余模块按本轮输出协议处理。不续写故事。',
+            ) });
+        }
         if (targets.includes('relationships')) messages.push({ role: 'system', content: RELATIONSHIP_PROMPT });
         if (targets.includes('profiles')) messages.push({ role: 'system', content: PROFILE_RULES });
         messages.push({ role: 'system', content: COMBINED_OUTPUT_PROTOCOL + `\n本次仅实际处理：${targets.map(module => MODULE_LABELS[module]).join('、')}。未选择部分可用无变化标记/空数组，插件不会写入其内容或进度。` });

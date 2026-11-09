@@ -40,7 +40,7 @@ test('profile sanitizer preserves the requested factual fields and removes unrel
 test('profile rules require strong plot relevance and omit unrelated events', () => {
     assert.match(PROFILE_RULES, /角色已知信息\.N.*角色未知信息\.N.*性经历人员\.N.*性经历人数.*额外补充\.N.*剧情\.N/s);
     assert.match(PROFILE_RULES, /强力推动或改变主线/);
-    assert.match(PROFILE_RULES, /仅被提及、与主线联系弱、无后续影响的事件不得记录/);
+    assert.match(PROFILE_RULES, /只被提名、在场却没有独立贡献或后果/);
     assert.match(PROFILE_RULES, /每条不超过64个汉字/);
     assert.match(PROFILE_RULES, /未成年或年龄不明一律省略/);
     assert.match(PROFILE_RULES, /已确认成年对象去重计数/);
@@ -67,7 +67,7 @@ test('profile sanitizer removes task and system content from every allowed field
 });
 
 test('profile rules explicitly restrict known and unknown facts to plot-critical information', () => {
-    assert.match(PROFILE_RULES, /已知信息.*未知信息.*主线剧情强相关/s);
+    assert.match(PROFILE_RULES, /已知信息.*未知信息.*主线或该角色的个人剧情线强相关/s);
     assert.match(PROFILE_RULES, /普通日常.*即使真实也不记录/);
     assert.match(PROFILE_RULES, /严禁记录任何任务或系统相关内容/);
 });
